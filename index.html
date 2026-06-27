@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Road Efficiency Analyzer — IRC:106 / IRC:64 Capacity-Loss Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">Road Efficiency Analyzer</div>
+    </div>
+    <div class="topbar-sub mono">IRC:106-1990 &middot; IRC:64-1990</div>
+  </div>
+
+  <div class="wrap">
+
+    <!-- ============ INPUT PANEL ============ -->
+    <section class="card input-panel" id="input-panel">
+
+      <div class="mode-switch" id="mode-switch" role="tablist">
+        <button class="mode-btn active" data-mode="image" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9633;</span>
+          <span>Single image</span>
+        </button>
+        <button class="mode-btn" data-mode="batch" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9638;</span>
+          <span>Batch (folder)</span>
+        </button>
+        <button class="mode-btn" data-mode="video" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9654;</span>
+          <span>Video</span>
+        </button>
+      </div>
+
+      <div class="panel-body">
+        <div class="dropzone-col">
+          <label class="drop" id="drop" for="file-input">
+            <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M20 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <div class="drop-title" id="drop-title">Drop a road image here, or click to browse</div>
+            <div class="drop-hint" id="drop-hint">JPG / PNG &middot; near-perpendicular shot of the carriageway works best</div>
+            <div class="drop-filelist" id="drop-filelist"></div>
+          </label>
+          <input type="file" id="file-input" accept="image/*">
+          <div class="field-row" id="video-sample-row" style="display:none;">
+            <label class="field-label" for="sample-every-sec">Sample every</label>
+            <select id="sample-every-sec" class="field-select">
+              <option value="0.5">0.5 sec</option>
+              <option value="1" selected>1 sec</option>
+              <option value="2">2 sec</option>
+              <option value="5">5 sec</option>
+            </select>
+            <span class="field-hint">Lower = more thorough, slower to process</span>
+          </div>
+        </div>
+
+        <form class="config-col" id="config-form">
+          <div class="config-title mono">ROAD PARAMETERS — MEASURED ON SITE</div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="total_width_m">Total carriageway width (m)</label>
+              <input type="number" id="total_width_m" name="total_width_m" step="0.1" min="1" value="7.0" required>
+            </div>
+            <div class="field">
+              <label for="num_lanes">Number of lanes</label>
+              <input type="number" id="num_lanes" name="num_lanes" step="1" min="1" value="2" required>
+            </div>
+            <div class="field">
+              <label for="usable_shoulder_m">Usable shoulder width (m)</label>
+              <input type="number" id="usable_shoulder_m" name="usable_shoulder_m" step="0.1" min="0" value="0.6" required>
+            </div>
+            <div class="field">
+              <label for="carriageway_key">Carriageway configuration</label>
+              <select id="carriageway_key" name="carriageway_key" required></select>
+            </div>
+            <div class="field field-wide">
+              <label for="fringe_condition">Fringe / frontage condition</label>
+              <select id="fringe_condition" name="fringe_condition" required></select>
+              <div class="field-hint" id="fringe-desc"></div>
+            </div>
+            <div class="field field-wide">
+              <label for="heavy_traffic_regime">Traffic composition regime</label>
+              <select id="heavy_traffic_regime" name="heavy_traffic_regime" required></select>
+              <div class="field-hint" id="traffic-desc"></div>
+            </div>
+          </div>
+
+          <button type="submit" class="run-btn" id="run-btn">
+            <span id="run-btn-label">Run analysis</span>
+          </button>
+          <div class="model-status mono" id="model-status"></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ============ STATUS / PROGRESS ============ -->
+    <section class="card status-panel" id="status-panel" style="display:none;">
+      <div class="status-spinner" aria-hidden="true"></div>
+      <div class="status-text" id="status-text">Working…</div>
+    </section>
+
+    <div id="error-box" class="error-box" style="display:none;"></div>
+
+    <!-- ============ RESULTS — rendered by JS per mode ============ -->
+    <section id="results-root"></section>
+
+  </div>
+
+  <footer class="mono">
+    Capacity computed from IRC:106-1990 (urban Design Service Volume) and IRC:64-1990 (width-reduction factor) —
+    a simplified pilot-study proxy, not a substitute for a full IRC-compliant traffic survey ·
+    Actions reference IRC, IS and applicable Indian statutes — verify clause numbers against the latest published edition before citing in a report.
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
