@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.ipynb
+road_analyzer/uploads/*
+road_analyzer/results/*
+!road_analyzer/uploads/.gitkeep
+!road_analyzer/results/.gitkeep
+test_assets/
+smoke_test.py
+.git/
+*.md

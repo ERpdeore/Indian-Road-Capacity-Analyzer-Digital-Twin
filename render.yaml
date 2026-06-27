@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: road-efficiency-analyzer
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: ROAD_MODEL_PATH
+        value: /app/road_analyzer/models/best.pt
+    healthCheckPath: /api/health
