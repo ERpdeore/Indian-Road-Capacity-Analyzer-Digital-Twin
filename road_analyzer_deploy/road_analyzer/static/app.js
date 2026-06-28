@@ -324,12 +324,24 @@
       })
       .filter((s) => s.blocked_m > 0.001)
       .sort((a, b) => b.blocked_m - a.blocked_m);
+
+    // Defensive clamp: even though the backend now caps each category's
+    // blocked_m at total_width_m individually, several categories together
+    // (e.g. potholes + illegal parking) can still sum past the road's
+    // physical width. Scale all segments down proportionally so the bar
+    // never shows more than 100% of the road as blocked, and usable width
+    // never goes negative.
+    let scale = 1;
+    if (blockedTotal > totalWidth && totalWidth > 0) {
+      scale = totalWidth / blockedTotal;
+    }
     const usableWidth = Math.max(totalWidth - blockedTotal, 0);
 
     let barHTML = "";
     if (totalWidth > 0) {
       segments.forEach((seg) => {
-        const pct = (seg.blocked_m / totalWidth) * 100;
+        const displayBlocked = seg.blocked_m * scale;
+        const pct = (displayBlocked / totalWidth) * 100;
         barHTML += `<div class="seg" style="width:${pct}%;background:${seg.color}" title="${titleCase(
           seg.name
         )}: ${fmt(seg.blocked_m, 2)} m blocked">${
@@ -364,6 +376,38 @@
           <span>Usable: ${fmt(usableWidth, 2)} m</span>
         </div>
         <div class="roadbar-legend">${legendHTML}</div>
+      </div>`;
+  }
+
+  function overallGuidanceHTML(data) {
+    const g = data.overall_guidance;
+    if (!g) return "";
+    const bandColors = {
+      Minor: { bg: "var(--green-dim)", fg: "#8FCBA3", border: "var(--green)" },
+      Moderate: { bg: "#3D3517", fg: "var(--yellow)", border: "var(--yellow)" },
+      Significant: { bg: "#3D3517", fg: "var(--yellow)", border: "var(--yellow)" },
+      Severe: { bg: "var(--red-dim)", fg: "#FF8B86", border: "var(--red)" },
+      Critical: { bg: "var(--red-dim)", fg: "#FF8B86", border: "var(--red)" },
+    };
+    const c = bandColors[g.band] || bandColors.Moderate;
+    return `
+      <div class="card" style="margin-bottom:24px;border-left:3px solid ${c.border};">
+        <div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+          <div style="flex-shrink:0;">
+            <div class="eyebrow">Capacity lost</div>
+            <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:32px;color:${c.fg};">${fmt(
+              data.capacity_loss_pct,
+              1
+            )}%</div>
+          </div>
+          <div style="flex:1;min-width:240px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+              <span class="sev-chip" style="background:${c.bg};color:${c.fg};">${g.band.toUpperCase()}</span>
+              <span style="font-size:11.5px;color:var(--text-faint);font-family:'JetBrains Mono',monospace;">${g.pct_range} capacity loss band</span>
+            </div>
+            <div style="font-size:14px;color:var(--text-dim);line-height:1.5;">${g.action}</div>
+          </div>
+        </div>
       </div>`;
   }
 
@@ -439,6 +483,7 @@
   function renderImageResult(data) {
     resultsRoot.innerHTML =
       heroHTML(data) +
+      overallGuidanceHTML(data) +
       roadbarHTML(data.road_config || {}, data.per_defect || {}) +
       `<div class="section-title">Capacity loss &amp; recommended action by obstruction</div>` +
       defectGridHTML(data.per_defect);
