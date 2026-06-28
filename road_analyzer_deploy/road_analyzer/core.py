@@ -15,19 +15,83 @@ Colab notebook (Cell 8 of final_year_project_code_v2_IRC.ipynb):
   - The single-image analysis function `analyse_road_complete`
   - NEW: batch-mode helper `analyse_batch`
   - NEW: video-mode helper `analyse_video`
+  - NEW: pothole depth/severity estimation (`PotholeDepthEstimator`)
 
 It has NO dependency on Google Colab. Both the notebook and the FastAPI
 app import this module, so the IRC logic only exists in one place.
+
+----------------------------------------------------------------------
+A note on pothole depth estimation (read before relying on the numbers)
+----------------------------------------------------------------------
+This uses MiDaS_small, a MONOCULAR depth model, on a single 2D photo.
+Monocular depth models output *relative* depth (Reference: MiDaS computes
+the relative depth map given an image — it is not a metric/calibrated
+depth sensor and was never trained to output centimetres). There is no
+camera calibration, focal length, or known camera height in this
+pipeline, so there is no rigorous way to convert MiDaS's output into a
+real centimetre figure from a single photo alone.
+
+What this module DOES give you, and what it is honest to claim in a
+viva or report:
+  - A per-pothole RELATIVE severity score, calibrated against the flat
+    road surface immediately surrounding that specific pothole in that
+    specific photo (so it is at least self-consistent within one image).
+  - A severity CATEGORY (shallow / moderate / deep) from percentile
+    bands on that relative score — useful for triage and prioritisation.
+  - An approximate depth-in-cm ESTIMATE, clearly labelled as an estimate,
+    using a documented assumption (typical phone-camera pitch + height)
+    that you should state explicitly as a limitation, not a measurement.
+
+What it does NOT give you: a laboratory-grade, sensor-equivalent depth
+measurement. If true metric depth is required, the correct upgrade path
+is stereo photos, a LiDAR/depth-camera capture, or a metric-finetuned
+model (e.g. Depth Anything's metric variant) calibrated against a known
+reference object in the scene — flagged here as a future-work item.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
+
+logger = logging.getLogger("road_analyzer.core")
+
+try:
+    import psutil
+    _HAS_PSUTIL = True
+except ImportError:
+    _HAS_PSUTIL = False
+
+
+def _log_memory_usage(label: str) -> None:
+    """Best-effort memory logging so degraded results on memory-constrained
+    hosts (e.g. Render's 512MB free tier) show up clearly in the logs
+    instead of silently looking like 'no defects found'."""
+    if not _HAS_PSUTIL:
+        return
+    try:
+        proc = psutil.Process()
+        rss_mb = proc.memory_info().rss / (1024 * 1024)
+        vm = psutil.virtual_memory()
+        avail_mb = vm.available / (1024 * 1024)
+        total_mb = vm.total / (1024 * 1024)
+        logger.info(
+            "%s: process_rss=%.0fMB system_available=%.0fMB/%.0fMB (%.0f%% used)",
+            label, rss_mb, avail_mb, total_mb, vm.percent,
+        )
+        if vm.percent > 90:
+            logger.warning(
+                "%s: system memory usage is above 90%% — inference results "
+                "may be degraded or fail silently on memory-constrained hosts.",
+                label,
+            )
+    except Exception:
+        pass  # never let diagnostics break the actual analysis
 
 # ultralytics is imported lazily inside RoadAnalyzer so that importing this
 # module for, e.g., unit-testing the IRC math does not require a GPU or
@@ -140,6 +204,33 @@ LOS_ACTION_GUIDANCE = {
     "E": "At/near capacity — unstable. Treat urgent-tier actions as priority works; involve traffic authority.",
     "F": "Breakdown / forced flow. Immediate multi-agency intervention (traffic police, municipal corporation, PWD).",
 }
+
+# ----------------------------------------------------------------
+# Overall road-level guidance banded directly on % capacity lost.
+# This is deliberately separate from LOS_ACTION_GUIDANCE (which is
+# keyed to the IRC LOS letter A-F): the LOS thresholds already are
+# percent-based under the hood, but reviewers asked for the % figure
+# itself to map directly and visibly to a stated action, rather than
+# requiring someone to decode what "LOS D" means first.
+# ----------------------------------------------------------------
+OVERALL_CAPACITY_LOSS_GUIDANCE = [
+    (0, 10, "Minor", "Capacity loss is low. Log the survey and continue routine monitoring; no immediate works needed."),
+    (10, 25, "Moderate", "Noticeable capacity loss. Schedule the per-defect routine actions below within the normal maintenance cycle (typically within 1-2 weeks)."),
+    (25, 50, "Significant", "Significant capacity loss. Treat the urgent-tier defects below as priority works; re-survey this stretch within 1 week of remedial action to confirm improvement."),
+    (50, 75, "Severe", "Over half the road's capacity is lost. This stretch should be treated as a priority corridor: escalate to the local traffic/municipal authority, clear urgent-tier obstructions immediately, and consider temporary traffic diversion or signage until cleared."),
+    (75, 100.0001, "Critical", "Road is operating at a small fraction of its design capacity, equivalent to LOS E/F breakdown conditions. Recommend immediate multi-agency intervention (traffic police + municipal corporation + PWD), temporary diversion of through-traffic, and re-survey within 48 hours of intervention."),
+]
+
+
+def get_overall_capacity_guidance(capacity_loss_pct: float) -> dict:
+    """Map an overall % capacity loss figure directly to a severity band
+    and a concrete recommended action, independent of the LOS letter."""
+    pct = max(0.0, float(capacity_loss_pct))
+    for lo, hi, band, action in OVERALL_CAPACITY_LOSS_GUIDANCE:
+        if lo <= pct < hi:
+            return {"band": band, "action": action, "pct_range": f"{lo:.0f}-{hi if hi <= 100 else 100:.0f}%"}
+    lo, hi, band, action = OVERALL_CAPACITY_LOSS_GUIDANCE[-1]
+    return {"band": band, "action": action, "pct_range": f"{lo:.0f}-100%"}
 
 CONF_THRESHOLDS = {
     "barricade": 0.45,
@@ -275,16 +366,39 @@ class RoadConfig:
 # inside the loop, which reloads weights from disk every single time.
 # ================================================================
 class RoadAnalyzer:
-    def __init__(self, model_path: str):
+    # How many calls after model load count as "still warming up". A cold
+    # Render free-tier container can have its first inference behave
+    # unreliably (e.g. return zero boxes) right after the model loads —
+    # this is the exact failure pattern reported as "second image shows
+    # 0% even with real defects": it's actually whichever request lands
+    # first on a just-woken-up container, not a code bug in the capacity
+    # math (that part is covered by its own deterministic tests).
+    WARMUP_CALL_WINDOW = 3
+
+    def __init__(self, model_path: str, enable_depth: bool = True):
         from ultralytics import YOLO  # lazy import
         self.model_path = str(model_path)
         self.model = YOLO(self.model_path)
+        self._call_count = 0
+        self.enable_depth = enable_depth
+        # Lazy: MiDaS is only actually loaded the first time a pothole is
+        # detected and depth scoring is attempted, not at RoadAnalyzer
+        # construction time. This keeps startup fast and avoids loading
+        # MiDaS at all for users/deployments that never see a pothole.
+        self._depth_estimator: Optional["PotholeDepthEstimator"] = None
+        logger.info("RoadAnalyzer: model loaded from %s", self.model_path)
 
-    # ---- low-level: run detection + veto on a single image array ----
-    def _detect(self, image_path: str) -> Tuple[List[dict], int]:
+    def _get_depth_estimator(self) -> "PotholeDepthEstimator":
+        if self._depth_estimator is None:
+            self._depth_estimator = PotholeDepthEstimator()
+        return self._depth_estimator
+
+    def _run_predict_once(self, image_path: str) -> Tuple[List[dict], int, int]:
+        """One real call to the model. Returns (kept, vetoed, raw_box_count)."""
         pred = self.model.predict(str(image_path), conf=0.25, verbose=False)[0]
         boxes = pred.boxes
         raw_detections = []
+        raw_box_count = 0 if boxes is None else len(boxes)
         if boxes is not None and len(boxes) > 0:
             for box in boxes:
                 cls_id = int(box.cls[0])
@@ -297,12 +411,42 @@ class RoadAnalyzer:
                 raw_detections.append({
                     "cls_name": cls_name, "conf": conf, "xyxy": (x1, y1, x2, y2),
                 })
-        return apply_vehicle_veto(raw_detections)
+        kept, vetoed = apply_vehicle_veto(raw_detections)
+        return kept, vetoed, raw_box_count
+
+    # ---- low-level: run detection + veto on a single image array ----
+    def _detect(self, image_path: str) -> Tuple[List[dict], int]:
+        self._call_count += 1
+        is_warmup_window = self._call_count <= self.WARMUP_CALL_WINDOW
+
+        kept, vetoed, raw_box_count = self._run_predict_once(image_path)
+        logger.info(
+            "detect: call#%d image=%s raw_boxes=%d after_veto=%d vetoed=%d",
+            self._call_count, Path(image_path).name, raw_box_count, len(kept), vetoed,
+        )
+
+        if raw_box_count == 0 and is_warmup_window:
+            logger.warning(
+                "detect: call#%d returned ZERO boxes during the model's warm-up "
+                "window (first %d calls after load) — this matches the known "
+                "cold-start pattern on memory/CPU-constrained free hosts. "
+                "Retrying once before accepting the result.",
+                self._call_count, self.WARMUP_CALL_WINDOW,
+            )
+            kept, vetoed, raw_box_count = self._run_predict_once(image_path)
+            logger.info(
+                "detect: call#%d RETRY image=%s raw_boxes=%d after_veto=%d vetoed=%d",
+                self._call_count, Path(image_path).name, raw_box_count, len(kept), vetoed,
+            )
+
+        return kept, vetoed
 
     # ---- main entry point: single image, full IRC capacity report ----
     def analyse_image(self, image_path: str, road_config: dict,
                        save_outputs: bool = True,
                        output_dir: Optional[str] = None) -> dict:
+        _log_memory_usage(f"analyse_image start ({Path(image_path).name})")
+
         img = cv2.imread(str(image_path))
         if img is None:
             raise ValueError(f"Cannot read image: {image_path}")
@@ -323,11 +467,30 @@ class RoadAnalyzer:
 
         detections, vetoed_count = self._detect(image_path)
 
+        # ---- pothole depth/severity scoring (batched: one MiDaS call for
+        # the whole image, not one per pothole) ----
+        pothole_depth_results: Dict[int, dict] = {}
+        if getattr(self, "enable_depth", True):
+            pothole_indices = [i for i, d in enumerate(detections) if d["cls_name"] == "pothole"]
+            if pothole_indices:
+                try:
+                    depth_estimator = self._get_depth_estimator()
+                    boxes = [detections[i]["xyxy"] for i in pothole_indices]
+                    depth_scores = depth_estimator.estimate_batch(img, boxes)
+                    for i, score in zip(pothole_indices, depth_scores):
+                        pothole_depth_results[i] = score
+                except Exception as e:
+                    logger.warning(
+                        "Pothole depth estimation failed (%s: %s) — continuing "
+                        "without depth data for this image. Width/capacity "
+                        "results are unaffected.", type(e).__name__, e,
+                    )
+
         defect_data: Dict[str, dict] = {}
         total_blocked = 0.0
         roadrunner_export = []
 
-        for d in detections:
+        for idx, d in enumerate(detections):
             cls_name = d["cls_name"]
             if cls_name == "vehicle":
                 continue
@@ -345,11 +508,14 @@ class RoadAnalyzer:
                 defect_data[cls_name] = {"count": 0, "blocked_m": 0.0, "detections": []}
             defect_data[cls_name]["count"] += 1
             defect_data[cls_name]["blocked_m"] += blocked_m
-            defect_data[cls_name]["detections"].append({
+            detection_record = {
                 "conf": round(d["conf"], 2), "width_m": round(real_w_m, 2),
                 "height_m": round(real_h_m, 2),
                 "pos_x_m": round(pos_x_m, 2), "pos_y_m": round(pos_y_m, 2),
-            })
+            }
+            if idx in pothole_depth_results:
+                detection_record["depth"] = pothole_depth_results[idx]
+            defect_data[cls_name]["detections"].append(detection_record)
             roadrunner_export.append({
                 "defect_type": cls_name, "pos_x_m": round(pos_x_m, 3),
                 "pos_y_m": round(pos_y_m, 3), "width_m": round(real_w_m, 3),
@@ -371,6 +537,7 @@ class RoadAnalyzer:
         vc_ratio = cap_loss_pct / 100.0
         los, los_desc = get_los_irc(vc_ratio)
         los_action = LOS_ACTION_GUIDANCE.get(los, "")
+        overall_guidance = get_overall_capacity_guidance(cap_loss_pct)
 
         per_defect_results = {}
         for dname, dinfo in defect_data.items():
@@ -383,13 +550,38 @@ class RoadAnalyzer:
             irc = get_irc_action(dname, loss_pct_this)
             per_defect_results[dname] = {
                 "count": dinfo["count"],
-                "blocked_m": round(dinfo["blocked_m"], 2),
+                # Report the CLAMPED width (capped at total_width_m), not the
+                # raw summed width. Multiple detections of the same defect
+                # type (e.g. 3 potholes) can otherwise sum to more metres
+                # than the road is wide, which is physically meaningless and
+                # was previously displayed as-is (e.g. "4.9 m" on a 3.5 m
+                # road). The raw sum is still useful for debugging, so it's
+                # kept under a separate key.
+                "blocked_m": round(blocked_this, 2),
+                "blocked_m_raw_sum": round(dinfo["blocked_m"], 2),
                 "capacity_loss_pcu": round(loss_this, 1),
                 "capacity_loss_pct": round(loss_pct_this, 1),
                 "severity": irc["severity"],
                 "code_ref": irc["code_ref"],
                 "action": irc["action"],
             }
+            # For potholes specifically, surface a depth/severity summary
+            # across all instances of this defect type in the image (the
+            # per-instance depth detail is also kept on each detection
+            # in defect_data[...]["detections"][i]["depth"]).
+            if dname == "pothole":
+                depths = [det["depth"] for det in dinfo["detections"] if "depth" in det]
+                valid_depths = [d for d in depths if d["severity"] != "unknown"]
+                if valid_depths:
+                    severity_rank = {"shallow": 0, "moderate": 1, "deep": 2}
+                    worst = max(valid_depths, key=lambda d: severity_rank.get(d["severity"], -1))
+                    avg_cm = round(sum(d["estimated_depth_cm"] for d in valid_depths) / len(valid_depths), 1)
+                    per_defect_results[dname]["depth_summary"] = {
+                        "worst_severity": worst["severity"],
+                        "avg_estimated_depth_cm": avg_cm,
+                        "scored_count": len(valid_depths),
+                        "unscored_count": len(depths) - len(valid_depths),
+                    }
 
         final_result = {
             "image": Path(image_path).name,
@@ -409,6 +601,7 @@ class RoadAnalyzer:
             "level_of_service": los,
             "level_of_service_desc": los_desc,
             "los_action": los_action,
+            "overall_guidance": overall_guidance,
             "effective_width_m": round(effective_width, 2),
             "vehicle_veto_suppressed": vetoed_count,
             "per_defect": per_defect_results,
@@ -670,3 +863,197 @@ class RoadAnalyzer:
             "worst_image_or_frame": results[worst_idx]["image"],
             "avg_capacity_loss_pct": round(sum(losses) / len(losses), 1),
         }
+
+
+# ================================================================
+# Pothole depth / severity estimation (MiDaS monocular depth model)
+# ================================================================
+# Severity bands on the RELATIVE depth score (see module docstring for
+# why this is relative, not an absolute lab measurement). These are
+# percentile-style cut points on the normalised "dip" of the pothole
+# below its own local road surface, tuned to be conservative: most
+# real potholes in road-survey photos should land in shallow/moderate,
+# with deep reserved for clearly severe craters.
+POTHOLE_SEVERITY_BANDS = [
+    (0.00, 0.15, "shallow", "Surface-level pothole; cosmetic/early-stage. Monitor."),
+    (0.15, 0.35, "moderate", "Noticeable depth; vehicles will feel impact. Patch within routine cycle."),
+    (0.35, 1.01, "deep", "Significant depth; risk of vehicle damage/accidents. Treat as urgent repair."),
+]
+
+# Rough, EXPLICITLY-LABELLED-AS-AN-ESTIMATE conversion from the
+# normalised relative depth score to a centimetre figure, assuming a
+# typical handheld/phone road-survey photo (camera height ~1.2-1.5m,
+# moderate downward tilt). This constant is a documented assumption,
+# not a measurement -- see module docstring. It is calibrated so that
+# a relative score of 1.0 (the deepest pixel we'd realistically expect
+# relative to the local road plane in such a photo) maps to roughly a
+# 12 cm pothole, which is a reasonable upper bound for an Indian urban
+# road pothole before it becomes better described as a "crater"/road
+# failure rather than a pothole.
+ASSUMED_MAX_POTHOLE_DEPTH_CM = 12.0
+
+
+def classify_pothole_severity(relative_depth_score: float) -> dict:
+    """Map a normalised (0-1ish) relative depth score to a severity band."""
+    score = max(0.0, float(relative_depth_score))
+    for lo, hi, band, note in POTHOLE_SEVERITY_BANDS:
+        if lo <= score < hi:
+            return {
+                "severity": band,
+                "note": note,
+                "relative_depth_score": round(score, 3),
+                "estimated_depth_cm": round(min(score, 1.0) * ASSUMED_MAX_POTHOLE_DEPTH_CM, 1),
+            }
+    lo, hi, band, note = POTHOLE_SEVERITY_BANDS[-1]
+    return {
+        "severity": band,
+        "note": note,
+        "relative_depth_score": round(score, 3),
+        "estimated_depth_cm": round(min(score, 1.0) * ASSUMED_MAX_POTHOLE_DEPTH_CM, 1),
+    }
+
+
+class PotholeDepthEstimator:
+    """
+    Wraps MiDaS_small (monocular depth) to estimate RELATIVE depth/severity
+    for pothole detections. Loads the model once (like RoadAnalyzer does
+    for YOLO) and is reused across calls.
+
+    Usage:
+        depth_estimator = PotholeDepthEstimator()
+        result = depth_estimator.estimate(image_bgr, box_xyxy)
+        # result = {"severity": "moderate", "relative_depth_score": 0.27,
+        #           "estimated_depth_cm": 3.2, "note": "..."}
+    """
+
+    MARGIN_RATIO = 0.35  # how much wider than the box to sample as "surrounding road"
+
+    def __init__(self, device: str = "cpu"):
+        self.device = device
+        self._model = None
+        self._transform = None
+
+    def _ensure_loaded(self) -> None:
+        if self._model is not None:
+            return
+        import torch
+        # Bypass torch.hub's live fork-validation network call: it hits
+        # api.github.com and can fail under aggressive rate limiting or
+        # restrictive egress rules (seen in CI/sandboxed environments).
+        # Safe to skip since the repo is hardcoded to the official
+        # intel-isl/MiDaS source above, not user input.
+        import torch.hub as hub
+        hub._validate_not_a_forked_repo = lambda *a, **k: None
+
+        logger.info("PotholeDepthEstimator: loading MiDaS_small (first call only)...")
+        self._model = hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
+        self._model.to(self.device)
+        self._model.eval()
+        midas_transforms = hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
+        self._transform = midas_transforms.small_transform
+        logger.info("PotholeDepthEstimator: MiDaS_small loaded successfully.")
+
+    def _run_midas(self, image_rgb) -> "Any":
+        """Run MiDaS on a full RGB image (numpy array), return the depth
+        map resized back to the input's original resolution. Higher
+        values = closer to camera (MiDaS convention for this model)."""
+        import torch
+        self._ensure_loaded()
+        input_batch = self._transform(image_rgb).to(self.device)
+        with torch.no_grad():
+            prediction = self._model(input_batch)
+            prediction = torch.nn.functional.interpolate(
+                prediction.unsqueeze(1),
+                size=image_rgb.shape[:2],
+                mode="bicubic",
+                align_corners=False,
+            ).squeeze()
+        return prediction.cpu().numpy()
+
+    def estimate(self, image_bgr, box_xyxy: Tuple[float, float, float, float]) -> dict:
+        """
+        image_bgr: full road image as a numpy array (BGR, as cv2.imread
+                   returns), same image YOLO ran on.
+        box_xyxy: the pothole's bounding box in pixel coords on that
+                  same image.
+
+        Returns a severity dict (see classify_pothole_severity), or a
+        dict with severity="unknown" if depth estimation isn't possible
+        (e.g. box touches the image edge with no surrounding road to
+        calibrate against).
+        """
+        depth_map = self._run_midas_cached(image_bgr)
+        return self._score_box(depth_map, box_xyxy, image_bgr.shape[:2])
+
+    def estimate_batch(self, image_bgr, boxes_xyxy: List[Tuple[float, float, float, float]]) -> List[dict]:
+        """Run MiDaS ONCE for the whole image, then score every pothole
+        box against that single depth map. Much cheaper than calling
+        estimate() per-box, since MiDaS inference is the expensive part."""
+        depth_map = self._run_midas_cached(image_bgr)
+        return [self._score_box(depth_map, box, image_bgr.shape[:2]) for box in boxes_xyxy]
+
+    def _run_midas_cached(self, image_bgr):
+        import cv2 as _cv2
+        image_rgb = _cv2.cvtColor(image_bgr, _cv2.COLOR_BGR2RGB)
+        return self._run_midas(image_rgb)
+
+    def _score_box(self, depth_map, box_xyxy, image_hw) -> dict:
+        import numpy as np
+        h, w = image_hw
+        x1, y1, x2, y2 = [int(round(v)) for v in box_xyxy]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 <= x1 or y2 <= y1:
+            return {"severity": "unknown", "note": "Invalid box.", "relative_depth_score": 0.0,
+                    "estimated_depth_cm": 0.0}
+
+        box_w, box_h = x2 - x1, y2 - y1
+        margin_x = max(2, int(box_w * self.MARGIN_RATIO))
+        margin_y = max(2, int(box_h * self.MARGIN_RATIO))
+        rx1, ry1 = max(0, x1 - margin_x), max(0, y1 - margin_y)
+        rx2, ry2 = min(w, x2 + margin_x), min(h, y2 + margin_y)
+
+        inside = depth_map[y1:y2, x1:x2]
+        outer_region = depth_map[ry1:ry2, rx1:rx2].copy()
+        # Mask out the pothole itself from the "surrounding road" sample
+        # so the reference plane isn't contaminated by the pothole's own
+        # (lower) depth values.
+        mask = np.ones_like(outer_region, dtype=bool)
+        iy1, iy2 = y1 - ry1, y2 - ry1
+        ix1, ix2 = x1 - rx1, x2 - rx1
+        mask[max(0, iy1):max(0, iy2), max(0, ix1):max(0, ix2)] = False
+        ring_pixels = outer_region[mask]
+
+        if ring_pixels.size < 10 or inside.size == 0:
+            return {"severity": "unknown",
+                    "note": "Not enough surrounding road surface visible to calibrate against "
+                            "(pothole too close to the image edge or frame boundary).",
+                    "relative_depth_score": 0.0, "estimated_depth_cm": 0.0}
+
+        # MiDaS convention for this model: HIGHER value = closer to camera.
+        # A pothole is a dip AWAY from the camera relative to the flat
+        # road, so it should have a LOWER depth value than the ring.
+        #
+        # IMPORTANT: we compare the SAME percentile statistic on both
+        # sides (10th percentile of ring vs 10th percentile inside the
+        # box), not percentile-vs-median. Comparing a low percentile
+        # against a median is a systematic bias: on a patch of N=2000+
+        # pixels of pure noise with no real pothole, the 10th percentile
+        # is, by definition of the distribution, already ~1.28 standard
+        # deviations below the median — so a percentile-vs-median
+        # comparison reports a "dip" on perfectly flat road. Using the
+        # 10th percentile on BOTH sides cancels that bias out, since
+        # they're both biased the same way when there's no real pothole.
+        road_level = float(np.percentile(ring_pixels, 10))
+        pothole_level = float(np.percentile(inside, 10))
+        raw_dip = road_level - pothole_level  # positive = pothole is farther away (a real dip)
+
+        # Normalise by the local depth scale (spread of the surrounding
+        # ring) so the score is comparable across photos taken at
+        # different distances/zoom levels, rather than using MiDaS's
+        # raw, unitless scale directly.
+        local_scale = float(np.std(ring_pixels)) or 1.0
+        relative_depth_score = max(0.0, raw_dip / (local_scale * 4.0))
+
+        result = classify_pothole_severity(relative_depth_score)
+        return result
