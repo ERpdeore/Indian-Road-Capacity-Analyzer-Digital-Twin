@@ -22,6 +22,7 @@ GET  /api/jobs/{job_id}     -> poll status/result of a batch or video job
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import uuid
@@ -33,6 +34,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# Make sure our INFO-level diagnostic logs (detection counts, memory usage —
+# see road_analyzer/core.py) actually show up in `uvicorn`'s console output
+# and therefore in Render's Logs tab. Without this, logger.info()/warning()
+# calls are silently dropped by Python's default logging config.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 from road_analyzer.core import (
     RoadAnalyzer, IRC106_DSV, FRINGE_CONDITION_DESC, CLASS_NAMES,
