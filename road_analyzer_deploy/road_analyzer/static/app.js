@@ -480,13 +480,18 @@
   // ----------------------------------------------------------------
   // Render: single image
   // ----------------------------------------------------------------
-  function renderImageResult(data) {
+ function renderImageResult(data) {
     resultsRoot.innerHTML =
       heroHTML(data) +
       overallGuidanceHTML(data) +
       roadbarHTML(data.road_config || {}, data.per_defect || {}) +
       `<div class="section-title">Capacity loss &amp; recommended action by obstruction</div>` +
       defectGridHTML(data.per_defect);
+
+    if (data.digital_twin_status === 'running') {
+      dtShowPanel();
+      dtStartPolling();
+    }
   }
 
   // ----------------------------------------------------------------
