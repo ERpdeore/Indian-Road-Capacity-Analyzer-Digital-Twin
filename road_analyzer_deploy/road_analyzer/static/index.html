@@ -119,7 +119,126 @@
     Capacity computed from IRC:106-1990 (urban Design Service Volume) and IRC:64-1990 (width-reduction factor) —
     a simplified pilot-study proxy, not a substitute for a full IRC-compliant traffic survey ·
     Actions reference IRC, IS and applicable Indian statutes — verify clause numbers against the latest published edition before citing in a report.
-  </footer>
+  <section class="card dt-panel" id="dt-panel" style="display:none;">
+
+  <div class="dt-header">
+    <div class="dt-title">
+      <span class="dt-icon">⚡</span>
+      Digital Twin — Simulink Simulation
+    </div>
+    <div class="dt-status-badge" id="dt-status-badge">Initialising…</div>
+  </div>
+
+  <div class="dt-subtitle mono">
+    Ideal road (no defects) vs Defect road · IRC:106-1990 calibrated · MATLAB R2026a
+  </div>
+
+  <div class="dt-road-compare">
+
+    <div class="dt-road-card ideal">
+      <div class="dt-road-label">🟢 IDEAL ROAD</div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value" id="dt-ideal-cap">—</span>
+        <span class="dt-stat-unit">PCU / hr</span>
+        <span class="dt-stat-label">Design Capacity</span>
+      </div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value" id="dt-ideal-vol">—</span>
+        <span class="dt-stat-unit">PCU / hr</span>
+        <span class="dt-stat-label">Simulated Volume</span>
+      </div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value">50</span>
+        <span class="dt-stat-unit">km / h</span>
+        <span class="dt-stat-label">Free-flow Speed</span>
+      </div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value">A</span>
+        <span class="dt-stat-unit">LOS</span>
+        <span class="dt-stat-label">Level of Service</span>
+      </div>
+      <div class="dt-road-visual ideal-visual">
+        <div class="dt-lane-mark"></div>
+        <div class="dt-vehicles" id="dt-ideal-vehicles"></div>
+      </div>
+    </div>
+
+    <div class="dt-vs-divider">
+      <div class="dt-loss-badge">
+        <div class="dt-loss-pct" id="dt-loss-pct">—%</div>
+        <div class="dt-loss-label">Capacity Lost</div>
+      </div>
+    </div>
+
+    <div class="dt-road-card defect">
+      <div class="dt-road-label">🔴 DEFECT ROAD</div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value" id="dt-defect-cap">—</span>
+        <span class="dt-stat-unit">PCU / hr</span>
+        <span class="dt-stat-label">Reduced Capacity</span>
+      </div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value" id="dt-defect-vol">—</span>
+        <span class="dt-stat-unit">PCU / hr</span>
+        <span class="dt-stat-label">Simulated Volume</span>
+      </div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value" id="dt-defect-speed">—</span>
+        <span class="dt-stat-unit">km / h</span>
+        <span class="dt-stat-label">Congested Speed</span>
+      </div>
+      <div class="dt-road-stat">
+        <span class="dt-stat-value" id="dt-defect-los">—</span>
+        <span class="dt-stat-unit">LOS</span>
+        <span class="dt-stat-label">Level of Service</span>
+      </div>
+      <div class="dt-road-visual defect-visual">
+        <div class="dt-lane-mark"></div>
+        <div class="dt-pothole" id="dt-pothole-marker" style="display:none;"></div>
+        <div class="dt-vehicles" id="dt-defect-vehicles"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="dt-chart-section">
+    <div class="dt-chart-title mono">SIMULINK OUTPUT — CAPACITY OVER TIME (60s SIMULATION)</div>
+    <div class="dt-charts-row">
+      <div class="dt-chart-wrap">
+        <div class="dt-chart-label">Traffic Flow (PCU/hr)</div>
+        <canvas id="dt-cap-chart" width="500" height="200"></canvas>
+      </div>
+      <div class="dt-chart-wrap">
+        <div class="dt-chart-label">Vehicle Speed (km/h)</div>
+        <canvas id="dt-spd-chart" width="500" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="dt-los-section">
+    <div class="dt-chart-title mono">LEVEL OF SERVICE METER</div>
+    <div class="dt-los-bar">
+      <div class="dt-los-seg" data-los="A">A</div>
+      <div class="dt-los-seg" data-los="B">B</div>
+      <div class="dt-los-seg" data-los="C">C</div>
+      <div class="dt-los-seg" data-los="D">D</div>
+      <div class="dt-los-seg" data-los="E">E</div>
+      <div class="dt-los-seg" data-los="F">F</div>
+    </div>
+    <div class="dt-los-labels">
+      <span>Free Flow</span><span>Stable</span><span>Design</span>
+      <span>Unstable</span><span>Near Cap.</span><span>Breakdown</span>
+    </div>
+  </div>
+
+  <div class="dt-speed-section mono" id="dt-speed-section" style="display:none;">
+    <span>⚠️</span>
+    Pothole depth impact: vehicle speed reduced by
+    <strong id="dt-speed-reduction">—</strong>%
+    (from 50 km/h free-flow → <strong id="dt-congested-speed">—</strong> km/h)
+  </div>
+
+</section></footer>
 
   <script src="/static/app.js"></script>
 </body>
