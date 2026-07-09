@@ -377,3 +377,52 @@ footer{
 .unique-defect-row .udr-meta{ color:var(--text-faint); font-size:12px; font-family:'JetBrains Mono',monospace; }
 
 /* ---------- LOS colors (shared helper classes set inline via JS) ---------- */
+/* ===== DIGITAL TWIN STYLES ===== */
+.dt-panel { margin-top:2rem; background:#0f172a; border:1px solid #1e3a5f; border-radius:12px; padding:2rem; }
+.dt-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.25rem; }
+.dt-title { font-family:'Oswald',sans-serif; font-size:1.4rem; color:#e2e8f0; letter-spacing:0.04em; }
+.dt-subtitle { font-size:0.72rem; color:#64748b; margin-bottom:1.5rem; }
+.dt-status-badge { font-family:'JetBrains Mono',monospace; font-size:0.72rem; padding:0.25rem 0.75rem; border-radius:999px; background:#1e293b; color:#94a3b8; border:1px solid #334155; transition:all 0.3s; }
+.dt-status-badge.running { background:#1e3a5f; color:#60a5fa; border-color:#3b82f6; }
+.dt-status-badge.done    { background:#14532d; color:#4ade80; border-color:#22c55e; }
+.dt-status-badge.error   { background:#450a0a; color:#f87171; border-color:#ef4444; }
+.dt-road-compare { display:grid; grid-template-columns:1fr auto 1fr; gap:1.25rem; margin-bottom:2rem; align-items:start; }
+.dt-road-card { background:#1e293b; border-radius:10px; padding:1.25rem; border:1px solid #334155; }
+.dt-road-card.ideal  { border-color:#166534; }
+.dt-road-card.defect { border-color:#7f1d1d; }
+.dt-road-label { font-family:'JetBrains Mono',monospace; font-size:0.78rem; font-weight:600; margin-bottom:1rem; letter-spacing:0.06em; }
+.dt-road-stat { display:flex; align-items:baseline; gap:0.35rem; margin-bottom:0.5rem; }
+.dt-stat-value { font-family:'Oswald',sans-serif; font-size:1.6rem; color:#f1f5f9; line-height:1; }
+.dt-stat-unit  { font-size:0.72rem; color:#64748b; }
+.dt-stat-label { font-size:0.68rem; color:#475569; margin-left:auto; }
+.dt-road-visual { position:relative; height:80px; background:#334155; border-radius:6px; margin-top:1rem; overflow:hidden; }
+.ideal-visual  { background:linear-gradient(90deg,#14532d22,#14532d44); }
+.defect-visual { background:linear-gradient(90deg,#7f1d1d22,#7f1d1d44); }
+.dt-lane-mark { position:absolute; top:50%; left:0; right:0; height:2px; background:repeating-linear-gradient(90deg,#fff 0 20px,transparent 20px 40px); opacity:0.15; transform:translateY(-50%); }
+.dt-pothole { position:absolute; bottom:14px; left:40%; width:28px; height:16px; background:#450a0a; border-radius:50%; border:2px solid #ef4444; box-shadow:0 0 8px #ef4444aa; }
+.dt-vehicle { position:absolute; top:50%; width:28px; height:14px; border-radius:3px; transform:translateY(-50%); animation:drive linear infinite; }
+@keyframes drive { from{left:-60px} to{left:110%} }
+.dt-vs-divider { display:flex; align-items:center; justify-content:center; padding-top:3rem; }
+.dt-loss-badge { background:#1e293b; border:2px solid #f97316; border-radius:10px; padding:0.75rem 1rem; text-align:center; min-width:90px; }
+.dt-loss-pct { font-family:'Oswald',sans-serif; font-size:1.8rem; color:#f97316; line-height:1; }
+.dt-loss-label { font-size:0.62rem; color:#94a3b8; font-family:monospace; margin-top:0.2rem; }
+.dt-chart-section { margin-bottom:1.5rem; }
+.dt-charts-row { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+.dt-chart-wrap { background:#1e293b; border-radius:8px; padding:1rem; }
+.dt-chart-label { font-size:0.7rem; color:#64748b; font-family:monospace; margin-bottom:0.5rem; }
+.dt-chart-title { font-size:0.7rem; color:#475569; margin-bottom:0.75rem; letter-spacing:0.06em; }
+canvas { width:100% !important; }
+.dt-los-section { margin-bottom:1.5rem; }
+.dt-los-bar { display:flex; border-radius:8px; overflow:hidden; height:40px; margin-bottom:0.3rem; }
+.dt-los-seg { flex:1; display:flex; align-items:center; justify-content:center; font-family:'Oswald',sans-serif; font-size:1.1rem; color:#fff; opacity:0.3; transition:opacity 0.4s,transform 0.3s; }
+.dt-los-seg[data-los="A"] { background:#22c55e; }
+.dt-los-seg[data-los="B"] { background:#84cc16; }
+.dt-los-seg[data-los="C"] { background:#eab308; }
+.dt-los-seg[data-los="D"] { background:#f97316; }
+.dt-los-seg[data-los="E"] { background:#ef4444; }
+.dt-los-seg[data-los="F"] { background:#7f1d1d; }
+.dt-los-seg.active { opacity:1; transform:scaleY(1.15); }
+.dt-los-labels { display:flex; font-size:0.6rem; color:#475569; font-family:monospace; }
+.dt-los-labels span { flex:1; text-align:center; }
+.dt-speed-section { font-size:0.8rem; color:#fbbf24; background:#1c1100; border:1px solid #78350f; border-radius:8px; padding:0.75rem 1rem; }
+@media(max-width:760px) { .dt-road-compare{grid-template-columns:1fr} .dt-vs-divider{padding-top:0} .dt-charts-row{grid-template-columns:1fr} }
