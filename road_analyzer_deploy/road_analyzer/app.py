@@ -48,18 +48,6 @@ from road_analyzer.core import (
     RoadAnalyzer, IRC106_DSV, FRINGE_CONDITION_DESC, CLASS_NAMES,
 )
 
-# Digital Twin bridge (optional — gracefully disabled if MATLAB not installed)
-try:
-    from road_analyzer.digital_twin_bridge import (
-        trigger_matlab_simulation,
-        get_twin_status,
-        get_latest_twin_data,
-    )
-    _DT_ENABLED = True
-except ImportError:
-    _DT_ENABLED = False
-    logger.warning("digital_twin_bridge not found — /api/digital-twin/* endpoints will be disabled.")
-
 # ----------------------------------------------------------------
 # Paths & app-wide state
 # ----------------------------------------------------------------
@@ -210,17 +198,9 @@ async def analyze_image(
     except Exception as e:
         raise HTTPException(400, f"Analysis failed: {e}")
 
-    json_path = result.pop("_json_path", None)
+    result.pop("_json_path", None)
     result.pop("_csv_path", None)
     result["job_id"] = job_id
-
-    # ---- Trigger MATLAB Digital Twin simulation in background ----
-    if _DT_ENABLED and json_path:
-        trigger_matlab_simulation(str(json_path))
-        result["digital_twin_status"] = "running"
-    else:
-        result["digital_twin_status"] = "unavailable"
-
     return result
 
 
@@ -329,26 +309,3 @@ def get_job(job_id: str):
 @app.get("/api/health")
 def health():
     return {"status": "ok", "model_loaded": Path(MODEL_PATH).exists()}
-
-
-# ----------------------------------------------------------------
-# DIGITAL TWIN ENDPOINTS
-# ----------------------------------------------------------------
-
-@app.get("/api/digital-twin/status")
-def digital_twin_status():
-    """Poll this after an image analysis to check if MATLAB simulation is done."""
-    if not _DT_ENABLED:
-        raise HTTPException(503, "Digital Twin (MATLAB) bridge not available.")
-    return get_twin_status()
-
-
-@app.get("/api/digital-twin/latest")
-def digital_twin_latest():
-    """Return the most recent Simulink simulation output."""
-    if not _DT_ENABLED:
-        raise HTTPException(503, "Digital Twin (MATLAB) bridge not available.")
-    data = get_latest_twin_data()
-    if data is None:
-        raise HTTPException(404, "No digital twin simulation has been run yet.")
-    return data
