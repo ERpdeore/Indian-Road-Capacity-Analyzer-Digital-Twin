@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Road Efficiency Analyzer — IRC:106 / IRC:64 Capacity-Loss Report</title>
+<title>Indian Road Capacity Analyzer — IRC:106-1990</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
@@ -13,9 +13,9 @@
   <div class="topbar">
     <div class="brand">
       <div class="brand-mark"></div>
-      <div class="brand-text">Road Efficiency Analyzer</div>
+      <div class="brand-text">Indian Road Capacity Analyzer</div>
     </div>
-    <div class="topbar-sub mono">IRC:106-1990 &middot; IRC:64-1990</div>
+    <div class="topbar-sub mono">IRC:106-1990 &middot; AI Defect Detection &middot; Digital Twin</div>
   </div>
 
   <div class="wrap">
@@ -39,6 +39,8 @@
       </div>
 
       <div class="panel-body">
+
+        <!-- LEFT: drop zone -->
         <div class="dropzone-col">
           <label class="drop" id="drop" for="file-input">
             <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
@@ -50,6 +52,8 @@
             <div class="drop-filelist" id="drop-filelist"></div>
           </label>
           <input type="file" id="file-input" accept="image/*">
+
+          <!-- video sample rate row (hidden by default) -->
           <div class="field-row" id="video-sample-row" style="display:none;">
             <label class="field-label" for="sample-every-sec">Sample every</label>
             <select id="sample-every-sec" class="field-select">
@@ -60,38 +64,73 @@
             </select>
             <span class="field-hint">Lower = more thorough, slower to process</span>
           </div>
+
+          <!-- photo tips -->
+          <div class="photo-tips-box">
+            <div class="photo-tips-title">📷 For best detection accuracy</div>
+            <ul class="photo-tips-list">
+              <li>Stand perpendicular to the road — not at an angle</li>
+              <li>Capture the full carriageway width in frame</li>
+              <li>Shoot from footpath at chest height (~1.2–1.5 m)</li>
+              <li>Good daylight, avoid harsh shadows across road</li>
+            </ul>
+          </div>
         </div>
 
+        <!-- RIGHT: road parameters form -->
         <form class="config-col" id="config-form">
           <div class="config-title mono">ROAD PARAMETERS — MEASURED ON SITE</div>
 
           <div class="field-grid">
+
             <div class="field">
               <label for="total_width_m">Total carriageway width (m)</label>
-              <input type="number" id="total_width_m" name="total_width_m" step="0.1" min="1" value="7.0" required>
+              <input type="number" id="total_width_m" name="total_width_m"
+                     step="0.1" min="1" max="50" value="7.0" required>
+              <div class="field-hint">Measure at 3 points and average</div>
             </div>
+
             <div class="field">
               <label for="num_lanes">Number of lanes</label>
-              <input type="number" id="num_lanes" name="num_lanes" step="1" min="1" value="2" required>
+              <input type="number" id="num_lanes" name="num_lanes"
+                     step="1" min="1" max="16" value="2" required>
+              <div class="field-hint">Count markings + 1, or width ÷ 3.5</div>
             </div>
+
             <div class="field">
               <label for="usable_shoulder_m">Usable shoulder width (m)</label>
-              <input type="number" id="usable_shoulder_m" name="usable_shoulder_m" step="0.1" min="0" value="0.6" required>
+              <input type="number" id="usable_shoulder_m" name="usable_shoulder_m"
+                     step="0.1" min="0" max="10" value="0.6" required>
+              <div class="field-hint">Enter 0 if no paved shoulder</div>
             </div>
+
             <div class="field">
-              <label for="carriageway_key">Carriageway configuration</label>
+              <label for="carriageway_key">Carriageway type (IRC:106 Table 2)</label>
               <select id="carriageway_key" name="carriageway_key" required></select>
             </div>
+
             <div class="field field-wide">
-              <label for="fringe_condition">Fringe / frontage condition</label>
+              <label for="fringe_condition">Fringe / frontage condition (IRC:106 Table 2)</label>
               <select id="fringe_condition" name="fringe_condition" required></select>
               <div class="field-hint" id="fringe-desc"></div>
             </div>
+
             <div class="field field-wide">
-              <label for="heavy_traffic_regime">Traffic composition regime</label>
-              <select id="heavy_traffic_regime" name="heavy_traffic_regime" required></select>
-              <div class="field-hint" id="traffic-desc"></div>
+              <label for="traffic_regime">Traffic composition regime (IRC:106 Table 1)</label>
+              <select id="traffic_regime" name="traffic_regime" required></select>
+              <div class="field-hint" id="regime-desc"></div>
             </div>
+
+          </div>
+
+          <!-- Live DSV preview -->
+          <div class="dsv-preview" id="dsv-preview" style="display:none;">
+            <span class="dsv-label mono">IRC:106 BASE DSV (Design Service Volume)</span>
+            <div class="dsv-row">
+              <span class="dsv-value" id="dsv-value">—</span>
+              <span class="dsv-unit">PCU / hr</span>
+            </div>
+            <div class="dsv-note mono" id="dsv-note"></div>
           </div>
 
           <button type="submit" class="run-btn" id="run-btn">
@@ -102,7 +141,7 @@
       </div>
     </section>
 
-    <!-- ============ STATUS / PROGRESS ============ -->
+    <!-- ============ STATUS ============ -->
     <section class="card status-panel" id="status-panel" style="display:none;">
       <div class="status-spinner" aria-hidden="true"></div>
       <div class="status-text" id="status-text">Working…</div>
@@ -110,15 +149,101 @@
 
     <div id="error-box" class="error-box" style="display:none;"></div>
 
-    <!-- ============ RESULTS — rendered by JS per mode ============ -->
+    <!-- ============ RESULTS ============ -->
     <section id="results-root"></section>
+
+    <!-- ============ DIGITAL TWIN PANEL ============ -->
+    <section class="card dt-panel" id="dt-panel" style="display:none;">
+      <div class="dt-header">
+        <div class="dt-title">
+          <span>⚡</span> Digital Twin — Simulink Simulation
+        </div>
+        <div class="dt-status-badge" id="dt-status-badge">Initialising…</div>
+      </div>
+      <div class="dt-subtitle mono">
+        Ideal road (no defects) vs Defect road &middot; IRC:106-1990 &middot; MATLAB R2026a
+      </div>
+      <div class="dt-road-compare">
+        <div class="dt-road-card ideal">
+          <div class="dt-road-label">🟢 IDEAL ROAD — No Defects</div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-ideal-cap">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Base Capacity (IRC:106)</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-ideal-vol">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Design Volume (0.7 × DSV)</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value">50</span>
+            <span class="dt-stat-unit">km/h</span>
+            <span class="dt-stat-label">Free-flow Speed</span>
+          </div>
+          <div class="dt-road-visual ideal-visual">
+            <div class="dt-lane-mark"></div>
+            <div class="dt-vehicles" id="dt-ideal-vehicles"></div>
+          </div>
+        </div>
+        <div class="dt-vs-divider">
+          <div class="dt-loss-badge">
+            <div class="dt-loss-pct" id="dt-loss-pct">—%</div>
+            <div class="dt-loss-label">Capacity Lost</div>
+          </div>
+        </div>
+        <div class="dt-road-card defect">
+          <div class="dt-road-label">🔴 DEFECT ROAD — Current State</div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-defect-cap">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Reduced Capacity</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-defect-vol">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Design Volume (defect)</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-defect-speed">—</span>
+            <span class="dt-stat-unit">km/h</span>
+            <span class="dt-stat-label">Congested Speed</span>
+          </div>
+          <div class="dt-road-visual defect-visual">
+            <div class="dt-lane-mark"></div>
+            <div class="dt-pothole" id="dt-pothole-marker" style="display:none;"></div>
+            <div class="dt-vehicles" id="dt-defect-vehicles"></div>
+          </div>
+        </div>
+      </div>
+      <div class="dt-chart-section">
+        <div class="dt-chart-title mono">SIMULINK OUTPUT — CAPACITY OVER TIME (60s SIMULATION)</div>
+        <div class="dt-charts-row">
+          <div class="dt-chart-wrap">
+            <div class="dt-chart-label">Traffic Flow (PCU/hr)</div>
+            <canvas id="dt-cap-chart" width="500" height="200"></canvas>
+          </div>
+          <div class="dt-chart-wrap">
+            <div class="dt-chart-label">Vehicle Speed (km/h)</div>
+            <canvas id="dt-spd-chart" width="500" height="200"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="dt-speed-section mono" id="dt-speed-section" style="display:none;">
+        ⚠️ Pothole depth impact: vehicle speed reduced by
+        <strong id="dt-speed-reduction">—</strong>%
+        (from 50 km/h → <strong id="dt-congested-speed">—</strong> km/h)
+      </div>
+    </section>
 
   </div>
 
   <footer class="mono">
-    Capacity computed from IRC:106-1990 (urban Design Service Volume) and IRC:64-1990 (width-reduction factor) —
-    a simplified pilot-study proxy, not a substitute for a full IRC-compliant traffic survey ·
-    Actions reference IRC, IS and applicable Indian statutes — verify clause numbers against the latest published edition before citing in a report.
+    Capacity computed from IRC:106-1990 Table 2 (urban Design Service Volume) ·
+    Defect width uses overlap-aware interval union (no double counting) ·
+    Pothole penalty derived from Greenshields model, headway expansion and lane-merge bottleneck theory ·
+    This is a pilot-study tool — not a substitute for a full IRC-compliant traffic survey ·
+    Verify action code references against latest published editions before citing in an official report.
   </footer>
 
   <script src="/static/app.js"></script>
