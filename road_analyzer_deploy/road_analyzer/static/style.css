@@ -377,3 +377,405 @@ footer{
 .unique-defect-row .udr-meta{ color:var(--text-faint); font-size:12px; font-family:'JetBrains Mono',monospace; }
 
 /* ---------- LOS colors (shared helper classes set inline via JS) ---------- */
+
+/* ================================================================
+   ADDITIONS — v3 (traffic regime removed, alert panel added)
+   ================================================================ */
+
+/* --- Photo tips box -------------------------------------------- */
+.photo-tips-box {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.photo-tips-title {
+  font-weight: 600;
+  color: var(--amber);
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.photo-tips-list {
+  margin: 0;
+  padding-left: 16px;
+  line-height: 1.9;
+  color: var(--text-faint);
+}
+
+/* --- DSV live preview ------------------------------------------ */
+.dsv-preview {
+  background: #0d1f35;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+.dsv-label {
+  font-size: 10px;
+  color: #60a5fa;
+  letter-spacing: 0.08em;
+  display: block;
+  margin-bottom: 4px;
+}
+.dsv-row { display: flex; align-items: baseline; gap: 8px; }
+.dsv-value {
+  font-family: 'Oswald', sans-serif;
+  font-size: 2rem;
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1;
+}
+.dsv-unit  { font-size: 13px; color: var(--text-faint); }
+.dsv-note  { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+
+/* --- Formula box inside hero ------------------------------------ */
+.formula-box {
+  font-size: 11.5px;
+  color: #60a5fa;
+  background: #0d1f35;
+  border: 1px solid #1e3a5f;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-top: 10px;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+/* --- Veto note -------------------------------------------------- */
+.veto-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* ================================================================
+   DEFECT ALERT PANEL
+   ================================================================ */
+.alert-panel {
+  background: #0f1923;
+  border: 1px solid #1e3a5f;
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin-bottom: 24px;
+  position: relative;
+  overflow: hidden;
+}
+.alert-panel.has-urgent {
+  border-color: #7f1d1d;
+  background: #130a0a;
+}
+.alert-panel.has-urgent::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #ef4444, #f97316, #ef4444);
+  animation: urgentPulse 2s ease-in-out infinite;
+}
+@keyframes urgentPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+.alert-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.alert-panel-title {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.03em;
+}
+.alert-panel-sub {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Count chips */
+.alert-count-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.alert-count-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.sev-bg-URGENT   { background: #2d0a0a; border: 1px solid #7f1d1d; }
+.sev-bg-ROUTINE  { background: #2d2000; border: 1px solid #78350f; }
+.sev-bg-MONITOR  { background: #0d2b1a; border: 1px solid #14532d; }
+.sev-bg-NONE     { background: var(--surface-2); border: 1px solid var(--line); }
+.alert-chip-icon { font-size: 18px; line-height: 1; }
+.alert-chip-num  {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+}
+.alert-chip-name {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+/* Alert rows */
+.alert-rows { display: flex; flex-direction: column; gap: 8px; }
+.alert-row {
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+  border-radius: 8px;
+  border-left: 4px solid transparent;
+}
+.sev-row-URGENT  { background: #1a0a0a; border-left-color: var(--red); }
+.sev-row-ROUTINE { background: #1a1200; border-left-color: var(--yellow); }
+.sev-row-MONITOR { background: #0a1a0f; border-left-color: var(--green); }
+.alert-row-left  { display: flex; align-items: center; gap: 8px; }
+
+.alert-sev-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sev-dot-URGENT  { background: var(--red);   box-shadow: 0 0 5px var(--red);   animation: blink 1.2s ease-in-out infinite; }
+.sev-dot-ROUTINE { background: var(--yellow); }
+.sev-dot-MONITOR { background: var(--green);  }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+.alert-sev-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.sev-row-URGENT  .alert-sev-label { background: #4a0a0a; color: #fca5a5; }
+.sev-row-ROUTINE .alert-sev-label { background: #3d2800; color: var(--yellow); }
+.sev-row-MONITOR .alert-sev-label { background: #0d2b1a; color: #86efac; }
+
+.alert-defect-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: capitalize;
+}
+.alert-row-msg {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.alert-row-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* Pothole depth summary in defect card */
+.depth-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: #1a1200;
+  border: 1px solid #78350f;
+  border-radius: 6px;
+}
+.depth-sev {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.depth-shallow  { background: #0d2b1a; color: #86efac; }
+.depth-moderate { background: #2d2000; color: var(--yellow); }
+.depth-deep     { background: #2d0a0a; color: #fca5a5; }
+.depth-unknown  { background: var(--surface-2); color: var(--text-faint); }
+.depth-detail   { font-size: 11.5px; color: var(--text-faint); font-family: 'JetBrains Mono', monospace; }
+
+/* ================================================================
+   DIGITAL TWIN PANEL
+   ================================================================ */
+.dt-panel {
+  margin-top: 24px;
+  background: var(--surface);
+  border: 1px solid #1e3a5f;
+  border-radius: var(--radius);
+  padding: 22px 24px;
+}
+.dt-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.dt-title {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.2rem;
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+.dt-subtitle { font-size: 11px; color: var(--text-faint); margin-bottom: 20px; }
+.dt-status-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  transition: all 0.3s;
+}
+.dt-status-badge.running { background: #0d1f35; color: #60a5fa; border-color: #1e3a5f; }
+.dt-status-badge.done    { background: var(--green-dim); color: var(--green); border-color: var(--green); }
+.dt-status-badge.error   { background: var(--red-dim); color: var(--red); border-color: var(--red); }
+
+.dt-road-compare {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+  align-items: start;
+}
+.dt-road-card {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+}
+.dt-road-card.ideal  { border-color: #14532d; }
+.dt-road-card.defect { border-color: #7f1d1d; }
+.dt-road-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  letter-spacing: 0.06em;
+}
+.dt-road-stat { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+.dt-stat-value {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.5rem;
+  color: var(--text);
+  line-height: 1;
+}
+.dt-stat-unit  { font-size: 11px; color: var(--text-faint); }
+.dt-stat-label { font-size: 10.5px; color: var(--text-faint); margin-left: auto; }
+.dt-road-visual {
+  position: relative;
+  height: 70px;
+  background: var(--line);
+  border-radius: 6px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+.ideal-visual  { background: linear-gradient(90deg, #0d2b1a, #14532d22); }
+.defect-visual { background: linear-gradient(90deg, #2d0a0a, #7f1d1d22); }
+.dt-lane-mark {
+  position: absolute;
+  top: 50%; left: 0; right: 0;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, #fff 0 16px, transparent 16px 32px);
+  opacity: 0.12;
+  transform: translateY(-50%);
+}
+.dt-pothole {
+  position: absolute;
+  bottom: 12px; left: 40%;
+  width: 24px; height: 14px;
+  background: #450a0a;
+  border-radius: 50%;
+  border: 2px solid var(--red);
+  box-shadow: 0 0 7px var(--red);
+}
+.dt-vehicle {
+  position: absolute;
+  top: 50%;
+  width: 26px; height: 12px;
+  border-radius: 3px;
+  transform: translateY(-50%);
+  animation: drive linear infinite;
+}
+@keyframes drive { from { left: -60px; } to { left: 110%; } }
+
+.dt-vs-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 40px;
+}
+.dt-loss-badge {
+  background: var(--surface-2);
+  border: 2px solid var(--amber);
+  border-radius: 10px;
+  padding: 12px 14px;
+  text-align: center;
+  min-width: 90px;
+}
+.dt-loss-pct {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.7rem;
+  color: var(--amber);
+  line-height: 1;
+}
+.dt-loss-label { font-size: 10px; color: var(--text-faint); font-family: monospace; margin-top: 3px; }
+
+.dt-chart-section { margin-bottom: 16px; }
+.dt-charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dt-chart-wrap {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+}
+.dt-chart-label { font-size: 11px; color: var(--text-faint); font-family: monospace; margin-bottom: 6px; }
+.dt-chart-title { font-size: 10px; color: var(--text-faint); margin-bottom: 10px; letter-spacing: 0.07em; }
+canvas { width: 100% !important; }
+
+.dt-speed-section {
+  font-size: 12px;
+  color: var(--yellow);
+  background: #1c1100;
+  border: 1px solid #78350f;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+@media (max-width: 760px) {
+  .dt-road-compare { grid-template-columns: 1fr; }
+  .dt-vs-divider   { padding-top: 0; }
+  .dt-charts-row   { grid-template-columns: 1fr; }
+  .alert-row       { grid-template-columns: 1fr; gap: 6px; }
+  .alert-row-stats { align-items: flex-start; }
+}
+
+/* vehicles/hr sub-value in hero compare */
+.val-sub {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 2px;
+}
