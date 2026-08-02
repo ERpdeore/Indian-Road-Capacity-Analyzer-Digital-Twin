@@ -39,7 +39,8 @@ logger = logging.getLogger("road_analyzer.app")
 
 from road_analyzer.core import (
     RoadAnalyzer, IRC106_DSV, IRC106_DSV_LABELS,
-    FRINGE_CONDITION_DESC, CLASS_NAMES,
+    FRINGE_CONDITION_DESC, TRAFFIC_REGIME_DESC,
+    IRC106_PCU_FACTORS, CLASS_NAMES,
 )
 
 # Digital Twin bridge — optional, disabled gracefully if MATLAB not installed
@@ -117,6 +118,7 @@ def _road_config_from_form(
     carriageway_key:  str,
     fringe_condition: str,
     usable_shoulder_m: float,
+    traffic_regime:   str = "low",
 ) -> dict:
     if carriageway_key not in IRC106_DSV:
         raise HTTPException(400, f"Unknown carriageway_key '{carriageway_key}'. "
@@ -124,6 +126,8 @@ def _road_config_from_form(
     if fringe_condition not in FRINGE_CONDITION_DESC:
         raise HTTPException(400, f"Unknown fringe_condition '{fringe_condition}'. "
                                   f"Valid: {list(FRINGE_CONDITION_DESC.keys())}")
+    if traffic_regime not in ("low", "high"):
+        traffic_regime = "low"
     if num_lanes <= 0:
         raise HTTPException(400, "num_lanes must be >= 1")
     if total_width_m <= 0:
@@ -134,6 +138,7 @@ def _road_config_from_form(
         "carriageway_key":  carriageway_key,
         "fringe_condition": fringe_condition,
         "usable_shoulder_m": float(usable_shoulder_m),
+        "traffic_regime":   traffic_regime,
     }
 
 
@@ -174,11 +179,15 @@ def config_options():
         })
     return {
         "carriageway_options": carriageway_options,
-        "fringe_conditions":   [
+        "fringe_conditions": [
             {"key": k, "description": v} for k, v in FRINGE_CONDITION_DESC.items()
         ],
-        "defect_classes":      CLASS_NAMES,
-        "model_loaded":        Path(MODEL_PATH).exists(),
+        "traffic_regimes": [
+            {"key": k, "description": v} for k, v in TRAFFIC_REGIME_DESC.items()
+        ],
+        "pcu_factors": IRC106_PCU_FACTORS,
+        "defect_classes": CLASS_NAMES,
+        "model_loaded":   Path(MODEL_PATH).exists(),
     }
 
 
@@ -193,10 +202,11 @@ async def analyze_image(
     carriageway_key:   str   = Form(...),
     fringe_condition:  str   = Form(...),
     usable_shoulder_m: float = Form(...),
+    traffic_regime:    str   = Form("low"),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
-        fringe_condition, usable_shoulder_m,
+        fringe_condition, usable_shoulder_m, traffic_regime,
     )
 
     # Fresh job_id for EVERY request — this is what fixes the
@@ -260,13 +270,14 @@ async def analyze_batch(
     carriageway_key:   str   = Form(...),
     fringe_condition:  str   = Form(...),
     usable_shoulder_m: float = Form(...),
+    traffic_regime:    str   = Form("low"),
 ):
     if not files:
         raise HTTPException(400, "Upload at least one image.")
 
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
-        fringe_condition, usable_shoulder_m,
+        fringe_condition, usable_shoulder_m, traffic_regime,
     )
 
     job_id, job_dir = _new_job("batch")
@@ -314,10 +325,11 @@ async def analyze_video(
     fringe_condition:  str   = Form(...),
     usable_shoulder_m: float = Form(...),
     sample_every_sec:  float = Form(1.0),
+    traffic_regime:    str   = Form("low"),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
-        fringe_condition, usable_shoulder_m,
+        fringe_condition, usable_shoulder_m, traffic_regime,
     )
 
     job_id, job_dir = _new_job("video")
