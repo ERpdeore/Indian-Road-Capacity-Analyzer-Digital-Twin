@@ -113,6 +113,89 @@ FRINGE_CONDITION_DESC: Dict[str, str] = {
 }
 
 # ================================================================
+# IRC:106-1990 — PCU Conversion Factors by Traffic Composition
+# Source: IRC:106-1990, Table 1
+#
+# PCU (Passenger Car Unit) converts mixed traffic into equivalent cars.
+# The DSV from Table 2 is in PCU/hr — not vehicles/hr.
+# By applying avg PCU per vehicle under the selected regime, we convert
+# DSV (PCU/hr) → equivalent vehicles/hr — more intuitive for field use.
+#
+# Low  regime: < 15% heavy vehicles (trucks/buses) in traffic stream
+# High regime: >= 15% heavy vehicles in traffic stream
+# ================================================================
+IRC106_PCU_FACTORS: Dict[str, Dict[str, float]] = {
+    "low": {
+        "two_wheeler":    0.50,
+        "car_jeep_van":   1.00,
+        "auto_rickshaw":  1.20,
+        "lcv":            1.50,
+        "truck_bus":      2.20,
+        "agricultural":   4.00,
+        "cycle":          0.50,
+        "cycle_rickshaw": 1.50,
+    },
+    "high": {
+        "two_wheeler":    0.75,
+        "car_jeep_van":   1.00,
+        "auto_rickshaw":  1.20,
+        "lcv":            2.00,
+        "truck_bus":      3.00,
+        "agricultural":   5.00,
+        "cycle":          0.50,
+        "cycle_rickshaw": 2.00,
+    },
+}
+
+# Weighted average PCU per vehicle for typical Indian urban traffic composition
+# Assumed composition: 40% two-wheelers, 30% cars, 10% autos,
+#                      10% LCV, 8% trucks/buses, 2% others
+# This is used to convert DSV (PCU/hr) → vehicles/hr
+IRC106_TYPICAL_COMPOSITION: Dict[str, float] = {
+    "two_wheeler":    0.40,
+    "car_jeep_van":   0.30,
+    "auto_rickshaw":  0.10,
+    "lcv":            0.10,
+    "truck_bus":      0.08,
+    "agricultural":   0.01,
+    "cycle":          0.01,
+}
+
+TRAFFIC_REGIME_DESC: Dict[str, str] = {
+    "low":  "Less than 15% heavy vehicles (trucks/buses) — mostly cars, autos, two-wheelers",
+    "high": "15% or more heavy vehicles (trucks/buses) — significant freight/bus movement",
+}
+
+
+def get_avg_pcu(regime: str) -> float:
+    """
+    Calculate weighted average PCU per vehicle for the given traffic regime.
+    Used to convert DSV (PCU/hr) → equivalent vehicles/hr.
+
+    Formula:
+        avg_PCU = Σ (vehicle_share × PCU_factor)
+        vehicles/hr = DSV_pcu_hr / avg_PCU
+
+    Example (low regime):
+        avg_PCU = 0.40×0.50 + 0.30×1.00 + 0.10×1.20 + 0.10×1.50
+                + 0.08×2.20 + 0.01×4.00 + 0.01×0.50
+                = 0.20 + 0.30 + 0.12 + 0.15 + 0.176 + 0.04 + 0.005
+                = ~1.00 PCU/vehicle
+    """
+    factors = IRC106_PCU_FACTORS.get(regime, IRC106_PCU_FACTORS["low"])
+    avg = sum(
+        share * factors.get(vtype, 1.0)
+        for vtype, share in IRC106_TYPICAL_COMPOSITION.items()
+    )
+    return max(avg, 0.5)  # safety floor
+
+
+def dsv_to_vehicles_per_hr(dsv_pcu_hr: float, regime: str) -> float:
+    """Convert DSV in PCU/hr to equivalent vehicles/hr for given traffic regime."""
+    avg_pcu = get_avg_pcu(regime)
+    return dsv_pcu_hr / avg_pcu
+
+# ================================================================
 # Pothole penalty factors — traffic flow theory derivation
 #
 # 0.95 (Shallow): Greenshields speed-density relationship.
@@ -408,14 +491,23 @@ class RoadAnalyzer:
         num_lanes       = int(road_config["num_lanes"])
         carriageway_key = road_config["carriageway_key"]
         fringe          = road_config["fringe_condition"]
+        traffic_regime  = road_config.get("traffic_regime", "low")
 
         if num_lanes <= 0:
             raise ValueError("num_lanes must be >= 1")
         if total_width_m <= 0:
             raise ValueError("total_width_m must be > 0")
+        if traffic_regime not in ("low", "high"):
+            traffic_regime = "low"
 
         px_per_m = img_w / total_width_m
         base_dsv = get_irc106_dsv(carriageway_key, fringe)
+
+        # IRC:106 Table 1 — PCU conversion
+        # DSV is in PCU/hr. Convert to vehicles/hr using avg PCU factor
+        # for the selected traffic regime.
+        avg_pcu              = get_avg_pcu(traffic_regime)
+        base_vehicles_per_hr = dsv_to_vehicles_per_hr(base_dsv, traffic_regime)
 
         detections, vetoed_count = self._detect(image_path)
 
@@ -552,23 +644,45 @@ class RoadAnalyzer:
                 "fringe_desc":      FRINGE_CONDITION_DESC.get(fringe, ""),
                 "source":           "IRC:106-1990 Table 2 (urban Design Service Volume)",
             },
-            "capacity_calculation": {
-                "base_dsv_pcu_hr":     round(base_dsv, 1),
-                "total_width_m":       round(total_width_m, 2),
-                "total_blocked_m":     round(total_blocked_m, 2),
-                "effective_width_m":   round(effective_width_m, 2),
-                "width_factor":        round(width_factor, 3),
-                "pothole_penalty":     pothole_penalty,
-                "worst_pothole_depth": worst_pothole_severity,
-                "formula": (
-                    f"Reduced cap = {base_dsv} x {round(width_factor,3)} "
-                    f"x {pothole_penalty} = {round(reduced_cap,1)} PCU/hr"
+            "traffic_regime": {
+                "regime":              traffic_regime,
+                "desc":                TRAFFIC_REGIME_DESC.get(traffic_regime, ""),
+                "avg_pcu_per_vehicle": round(avg_pcu, 3),
+                "base_vehicles_per_hr": round(base_vehicles_per_hr, 0),
+                "reduced_vehicles_per_hr": round(
+                    dsv_to_vehicles_per_hr(reduced_cap, traffic_regime), 0
+                ),
+                "pcu_factors":         IRC106_PCU_FACTORS.get(traffic_regime, {}),
+                "note": (
+                    f"IRC:106 Table 2 DSV is in PCU/hr. "
+                    f"Converted to vehicles/hr using avg PCU={round(avg_pcu,3)} "
+                    f"for {traffic_regime} heavy-vehicle regime (IRC:106 Table 1)."
                 ),
             },
-            "original_capacity_pcu_hr": round(base_dsv, 1),
-            "reduced_capacity_pcu_hr":  round(reduced_cap, 1),
-            "capacity_loss_pcu_hr":     round(cap_loss, 1),
-            "capacity_loss_pct":        round(cap_loss_pct, 1),
+            "capacity_calculation": {
+                "base_dsv_pcu_hr":        round(base_dsv, 1),
+                "base_vehicles_per_hr":   round(base_vehicles_per_hr, 0),
+                "total_width_m":          round(total_width_m, 2),
+                "total_blocked_m":        round(total_blocked_m, 2),
+                "effective_width_m":      round(effective_width_m, 2),
+                "width_factor":           round(width_factor, 3),
+                "pothole_penalty":        pothole_penalty,
+                "worst_pothole_depth":    worst_pothole_severity,
+                "avg_pcu_per_vehicle":    round(avg_pcu, 3),
+                "formula": (
+                    f"Reduced cap = {base_dsv} PCU/hr x {round(width_factor,3)} (width) "
+                    f"x {pothole_penalty} (pothole) = {round(reduced_cap,1)} PCU/hr "
+                    f"= {round(dsv_to_vehicles_per_hr(reduced_cap, traffic_regime),0)} veh/hr "
+                    f"({traffic_regime} regime, avg PCU={round(avg_pcu,3)})"
+                ),
+            },
+            "original_capacity_pcu_hr":      round(base_dsv, 1),
+            "original_capacity_vehicles_hr": round(base_vehicles_per_hr, 0),
+            "reduced_capacity_pcu_hr":       round(reduced_cap, 1),
+            "reduced_capacity_vehicles_hr":  round(dsv_to_vehicles_per_hr(reduced_cap, traffic_regime), 0),
+            "capacity_loss_pcu_hr":          round(cap_loss, 1),
+            "capacity_loss_vehicles_hr":     round(base_vehicles_per_hr - dsv_to_vehicles_per_hr(reduced_cap, traffic_regime), 0),
+            "capacity_loss_pct":             round(cap_loss_pct, 1),
             "overall_guidance":         overall_guidance,
             "effective_width_m":        round(effective_width_m, 2),
             "vehicle_veto_suppressed":  vetoed_count,
