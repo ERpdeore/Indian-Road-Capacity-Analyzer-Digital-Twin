@@ -244,9 +244,14 @@ CONF_THRESHOLDS = {
 }
 DEFAULT_CONF = 0.45
 
+# NOTE: this list is what the frontend shows as "defect classes we detect".
+# "vehicle" is intentionally excluded — per IRC_ACTION_RULES it's explicitly
+# NOT a defect (moving traffic), it's only used internally for the
+# vendor/cart veto logic. "tree_on_road" was previously missing here even
+# though it has its own CONF_THRESHOLDS/IRC_ACTION_RULES entries below.
 CLASS_NAMES = [
     "barricade", "pothole", "illegal_parking", "street_vendor",
-    "cart", "garbage", "vehicle",
+    "cart", "garbage", "tree_on_road",
 ]
 
 
@@ -624,6 +629,18 @@ class RoadAnalyzer:
             final_result["_json_path"] = str(json_path)
             final_result["_csv_path"] = str(csv_path)
 
+            # Save a boxes-drawn copy so the dashboard can show users WHERE
+            # each defect was found, not just the numbers. Best-effort: if
+            # this fails for any reason we still return the numeric result.
+            annotated_filename = f"{stem}_annotated.jpg"
+            try:
+                frame = self.annotated_frame(image_path)
+                cv2.imwrite(str(out_dir / annotated_filename), frame)
+                final_result["annotated_image_filename"] = annotated_filename
+            except Exception:
+                logger.warning("Could not save annotated frame for %s", image_path, exc_info=True)
+                final_result["annotated_image_filename"] = None
+
         return final_result
 
     def annotated_frame(self, image_path: str):
@@ -668,6 +685,7 @@ class RoadAnalyzer:
                 "capacity_loss_pct": r["capacity_loss_pct"],
                 "level_of_service": r["level_of_service"],
                 "defects_found": list(r["per_defect"].keys()),
+                "annotated_image_filename": r.get("annotated_image_filename"),
             }
             for r in per_image_results
         ]
