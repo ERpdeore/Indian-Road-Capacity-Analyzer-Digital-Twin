@@ -19,6 +19,8 @@
   const carriageDsvHint = document.getElementById("carriageway-dsv-hint");
   const dsvPreview      = document.getElementById("dsv-preview");
   const dsvValueEl      = document.getElementById("dsv-value");
+  const regimeSel       = document.getElementById("traffic_regime");
+  const regimeDescEl    = document.getElementById("regime-desc");
 
   const configForm    = document.getElementById("config-form");
   const runBtn        = document.getElementById("run-btn");
@@ -109,15 +111,26 @@
   // ----------------------------------------------------------------
   // DSV preview — updates when carriageway or fringe changes
   // ----------------------------------------------------------------
+  // PCU avg factors for quick vehicles/hr preview
+  const AVG_PCU = { low: 1.00, high: 1.30 };
+
   function updateDsvPreview() {
     if (!configData) return;
     const key    = carriagewaySel.value;
     const fringe = fringeSel.value;
+    const regime = regimeSel ? regimeSel.value : "low";
     const opt    = (configData.carriageway_options || []).find((o) => o.key === key);
     if (opt && opt.dsv_values && opt.dsv_values[fringe] !== undefined) {
-      const val = opt.dsv_values[fringe];
-      dsvValueEl.textContent = val.toLocaleString("en-IN");
-      dsvPreview.style.display = "flex";
+      const dsv     = opt.dsv_values[fringe];
+      const avgPcu  = AVG_PCU[regime] || 1.00;
+      const vehPerHr = Math.round(dsv / avgPcu);
+      dsvValueEl.textContent = dsv.toLocaleString("en-IN");
+      const noteEl = document.getElementById("dsv-note");
+      if (noteEl) {
+        noteEl.textContent =
+          `≈ ${vehPerHr.toLocaleString("en-IN")} vehicles/hr under ${regime} heavy-vehicle regime (IRC:106 Table 1)`;
+      }
+      dsvPreview.style.display = "";
     } else {
       dsvPreview.style.display = "none";
     }
@@ -165,6 +178,22 @@
         updateDsvPreview();
       });
       fringeSel.dispatchEvent(new Event("change"));
+
+      // Traffic regime dropdown
+      if (regimeSel) {
+        regimeSel.innerHTML = (data.traffic_regimes || [
+          { key: "low",  description: "Less than 15% heavy vehicles — mostly cars, autos, two-wheelers" },
+          { key: "high", description: "15% or more heavy vehicles — significant freight/bus movement" },
+        ]).map((r) => `<option value="${r.key}">${r.key === "low" ? "Low (<15% heavy vehicles)" : "High (≥15% heavy vehicles)"}</option>`)
+          .join("");
+        regimeSel.addEventListener("change", () => {
+          const r = (data.traffic_regimes || []).find((x) => x.key === regimeSel.value);
+          if (regimeDescEl) regimeDescEl.textContent = r ? r.description : "";
+          updateDsvPreview();
+        });
+        regimeSel.dispatchEvent(new Event("change"));
+      }
+
       carriagewaySel.dispatchEvent(new Event("change"));
 
       // Model status
@@ -198,8 +227,7 @@
     }
 
     const fd = new FormData(configForm);
-    // IMPORTANT: remove heavy_traffic_regime if somehow still in the form
-    fd.delete("heavy_traffic_regime");
+    // traffic_regime is now a valid field — do not delete it
 
     runBtn.disabled = true;
 
@@ -328,13 +356,16 @@
     const irc = data.irc_basis    || {};
     const calc = data.capacity_calculation || {};
 
+    const regime   = data.traffic_regime || {};
     const stripParts = [
       ["Carriageway",    titleCase(cfg.carriageway_key || "")],
       ["Fringe",         titleCase(cfg.fringe_condition || "")],
       ["Total width",    cfg.total_width_m   != null ? cfg.total_width_m   + " m" : null],
       ["Lanes",          cfg.num_lanes],
       ["Shoulder",       cfg.usable_shoulder_m != null ? cfg.usable_shoulder_m + " m" : null],
+      ["Traffic regime", regime.regime ? (regime.regime === "low" ? "Low (<15% heavy)" : "High (≥15% heavy)") : null],
       ["Base DSV",       irc.base_dsv_pcu_hr  != null ? irc.base_dsv_pcu_hr  + " PCU/hr" : null],
+      ["Avg PCU/veh",    regime.avg_pcu_per_vehicle != null ? regime.avg_pcu_per_vehicle : null],
     ].filter((p) => p[1] !== null && p[1] !== undefined);
 
     return `
@@ -346,14 +377,17 @@
             <div class="item">
               <div class="label">Base capacity (IRC:106)</div>
               <div class="val orig">${fmt(data.original_capacity_pcu_hr, 0)} PCU/hr</div>
+              ${data.original_capacity_vehicles_hr ? `<div class="val-sub">${fmt(data.original_capacity_vehicles_hr, 0)} vehicles/hr</div>` : ""}
             </div>
             <div class="item">
               <div class="label">Reduced capacity</div>
               <div class="val red">${fmt(data.reduced_capacity_pcu_hr, 0)} PCU/hr</div>
+              ${data.reduced_capacity_vehicles_hr ? `<div class="val-sub">${fmt(data.reduced_capacity_vehicles_hr, 0)} vehicles/hr</div>` : ""}
             </div>
             <div class="item">
               <div class="label">Capacity lost</div>
               <div class="val loss">${fmt(data.capacity_loss_pcu_hr, 0)} PCU/hr (${fmt(data.capacity_loss_pct, 1)}%)</div>
+              ${data.capacity_loss_vehicles_hr ? `<div class="val-sub">${fmt(data.capacity_loss_vehicles_hr, 0)} vehicles/hr lost</div>` : ""}
             </div>
           </div>
           ${calc.formula ? `<div class="formula-box mono">Formula: ${calc.formula}</div>` : ""}
@@ -426,6 +460,115 @@
       </div>`;
   }
 
+  // ----------------------------------------------------------------
+  // DEFECT ALERT BANNER
+  // Shows a bold count summary + urgent alert chips at top of results
+  // ----------------------------------------------------------------
+  const DEFECT_ICONS = {
+    pothole:         "🕳️",
+    illegal_parking: "🚗",
+    street_vendor:   "🛒",
+    cart:            "🛺",
+    garbage:         "🗑️",
+    barricade:       "🚧",
+    tree_on_road:    "🌳",
+  };
+
+  const DEFECT_ALERT_MESSAGES = {
+    pothole: {
+      URGENT:  "Potholes are SEVERE — emergency repair required within 24 hours (IRC:SP:83).",
+      ROUTINE: "Potholes detected — patch with hot-mix asphalt within 7 days.",
+      MONITOR: "Minor potholes noted — log and monitor at next maintenance cycle.",
+    },
+    illegal_parking: {
+      URGENT:  "Illegal parking is critically blocking road — immediate towing required (MV Act Sec.122).",
+      ROUTINE: "Illegal parking detected — deploy wardens and install No-Parking signage.",
+      MONITOR: "Occasional parking noted — repaint road markings (IRC:35).",
+    },
+    street_vendor: {
+      URGENT:  "Roadside vendors severely blocking carriageway — immediate relocation required.",
+      ROUTINE: "Vendors occupying road space — coordinate relocation with Town Vending Committee.",
+      MONITOR: "Vendor activity recorded — flag for Town Vending Committee review.",
+    },
+    cart: {
+      URGENT:  "Carts blocking road — immediate removal required, designate loading bay.",
+      ROUTINE: "Carts detected — restrict to designated off-peak zones.",
+      MONITOR: "Cart movement noted — no immediate action needed.",
+    },
+    garbage: {
+      URGENT:  "Garbage severely blocking road — immediate clearance under SWM Rules 2016.",
+      ROUTINE: "Garbage dump detected — priority clearance within 48 hours.",
+      MONITOR: "Minor garbage noted — schedule at next municipal collection.",
+    },
+    barricade: {
+      URGENT:  "Barricade severely restricting road — coordinate immediate removal (IRC:SP:55).",
+      ROUTINE: "Work zone barricade — ensure proper signage and reduce width to minimum.",
+      MONITOR: "Barricade detected — verify valid permit and signage per IRC:SP:55.",
+    },
+    tree_on_road: {
+      URGENT:  "Tree on road — immediate removal by tree authority, place diversion signage.",
+      ROUTINE: "Tree encroaching on road — request pruning within 7 days.",
+      MONITOR: "Tree noted — log for tree authority inspection.",
+    },
+  };
+
+  function defectAlertBannerHTML(perDefect) {
+    const entries = Object.entries(perDefect || {});
+    if (entries.length === 0) return "";
+
+    // Sort: URGENT first, then ROUTINE, then MONITOR
+    const sevOrder = { URGENT: 0, ROUTINE: 1, MONITOR: 2, NONE: 3, INVESTIGATE: 4 };
+    const sorted   = entries
+      .map(([name, d]) => ({ name, ...d }))
+      .filter((d) => d.severity !== "NONE")
+      .sort((a, b) => (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9));
+
+    if (sorted.length === 0) return "";
+
+    // Count summary row
+    const countChips = sorted.map((d) => `
+      <div class="alert-count-chip sev-bg-${d.severity}">
+        <span class="alert-chip-icon">${DEFECT_ICONS[d.name] || "⚠️"}</span>
+        <span class="alert-chip-num">${d.count}</span>
+        <span class="alert-chip-name">${titleCase(d.name)}</span>
+      </div>`).join("");
+
+    // Alert messages
+    const alerts = sorted.map((d) => {
+      const msg = (DEFECT_ALERT_MESSAGES[d.name] || {})[d.severity]
+        || d.action
+        || "Defect detected — take appropriate action.";
+      return `
+        <div class="alert-row sev-row-${d.severity}">
+          <div class="alert-row-left">
+            <span class="alert-sev-dot sev-dot-${d.severity}"></span>
+            <span class="alert-sev-label">${d.severity}</span>
+            <span class="alert-defect-name">${DEFECT_ICONS[d.name] || ""} ${titleCase(d.name)}</span>
+          </div>
+          <div class="alert-row-msg">${msg}</div>
+          <div class="alert-row-stats">
+            <span>${d.count} detected</span>
+            <span>${fmt(d.blocked_m, 2)} m blocked</span>
+            <span>${fmt(d.capacity_loss_pct, 1)}% capacity lost</span>
+          </div>
+        </div>`;
+    }).join("");
+
+    const hasUrgent = sorted.some((d) => d.severity === "URGENT");
+
+    return `
+      <div class="alert-panel ${hasUrgent ? "has-urgent" : ""}">
+        <div class="alert-panel-header">
+          <div class="alert-panel-title">
+            ${hasUrgent ? "🚨" : "⚠️"} Road Defect Alerts
+          </div>
+          <div class="alert-panel-sub">${sorted.length} defect type${sorted.length > 1 ? "s" : ""} detected — action required</div>
+        </div>
+        <div class="alert-count-row">${countChips}</div>
+        <div class="alert-rows">${alerts}</div>
+      </div>`;
+  }
+
   function defectGridHTML(perDefect) {
     const names = Object.keys(perDefect || {});
     if (names.length === 0) {
@@ -470,6 +613,7 @@
   function renderImageResult(data) {
     resultsRoot.innerHTML =
       heroHTML(data) +
+      defectAlertBannerHTML(data.per_defect) +
       roadbarHTML(data.road_config || {}, data.per_defect || {}) +
       `<div class="section-title">Defects Detected — Capacity Loss &amp; Recommended Actions</div>` +
       defectGridHTML(data.per_defect);
