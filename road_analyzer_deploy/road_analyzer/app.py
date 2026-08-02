@@ -137,6 +137,14 @@ def _new_job_dir(prefix: str) -> tuple[str, Path]:
 # Static frontend
 # ----------------------------------------------------------------
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/results", StaticFiles(directory=str(RESULTS_DIR)), name="results")
+
+
+def _safe_dest(job_dir: Path, filename: str) -> Path:
+    """Join an upload filename onto job_dir without allowing '..' or an
+    absolute path in filename to escape job_dir (path traversal)."""
+    safe_name = Path(filename or "upload").name  # strips any directory parts
+    return job_dir / safe_name
 
 
 @app.get("/")
@@ -187,7 +195,7 @@ async def analyze_image(
     )
 
     job_id, job_dir = _new_job_dir("img")
-    dest = job_dir / file.filename
+    dest = _safe_dest(job_dir, file.filename)
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -201,6 +209,8 @@ async def analyze_image(
     result.pop("_json_path", None)
     result.pop("_csv_path", None)
     result["job_id"] = job_id
+    annotated_name = result.get("annotated_image_filename")
+    result["annotated_image_url"] = f"/results/{job_id}/{annotated_name}" if annotated_name else None
     return result
 
 
@@ -212,6 +222,9 @@ def _run_batch_job(job_id: str, job_dir: Path, image_paths: List[str], road_conf
         analyzer = get_analyzer()
         summary = analyzer.analyse_batch(image_paths, road_config, output_dir=str(job_dir))
         summary.pop("_json_path", None)
+        for row in summary.get("per_image", []):
+            name = row.get("annotated_image_filename")
+            row["annotated_image_url"] = f"/results/{job_id}/{name}" if name else None
         JOBS[job_id] = {"status": "done", "result": summary}
     except Exception as e:
         JOBS[job_id] = {"status": "error", "error": str(e)}
@@ -239,7 +252,7 @@ async def analyze_batch(
     job_id, job_dir = _new_job_dir("batch")
     image_paths = []
     for f in files:
-        dest = job_dir / f.filename
+        dest = _safe_dest(job_dir, f.filename)
         with dest.open("wb") as out:
             shutil.copyfileobj(f.file, out)
         image_paths.append(str(dest))
@@ -284,7 +297,7 @@ async def analyze_video(
     )
 
     job_id, job_dir = _new_job_dir("video")
-    dest = job_dir / file.filename
+    dest = _safe_dest(job_dir, file.filename)
     with dest.open("wb") as out:
         shutil.copyfileobj(file.file, out)
 
