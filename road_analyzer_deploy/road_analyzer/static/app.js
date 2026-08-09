@@ -608,15 +608,283 @@
   }
 
   // ----------------------------------------------------------------
+  // MATLAB Digital Twin button
+  // ----------------------------------------------------------------
+  function matlabButtonHTML(data) {
+    return `
+      <div class="matlab-twin-bar">
+        <div class="matlab-twin-info">
+          <span class="matlab-twin-icon">⚡</span>
+          <div>
+            <div class="matlab-twin-title">Digital Twin — MATLAB Animation</div>
+            <div class="matlab-twin-sub">Click to download a MATLAB script pre-loaded with your analysis results.
+            Open in MATLAB R2022b+ to see animated vehicle behaviour on ideal vs defect road.</div>
+          </div>
+        </div>
+        <button class="matlab-dl-btn" id="matlab-dl-btn">
+          ↓ Download MATLAB Script
+        </button>
+      </div>`;
+  }
+
+  function generateMatlabScript(data) {
+    const cfg  = data.road_config         || {};
+    const calc = data.capacity_calculation || {};
+    const irc  = data.irc_basis           || {};
+    const tr   = data.traffic_regime      || {};
+
+    const base       = data.original_capacity_pcu_hr || 1500;
+    const reduced    = data.reduced_capacity_pcu_hr  || 1200;
+    const lossPct    = data.capacity_loss_pct        || 0;
+    const wf         = calc.width_factor             || 1;
+    const pen        = calc.pothole_penalty          || 1;
+    const blocked    = calc.total_blocked_m          || 0;
+    const effW       = calc.effective_width_m        || cfg.total_width_m || 7;
+    const totalW     = cfg.total_width_m             || 7;
+    const lanes      = cfg.num_lanes                 || 2;
+    const depth      = calc.worst_pothole_depth      || 'unknown';
+    const fringe     = cfg.fringe_condition          || 'arterial';
+    const cwKey      = cfg.carriageway_key           || '2lane_twoway';
+    const regime     = tr.regime                     || 'low';
+    const avgPcu     = tr.avg_pcu_per_vehicle        || 1.0;
+    const baseVeh    = data.original_capacity_vehicles_hr || Math.round(base / avgPcu);
+    const redVeh     = data.reduced_capacity_vehicles_hr  || Math.round(reduced / avgPcu);
+    const image      = data.image                    || 'unknown';
+
+    const defects = Object.keys(data.per_defect || {});
+    const defectLabel = defects.length ? defects.join(' + ') : 'none detected';
+
+    return `%% ================================================================
+%% INDIAN ROAD CAPACITY DIGITAL TWIN — MATLAB ANIMATION SCRIPT
+%% Auto-generated from dashboard analysis
+%% Image analysed: ${image}
+%% Generated: ${new Date().toISOString()}
+%%
+%% HOW TO RUN:
+%%   1. Open MATLAB R2022b or later
+%%   2. cd to the folder containing this file
+%%   3. Type:  road_twin_animation_standalone
+%%   4. Press Enter — animation window opens automatically
+%% ================================================================
+
+function road_twin_animation_standalone()
+
+%% --- Parameters from your analysis (IRC:106-1990) ---
+base_dsv         = ${base};        %% PCU/hr  — IRC:106 Table 2 DSV
+reduced_cap      = ${reduced};     %% PCU/hr  — after defects
+cap_loss_pct     = ${lossPct.toFixed(1)};      %% % capacity lost
+total_width_m    = ${totalW};      %% metres  — measured on site
+blocked_width_m  = ${blocked.toFixed(2)};    %% metres  — overlap-aware union
+eff_width_m      = ${effW.toFixed(2)};       %% metres  — effective usable width
+width_factor     = ${wf.toFixed(4)};    %% = eff_width / total_width
+pothole_penalty  = ${pen};         %% 0.95/0.85/0.70/1.0
+worst_depth      = '${depth}';    %% shallow/moderate/deep/unknown
+num_lanes        = ${lanes};       %% number of lanes
+carriageway_key  = '${cwKey}';    %% IRC:106 carriageway type
+fringe_condition = '${fringe}';   %% arterial/sub_arterial/collector
+traffic_regime   = '${regime}';   %% low/high heavy vehicle %
+avg_pcu          = ${avgPcu.toFixed(3)};    %% avg PCU per vehicle (IRC:106 Table 1)
+base_veh_hr      = ${baseVeh};    %% vehicles/hr (ideal)
+reduced_veh_hr   = ${redVeh};     %% vehicles/hr (defect)
+image_name       = '${image}';
+defects_found    = '${defectLabel}';
+
+%% --- Derived values ---
+FREE_FLOW_SPEED = 50;   %% km/h
+vc_ratio        = reduced_cap / base_dsv;
+congested_speed = FREE_FLOW_SPEED * (1 - (1 - vc_ratio) * 0.5);
+
+has_pothole   = ${defects.includes('pothole') ? 'true' : 'false'};
+has_vendor    = ${defects.includes('street_vendor') ? 'true' : 'false'};
+has_parking   = ${defects.includes('illegal_parking') ? 'true' : 'false'};
+has_barricade = ${defects.includes('barricade') ? 'true' : 'false'};
+has_garbage   = ${defects.includes('garbage') ? 'true' : 'false'};
+has_tree      = ${defects.includes('tree_on_road') ? 'true' : 'false'};
+has_cart      = ${defects.includes('cart') ? 'true' : 'false'};
+
+%% --- Animation setup ---
+ROAD_LEN    = 100;
+LANE_H      = 8;
+ROAD_TOP_I  = 5;
+ROAD_TOP_D  = 50;
+VEH_LEN     = 4;
+VEH_H       = 3;
+OBS_X       = 55;
+N_VEH       = 12;
+
+headway_ideal  = 3600 / max(base_dsv, 1);
+headway_defect = 3600 / max(reduced_cap, 1);
+spd_i_ms = FREE_FLOW_SPEED / 3.6;
+spd_d_ms = congested_speed / 3.6;
+spc_i    = max(spd_i_ms * headway_ideal,  6);
+spc_d    = max(spd_d_ms * headway_defect, 4);
+
+vx_i = linspace(-spc_i*(N_VEH-1), 0, N_VEH)';
+vx_d = linspace(-spc_d*(N_VEH-1), 0, N_VEH)';
+vs_i = FREE_FLOW_SPEED / 3.6 * 0.1;
+vs_d = congested_speed / 3.6 * 0.1;
+
+lane_y_i = arrayfun(@(l) ROAD_TOP_I + (l-0.5)*LANE_H, 1:num_lanes);
+lane_y_d = arrayfun(@(l) ROAD_TOP_D + (l-0.5)*LANE_H, 1:num_lanes);
+
+fig = figure('Name','Road Digital Twin','Color',[0.09 0.11 0.14], ...
+             'Position',[80 80 1180 680],'NumberTitle','off', ...
+             'MenuBar','none','ToolBar','none');
+ax  = axes('Parent',fig,'Position',[0.01 0.18 0.98 0.78], ...
+           'XLim',[0 ROAD_LEN],'YLim',[0 70], ...
+           'Color',[0.09 0.11 0.14],'XColor',[0.09 0.11 0.14],'YColor',[0.09 0.11 0.14]);
+hold(ax,'on');
+
+%% --- Draw roads ---
+C_I = [0.55 0.58 0.62]; C_D = [0.50 0.52 0.55];
+C_GI= [0.11 0.62 0.46]; C_GD= [0.89 0.29 0.28];
+
+rectangle('Position',[0 ROAD_TOP_I ROAD_LEN LANE_H*num_lanes],'FaceColor',C_I,'EdgeColor','none');
+rectangle('Position',[0 ROAD_TOP_D ROAD_LEN LANE_H*num_lanes],'FaceColor',C_D,'EdgeColor','none');
+
+for ln=1:num_lanes-1
+  for x=0:8:ROAD_LEN
+    line([x x+4],[ROAD_TOP_I+ln*LANE_H ROAD_TOP_I+ln*LANE_H],'Color',[1 1 1 0.3],'LineWidth',1);
+    line([x x+4],[ROAD_TOP_D+ln*LANE_H ROAD_TOP_D+ln*LANE_H],'Color',[1 1 1 0.3],'LineWidth',1);
+  end
+end
+
+line([0 ROAD_LEN],[ROAD_TOP_I ROAD_TOP_I],'Color',[1 1 1],'LineWidth',1.5);
+line([0 ROAD_LEN],[ROAD_TOP_I+LANE_H*num_lanes ROAD_TOP_I+LANE_H*num_lanes],'Color',[1 1 1],'LineWidth',1.5);
+line([0 ROAD_LEN],[ROAD_TOP_D ROAD_TOP_D],'Color',[1 1 1],'LineWidth',1.5);
+line([0 ROAD_LEN],[ROAD_TOP_D+LANE_H*num_lanes ROAD_TOP_D+LANE_H*num_lanes],'Color',[1 1 1],'LineWidth',1.5);
+
+%% --- Draw defects ---
+blk_px = (blocked_width_m/total_width_m)*ROAD_LEN*0.35;
+rectangle('Position',[OBS_X ROAD_TOP_D blk_px LANE_H*num_lanes], ...
+          'FaceColor',[0.89 0.29 0.28 0.2],'EdgeColor',[0.89 0.29 0.28 0.5],'LineWidth',1);
+
+if has_pothole
+  theta=linspace(0,2*pi,40);
+  fill(OBS_X+1.5+1.8*cos(theta), ROAD_TOP_D+LANE_H*0.4+0.9*sin(theta), ...
+       [0.25 0.20 0.20],'EdgeColor',[0.6 0.2 0.2],'LineWidth',1.5);
+  text(OBS_X+1.5,ROAD_TOP_D+LANE_H*0.4+2.5,sprintf('Pothole (%s)',worst_depth), ...
+       'Color',[1 0.7 0.7],'FontSize',7,'HorizontalAlignment','center');
+end
+if has_vendor
+  rectangle('Position',[OBS_X+blk_px*0.5-1.5 ROAD_TOP_D+LANE_H*0.6 3 2.5], ...
+            'FaceColor',[0.95 0.68 0.10],'EdgeColor',[0.7 0.5 0],'Curvature',0.1);
+  text(OBS_X+blk_px*0.5,ROAD_TOP_D+LANE_H*0.6+4,'Vendor', ...
+       'Color',[0.95 0.80 0.20],'FontSize',7,'HorizontalAlignment','center');
+end
+if has_parking
+  rectangle('Position',[OBS_X+blk_px*0.4-2 ROAD_TOP_D+LANE_H*0.8 4 2], ...
+            'FaceColor',[0.89 0.29 0.28],'EdgeColor',[0.7 0.1 0.1],'Curvature',0.25);
+  text(OBS_X+blk_px*0.4,ROAD_TOP_D+LANE_H*0.8-1.5,'Illegal Parking', ...
+       'Color',[1 0.6 0.6],'FontSize',7,'HorizontalAlignment','center');
+end
+
+text(ROAD_LEN*0.5,ROAD_TOP_I-2.5,'IDEAL ROAD — NO DEFECTS', ...
+     'Color',C_GI,'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
+text(ROAD_LEN*0.5,ROAD_TOP_D-2.5,sprintf('DEFECT ROAD — %s',upper(defects_found)), ...
+     'Color',C_GD,'FontSize',11,'FontWeight','bold','HorizontalAlignment','center');
+
+%% --- Stats panels ---
+annotation('rectangle',[0.01 0.01 0.47 0.16],'Color',C_GI,'LineWidth',1.5,'FaceColor',[0.05 0.15 0.10]);
+annotation('rectangle',[0.52 0.01 0.47 0.16],'Color',C_GD,'LineWidth',1.5,'FaceColor',[0.18 0.06 0.06]);
+annotation('textbox',[0.01 0.01 0.47 0.16], ...
+  'String',sprintf('IDEAL ROAD\nDSV: %d PCU/hr  |  %d vehicles/hr\nSpeed: %d km/h  |  Lanes: %d\nCarriageway: %s  |  Fringe: %s', ...
+    round(base_dsv),round(base_veh_hr),round(FREE_FLOW_SPEED),num_lanes,carriageway_key,fringe_condition), ...
+  'Color',[0.80 0.96 0.88],'FontSize',10,'FontName','Courier New','EdgeColor','none', ...
+  'VerticalAlignment','middle','HorizontalAlignment','center');
+annotation('textbox',[0.52 0.01 0.47 0.16], ...
+  'String',sprintf('DEFECT ROAD\nCapacity: %d PCU/hr  |  %d vehicles/hr  (-%0.1f%%)\nSpeed: %.1f km/h  |  Width factor: %.3f\nPothole penalty: %.2f  |  Defects: %s', ...
+    round(reduced_cap),round(reduced_veh_hr),cap_loss_pct,congested_speed,width_factor,pothole_penalty,defects_found), ...
+  'Color',[0.98 0.78 0.78],'FontSize',10,'FontName','Courier New','EdgeColor','none', ...
+  'VerticalAlignment','middle','HorizontalAlignment','center');
+
+title_str=sprintf('Indian Road Digital Twin  |  %s  |  Loss: %.1f%%  |  Defects: %s', ...
+  image_name, cap_loss_pct, defects_found);
+annotation('textbox',[0.01 0.96 0.98 0.04],'String',title_str,'Color',[0.95 0.95 0.95], ...
+  'FontSize',11,'FontWeight','bold','EdgeColor','none','HorizontalAlignment','center','FaceColor','none');
+
+%% --- Vehicle patches ---
+vp_i=gobjects(N_VEH,1); vp_d=gobjects(N_VEH,1);
+for v=1:N_VEH
+  ln=mod(v-1,num_lanes)+1;
+  vp_i(v)=rectangle('Position',[vx_i(v) lane_y_i(ln)-VEH_H/2 VEH_LEN VEH_H], ...
+    'FaceColor',C_GI,'EdgeColor',[1 1 1 0.3],'Curvature',[0.3 0.4]);
+  vp_d(v)=rectangle('Position',[vx_d(v) lane_y_d(ln)-VEH_H/2 VEH_LEN VEH_H], ...
+    'FaceColor',C_GD,'EdgeColor',[1 1 1 0.3],'Curvature',[0.3 0.4]);
+end
+
+%% --- Animation loop ---
+fprintf('Animation running. Close figure to stop.\n');
+sim_t=0;
+while isvalid(fig)
+  sim_t=sim_t+0.05;
+  vx_i=vx_i+vs_i;
+  wrap_i=vx_i>ROAD_LEN+VEH_LEN;
+  if any(wrap_i)
+    vx_i(wrap_i)=min(vx_i(~wrap_i))-spc_i*(1:sum(wrap_i))';
+  end
+  for v=1:N_VEH
+    x=vx_d(v); d2o=OBS_X-x;
+    if d2o>0 && d2o<spc_d*3
+      spd=vs_d*(0.3+0.7*min(1,d2o/(spc_d*2)));
+    elseif x>OBS_X+blk_px
+      spd=vs_d*(0.3+0.7*min(1,(x-OBS_X-blk_px)/20));
+    else
+      spd=vs_d*0.3;
+    end
+    vx_d(v)=vx_d(v)+spd;
+    if x>OBS_X && x<OBS_X+blk_px
+      col=[0.95 0.55 0.10];
+    elseif d2o>0 && d2o<spc_d*3
+      a=min(1,1-d2o/(spc_d*3));
+      col=C_GD*(1-a)+[0.95 0.55 0.10]*a;
+    else
+      col=C_GD;
+    end
+    ln=mod(v-1,num_lanes)+1;
+    set(vp_i(v),'Position',[vx_i(v) lane_y_i(ln)-VEH_H/2 VEH_LEN VEH_H]);
+    set(vp_d(v),'Position',[vx_d(v) lane_y_d(ln)-VEH_H/2 VEH_LEN VEH_H],'FaceColor',col);
+  end
+  wrap_d=vx_d>ROAD_LEN+VEH_LEN;
+  if any(wrap_d)
+    vx_d(wrap_d)=min(vx_d(~wrap_d))-spc_d*(1:sum(wrap_d))';
+  end
+  drawnow limitrate; pause(0.01);
+end
+fprintf('Done.\n');
+end
+`;
+  }
+
+  function attachMatlabButton(data) {
+    const btn = document.getElementById('matlab-dl-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      const script = generateMatlabScript(data);
+      const blob   = new Blob([script], { type: 'text/plain' });
+      const url    = URL.createObjectURL(blob);
+      const a      = document.createElement('a');
+      a.href       = url;
+      a.download   = 'road_twin_animation_standalone.m';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  // ----------------------------------------------------------------
   // Render: single image
   // ----------------------------------------------------------------
   function renderImageResult(data) {
     resultsRoot.innerHTML =
       heroHTML(data) +
       defectAlertBannerHTML(data.per_defect) +
+      matlabButtonHTML(data) +
       roadbarHTML(data.road_config || {}, data.per_defect || {}) +
       `<div class="section-title">Defects Detected — Capacity Loss &amp; Recommended Actions</div>` +
       defectGridHTML(data.per_defect);
+
+    // Attach MATLAB download button click handler
+    attachMatlabButton(data);
   }
 
   // ----------------------------------------------------------------
