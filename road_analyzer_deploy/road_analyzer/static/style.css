@@ -779,3 +779,68 @@ canvas { width: 100% !important; }
   font-family: 'JetBrains Mono', monospace;
   margin-top: 2px;
 }
+
+/* ================================================================
+   MATLAB DIGITAL TWIN BUTTON BAR
+   ================================================================ */
+.matlab-twin-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: #0d1f35;
+  border: 1px solid #1e3a5f;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+}
+.matlab-twin-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+}
+.matlab-twin-icon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.matlab-twin-title {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1rem;
+  color: #60a5fa;
+  letter-spacing: 0.03em;
+  margin-bottom: 4px;
+}
+.matlab-twin-sub {
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.5;
+  max-width: 520px;
+}
+.matlab-dl-btn {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  background: #1e3a5f;
+  border: 1px solid #3b82f6;
+  border-radius: 8px;
+  color: #93c5fd;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.matlab-dl-btn:hover {
+  background: #2d4f7a;
+  color: #dbeafe;
+}
+.matlab-dl-btn:active {
+  background: #1a3050;
+}
+@media (max-width: 640px) {
+  .matlab-twin-bar { flex-direction: column; align-items: flex-start; }
+  .matlab-dl-btn   { width: 100%; text-align: center; }
+}
