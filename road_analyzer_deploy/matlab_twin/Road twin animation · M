@@ -1,493 +1,317 @@
 %% ================================================================
-%% INDIAN ROAD CAPACITY ANALYZER — DIGITAL TWIN ANIMATION
-%% road_twin_animation.m
+%% ROAD DIGITAL TWIN — STANDALONE TEST
+%% road_twin_test.m
 %%
-%% HOW TO USE:
-%%   1. Run your web dashboard and analyse a road image
-%%   2. The analysis JSON is saved in road_analyzer/results/
-%%   3. Run this script in MATLAB — it reads the JSON automatically
-%%   4. A live animation window opens showing BOTH roads side by side
+%% Run this file in MATLAB to see the animation immediately.
+%% No dashboard or JSON file needed — uses demo values.
 %%
-%% WHAT IT SHOWS:
-%%   LEFT  — Ideal road: vehicles flow freely at 50 km/h, full capacity
-%%   RIGHT — Defect road: vehicles slow near obstacles, queue builds,
-%%            capacity reduced as per your IRC:106 analysis
-%%
-%% REQUIRES: MATLAB R2022b or later (no additional toolboxes needed)
+%% Usage:
+%%   >> road_twin_test
 %% ================================================================
 
-function road_twin_animation(json_path)
+function road_twin_test()
 
-    %% ---- 0. Find the analysis JSON ----
-    if nargin < 1 || isempty(json_path)
-        json_path = find_latest_json();
+%% --- Demo parameters (replace with your real values) ---
+base_dsv         = 1500;      % PCU/hr — IRC:106 Table 2 (2-lane twoway, arterial)
+reduced_cap      = 1050;      % PCU/hr — after defects
+cap_loss_pct     = 30.0;      % % capacity lost
+total_width_m    = 7.0;       % metres
+blocked_width_m  = 2.1;       % metres (overlap-aware)
+eff_width_m      = 4.9;       % metres
+width_factor     = 0.700;     % eff / total
+pothole_penalty  = 0.85;      % moderate pothole
+worst_depth      = 'moderate';
+num_lanes        = 2;
+carriageway_key  = '2lane_twoway';
+fringe_condition = 'arterial';
+traffic_regime   = 'low';
+base_veh_hr      = 1500;
+reduced_veh_hr   = 1050;
+image_name       = 'demo_road.jpg';
+defects_found    = 'pothole + street_vendor';
+
+has_pothole   = true;
+has_vendor    = true;
+has_parking   = false;
+has_barricade = false;
+has_garbage   = false;
+has_tree      = false;
+has_cart      = false;
+
+%% --- Derived values ---
+FREE_FLOW_SPEED = 50;
+vc_ratio        = reduced_cap / base_dsv;
+congested_speed = FREE_FLOW_SPEED * (1 - (1 - vc_ratio) * 0.5);
+
+%% --- Layout constants ---
+ROAD_LEN  = 100;
+LANE_H    = 8;
+ROAD_TOP_I = 5;
+ROAD_TOP_D = 50;
+VEH_LEN   = 4;
+VEH_H     = 3;
+OBS_X     = 55;
+N_VEH     = 12;
+
+headway_i = 3600 / max(base_dsv, 1);
+headway_d = 3600 / max(reduced_cap, 1);
+spc_i     = max((FREE_FLOW_SPEED/3.6) * headway_i,  6);
+spc_d     = max((congested_speed/3.6) * headway_d,  4);
+
+vx_i = linspace(-spc_i*(N_VEH-1), 0, N_VEH)';
+vx_d = linspace(-spc_d*(N_VEH-1), 0, N_VEH)';
+vs_i = FREE_FLOW_SPEED  / 3.6 * 0.1;
+vs_d = congested_speed  / 3.6 * 0.1;
+
+lane_y_i = arrayfun(@(l) ROAD_TOP_I + (l-0.5)*LANE_H, 1:num_lanes);
+lane_y_d = arrayfun(@(l) ROAD_TOP_D + (l-0.5)*LANE_H, 1:num_lanes);
+
+%% --- Colours ---
+C_GI = [0.11 0.62 0.46];   % green (ideal)
+C_GD = [0.89 0.29 0.28];   % red   (defect)
+C_RI = [0.55 0.58 0.62];   % road surface ideal
+C_RD = [0.50 0.52 0.55];   % road surface defect
+
+%% --- Figure ---
+fig = figure('Name', 'Indian Road Capacity Digital Twin', ...
+             'Color', [0.09 0.11 0.14], ...
+             'Position', [60 60 1200 680], ...
+             'NumberTitle', 'off', ...
+             'MenuBar', 'none', 'ToolBar', 'none');
+
+ax = axes('Parent', fig, ...
+          'Position', [0.01 0.20 0.97 0.76], ...
+          'XLim', [0 ROAD_LEN], 'YLim', [0 70], ...
+          'Color', [0.09 0.11 0.14], ...
+          'XColor', [0.09 0.11 0.14], ...
+          'YColor', [0.09 0.11 0.14]);
+hold(ax, 'on');
+
+%% --- Draw road surfaces ---
+rectangle('Position', [0 ROAD_TOP_I ROAD_LEN LANE_H*num_lanes], ...
+          'FaceColor', C_RI, 'EdgeColor', 'none');
+rectangle('Position', [0 ROAD_TOP_D ROAD_LEN LANE_H*num_lanes], ...
+          'FaceColor', C_RD, 'EdgeColor', 'none');
+
+%% Lane dividers
+for ln = 1:num_lanes-1
+    for x = 0:8:ROAD_LEN
+        line([x x+4], [ROAD_TOP_I+ln*LANE_H ROAD_TOP_I+ln*LANE_H], ...
+             'Color', [1 1 1 0.3], 'LineWidth', 1, 'Parent', ax);
+        line([x x+4], [ROAD_TOP_D+ln*LANE_H ROAD_TOP_D+ln*LANE_H], ...
+             'Color', [1 1 1 0.3], 'LineWidth', 1, 'Parent', ax);
     end
-
-    fprintf('Reading analysis: %s\n', json_path);
-    raw  = fileread(json_path);
-    data = jsondecode(raw);
-
-    %% ---- 1. Extract parameters from your analysis output ----
-    base_dsv       = data.original_capacity_pcu_hr;
-    reduced_cap    = data.reduced_capacity_pcu_hr;
-    cap_loss_pct   = data.capacity_loss_pct;
-    total_width_m  = data.road_config.total_width_m;
-    num_lanes      = data.road_config.num_lanes;
-    width_factor   = data.capacity_calculation.width_factor;
-    pothole_pen    = data.capacity_calculation.pothole_penalty;
-    blocked_m      = data.capacity_calculation.total_blocked_m;
-    eff_width_m    = data.capacity_calculation.effective_width_m;
-    worst_depth    = data.capacity_calculation.worst_pothole_depth;
-    image_name     = data.image;
-
-    %% ---- 2. Derived simulation parameters ----
-    FREE_FLOW_SPEED   = 50;    % km/h
-    vc_ratio          = reduced_cap / base_dsv;
-    congested_speed   = FREE_FLOW_SPEED * (1 - (1 - vc_ratio) * 0.5);
-
-    %% Headway (seconds between vehicles) at each condition
-    %% C = 3600 / h  =>  h = 3600 / C
-    headway_ideal   = 3600 / max(base_dsv,  1);
-    headway_defect  = 3600 / max(reduced_cap, 1);
-
-    %% Spacing on road (metres between vehicle fronts) at each speed
-    speed_ideal_ms  = FREE_FLOW_SPEED  / 3.6;
-    speed_defect_ms = congested_speed  / 3.6;
-    spacing_ideal   = speed_ideal_ms  * headway_ideal;
-    spacing_defect  = speed_defect_ms * headway_defect;
-
-    %% Build defect label string from per_defect field
-    defect_names = fieldnames(data.per_defect);
-    defect_label = strjoin(defect_names, ' + ');
-
-    %% ---- 3. Detect which defect types exist ----
-    has_pothole  = isfield(data.per_defect, 'pothole');
-    has_vendor   = isfield(data.per_defect, 'street_vendor');
-    has_parking  = isfield(data.per_defect, 'illegal_parking');
-    has_garbage  = isfield(data.per_defect, 'garbage');
-    has_barricade= isfield(data.per_defect, 'barricade');
-    has_tree     = isfield(data.per_defect, 'tree_on_road');
-    has_cart     = isfield(data.per_defect, 'cart');
-
-    %% ---- 4. Road geometry (in pixels for drawing) ----
-    ROAD_LEN     = 100;   % road length in simulation units
-    LANE_H       = 8;     % height of each lane in units
-    ROAD_TOP_I   = 5;     % y-start of ideal road
-    ROAD_TOP_D   = 50;    % y-start of defect road
-    VEHICLE_LEN  = 4;     % vehicle length in units
-    VEHICLE_H    = 3;     % vehicle height in units
-    OBSTACLE_X   = 55;    % x-position of defect on road
-    NUM_VEHICLES = 12;    % vehicles to simulate on each road
-
-    %% ---- 5. Colour scheme ----
-    C_ROAD_IDEAL  = [0.55 0.58 0.62];
-    C_ROAD_DEFECT = [0.50 0.52 0.55];
-    C_LANE_LINE   = [1.00 1.00 1.00];
-    C_CAR_IDEAL   = [0.11 0.62 0.46];   % green
-    C_CAR_DEFECT  = [0.89 0.29 0.28];   % red
-    C_POTHOLE     = [0.25 0.20 0.20];
-    C_VENDOR      = [0.95 0.68 0.10];
-    C_PARKING     = [0.89 0.29 0.28];
-    C_BARRICADE   = [0.95 0.50 0.10];
-    C_GARBAGE     = [0.45 0.55 0.35];
-    C_OBSTACLE    = [0.95 0.68 0.10];   % fallback
-
-    %% ---- 6. Initialise vehicle positions ----
-    spacing_i = max(spacing_ideal,  6);
-    spacing_d = max(spacing_defect, 4);
-
-    veh_x_i = linspace(-spacing_i*(NUM_VEHICLES-1), 0, NUM_VEHICLES)';
-    veh_x_d = linspace(-spacing_d*(NUM_VEHICLES-1), 0, NUM_VEHICLES)';
-
-    veh_speed_i = FREE_FLOW_SPEED  / 3.6 * 0.1;  % scaled for animation
-    veh_speed_d = congested_speed  / 3.6 * 0.1;
-
-    %% ---- 7. Create figure ----
-    fig = figure( ...
-        'Name',          'Indian Road Capacity Digital Twin', ...
-        'NumberTitle',   'off', ...
-        'Color',         [0.09 0.11 0.14], ...
-        'Position',      [80 80 1180 680], ...
-        'Resize',        'off', ...
-        'MenuBar',       'none', ...
-        'ToolBar',       'none');
-
-    ax = axes('Parent', fig, ...
-        'Position',   [0.01 0.18 0.98 0.78], ...
-        'XLim',       [0 ROAD_LEN], ...
-        'YLim',       [0 70], ...
-        'Color',      [0.09 0.11 0.14], ...
-        'XColor',     [0.09 0.11 0.14], ...
-        'YColor',     [0.09 0.11 0.14], ...
-        'Box',        'off');
-    hold(ax, 'on');
-
-    %% ---- 8. Draw static road backgrounds ----
-    % === IDEAL ROAD ===
-    rectangle('Position', [0 ROAD_TOP_I ROAD_LEN LANE_H*num_lanes], ...
-              'FaceColor', C_ROAD_IDEAL, 'EdgeColor', 'none');
-
-    % Lane dividers on ideal road
-    for ln = 1:num_lanes-1
-        y_div = ROAD_TOP_I + ln * LANE_H;
-        for x = 0:8:ROAD_LEN
-            line([x x+4], [y_div y_div], 'Color', [C_LANE_LINE 0.4], 'LineWidth', 1);
-        end
-    end
-
-    % Edge lines
-    line([0 ROAD_LEN], [ROAD_TOP_I ROAD_TOP_I], 'Color', C_LANE_LINE, 'LineWidth', 1.5);
-    line([0 ROAD_LEN], [ROAD_TOP_I+LANE_H*num_lanes ROAD_TOP_I+LANE_H*num_lanes], ...
-         'Color', C_LANE_LINE, 'LineWidth', 1.5);
-
-    % === DEFECT ROAD ===
-    rectangle('Position', [0 ROAD_TOP_D ROAD_LEN LANE_H*num_lanes], ...
-              'FaceColor', C_ROAD_DEFECT, 'EdgeColor', 'none');
-
-    % Lane dividers on defect road
-    for ln = 1:num_lanes-1
-        y_div = ROAD_TOP_D + ln * LANE_H;
-        for x = 0:8:ROAD_LEN
-            line([x x+4], [y_div y_div], 'Color', [C_LANE_LINE 0.3], 'LineWidth', 1);
-        end
-    end
-
-    % Edge lines
-    line([0 ROAD_LEN], [ROAD_TOP_D ROAD_TOP_D], 'Color', C_LANE_LINE, 'LineWidth', 1.5);
-    line([0 ROAD_LEN], [ROAD_TOP_D+LANE_H*num_lanes ROAD_TOP_D+LANE_H*num_lanes], ...
-         'Color', C_LANE_LINE, 'LineWidth', 1.5);
-
-    %% ---- 9. Draw defects on defect road ----
-    %% Blocked width as red overlay
-    blocked_px = (blocked_m / total_width_m) * ROAD_LEN * 0.35;
-    rectangle('Position', [OBSTACLE_X ROAD_TOP_D blocked_px LANE_H*num_lanes], ...
-              'FaceColor', [0.89 0.29 0.28 0.25], 'EdgeColor', [0.89 0.29 0.28 0.6], ...
-              'LineWidth', 1);
-
-    obst_cx = OBSTACLE_X + blocked_px * 0.3;
-    obst_cy = ROAD_TOP_D + LANE_H * num_lanes * 0.25;
-
-    if has_pothole
-        % Pothole — dark oval
-        draw_pothole(ax, obst_cx, obst_cy, C_POTHOLE, worst_depth);
-        obst_cy = obst_cy + LANE_H * 0.5;
-    end
-    if has_vendor
-        draw_vendor(ax, obst_cx + blocked_px*0.5, ROAD_TOP_D + LANE_H*num_lanes*0.5, C_VENDOR);
-    end
-    if has_parking
-        draw_parked_car(ax, obst_cx + blocked_px*0.4, ROAD_TOP_D + LANE_H*0.8, C_PARKING);
-    end
-    if has_barricade
-        draw_barricade(ax, obst_cx, ROAD_TOP_D, LANE_H*num_lanes, C_BARRICADE);
-    end
-    if has_garbage || has_tree || has_cart
-        draw_misc(ax, obst_cx + blocked_px*0.6, ROAD_TOP_D + LANE_H*num_lanes*0.6, C_OBSTACLE);
-    end
-
-    %% ---- 10. Labels & title ----
-    text(ROAD_LEN*0.5, ROAD_TOP_I - 2.5, 'IDEAL ROAD — NO DEFECTS', ...
-         'Color', [0.27 0.69 0.51], 'FontSize', 11, 'FontWeight', 'bold', ...
-         'HorizontalAlignment', 'center');
-    text(ROAD_LEN*0.5, ROAD_TOP_D - 2.5, sprintf('DEFECT ROAD — %s', upper(defect_label)), ...
-         'Color', [0.89 0.29 0.28], 'FontSize', 11, 'FontWeight', 'bold', ...
-         'HorizontalAlignment', 'center');
-
-    % Blocked zone label on defect road
-    text(OBSTACLE_X + blocked_px/2, ROAD_TOP_D + LANE_H*num_lanes + 1.5, ...
-         sprintf('%.1fm blocked', blocked_m), ...
-         'Color', [0.89 0.29 0.28], 'FontSize', 8, 'HorizontalAlignment', 'center');
-
-    %% ---- 11. Draw stats panels (bottom) ----
-    % Annotation area
-    annotation('rectangle', [0.01 0.01 0.47 0.16], ...
-               'Color', [0.11 0.62 0.46], 'LineWidth', 1.5, ...
-               'FaceColor', [0.05 0.15 0.10]);
-    annotation('rectangle', [0.52 0.01 0.47 0.16], ...
-               'Color', [0.89 0.29 0.28], 'LineWidth', 1.5, ...
-               'FaceColor', [0.18 0.06 0.06]);
-
-    txt_ideal = annotation('textbox', [0.01 0.01 0.47 0.16], ...
-        'String', format_stats_ideal(base_dsv, FREE_FLOW_SPEED, spacing_ideal, num_lanes), ...
-        'Color', [0.80 0.96 0.88], 'FontSize', 10, 'FontName', 'Courier New', ...
-        'EdgeColor', 'none', 'VerticalAlignment', 'middle', 'HorizontalAlignment', 'center');
-
-    txt_defect = annotation('textbox', [0.52 0.01 0.47 0.16], ...
-        'String', format_stats_defect(base_dsv, reduced_cap, cap_loss_pct, ...
-                                       congested_speed, width_factor, pothole_pen), ...
-        'Color', [0.98 0.78 0.78], 'FontSize', 10, 'FontName', 'Courier New', ...
-        'EdgeColor', 'none', 'VerticalAlignment', 'middle', 'HorizontalAlignment', 'center');
-
-    % Main title
-    title_str = sprintf('Indian Road Capacity Digital Twin   |   Image: %s   |   Capacity Loss: %.1f%%', ...
-                        image_name, cap_loss_pct);
-    annotation('textbox', [0.01 0.96 0.98 0.04], ...
-               'String', title_str, ...
-               'Color', [0.95 0.95 0.95], 'FontSize', 11, 'FontWeight', 'bold', ...
-               'EdgeColor', 'none', 'HorizontalAlignment', 'center', 'FaceColor', 'none');
-
-    %% ---- 12. Create vehicle patch objects ----
-    % One lane centre y for each lane on each road
-    ideal_lane_y  = arrayfun(@(l) ROAD_TOP_I + (l-0.5)*LANE_H, 1:num_lanes);
-    defect_lane_y = arrayfun(@(l) ROAD_TOP_D + (l-0.5)*LANE_H, 1:num_lanes);
-
-    % Assign vehicles to lanes round-robin
-    vh_patches_i = gobjects(NUM_VEHICLES, 1);
-    vh_patches_d = gobjects(NUM_VEHICLES, 1);
-    vh_spd_text  = gobjects(NUM_VEHICLES, 1);  % speed labels on defect vehicles
-
-    for v = 1:NUM_VEHICLES
-        lane = mod(v-1, num_lanes) + 1;
-        y_i  = ideal_lane_y(lane)  - VEHICLE_H/2;
-        y_d  = defect_lane_y(lane) - VEHICLE_H/2;
-
-        vh_patches_i(v) = rectangle('Position', [veh_x_i(v) y_i VEHICLE_LEN VEHICLE_H], ...
-                                     'FaceColor', C_CAR_IDEAL, 'EdgeColor', [1 1 1 0.3], ...
-                                     'LineWidth', 0.5, 'Curvature', [0.3 0.4]);
-
-        vh_patches_d(v) = rectangle('Position', [veh_x_d(v) y_d VEHICLE_LEN VEHICLE_H], ...
-                                     'FaceColor', C_CAR_DEFECT, 'EdgeColor', [1 1 1 0.3], ...
-                                     'LineWidth', 0.5, 'Curvature', [0.3 0.4]);
-
-        vh_spd_text(v)  = text(veh_x_d(v) + VEHICLE_LEN/2, y_d - 1.2, '', ...
-                               'Color', [1 0.8 0.4], 'FontSize', 7, ...
-                               'HorizontalAlignment', 'center');
-    end
-
-    %% ---- 13. Speed indicator arrows ----
-    % Drawn once as text arrows, updated each frame
-    arr_ideal  = text(15, ROAD_TOP_I  + LANE_H*num_lanes/2, ...
-                      sprintf('\\rightarrow %.0f km/h', FREE_FLOW_SPEED), ...
-                      'Color', [0.27 0.69 0.51], 'FontSize', 10, 'FontWeight', 'bold');
-    arr_defect = text(15, ROAD_TOP_D  + LANE_H*num_lanes/2, ...
-                      sprintf('\\rightarrow %.1f km/h', congested_speed), ...
-                      'Color', [0.89 0.29 0.28], 'FontSize', 10, 'FontWeight', 'bold');
-
-    %% ---- 14. Capacity bar graph (right side, drawn as patches) ----
-    BAR_X  = 88;
-    BAR_W  = 4;
-    BAR_H  = 18;
-
-    % Ideal bar
-    rectangle('Position', [BAR_X ROAD_TOP_I+1 BAR_W BAR_H], ...
-              'FaceColor', [0.15 0.35 0.20], 'EdgeColor', [0.27 0.69 0.51 0.5]);
-    fill_ideal = rectangle('Position', [BAR_X ROAD_TOP_I+1 BAR_W BAR_H], ...
-                            'FaceColor', C_CAR_IDEAL, 'EdgeColor', 'none');
-    text(BAR_X + BAR_W/2, ROAD_TOP_I + BAR_H + 2, ...
-         sprintf('%d PCU/hr', round(base_dsv)), ...
-         'Color', [0.27 0.69 0.51], 'FontSize', 8, 'HorizontalAlignment', 'center');
-    text(BAR_X + BAR_W/2, ROAD_TOP_I - 0.5, 'IDEAL', ...
-         'Color', [0.27 0.69 0.51], 'FontSize', 7, 'HorizontalAlignment', 'center');
-
-    % Defect bar
-    rectangle('Position', [BAR_X ROAD_TOP_D+1 BAR_W BAR_H], ...
-              'FaceColor', [0.30 0.10 0.10], 'EdgeColor', [0.89 0.29 0.28 0.5]);
-    defect_h = BAR_H * (reduced_cap / base_dsv);
-    fill_defect = rectangle('Position', [BAR_X ROAD_TOP_D+1 BAR_W defect_h], ...
-                             'FaceColor', C_CAR_DEFECT, 'EdgeColor', 'none');
-    text(BAR_X + BAR_W/2, ROAD_TOP_D + BAR_H + 2, ...
-         sprintf('%d PCU/hr', round(reduced_cap)), ...
-         'Color', [0.89 0.29 0.28], 'FontSize', 8, 'HorizontalAlignment', 'center');
-    text(BAR_X + BAR_W/2, ROAD_TOP_D - 0.5, 'DEFECT', ...
-         'Color', [0.89 0.29 0.28], 'FontSize', 7, 'HorizontalAlignment', 'center');
-
-    %% ---- 15. Animation loop ----
-    fprintf('\nDigital Twin animation running...\n');
-    fprintf('Base DSV:     %d PCU/hr\n', round(base_dsv));
-    fprintf('Reduced cap:  %d PCU/hr\n', round(reduced_cap));
-    fprintf('Loss:         %.1f%%\n', cap_loss_pct);
-    fprintf('Defects:      %s\n', defect_label);
-    fprintf('Close the figure window to stop.\n\n');
-
-    DT        = 0.05;   % time step
-    sim_time  = 0;
-    frame_cnt = 0;
-
-    while isvalid(fig)
-        sim_time  = sim_time + DT;
-        frame_cnt = frame_cnt + 1;
-
-        %% Move ideal vehicles
-        veh_x_i = veh_x_i + veh_speed_i;
-        wrap_i   = veh_x_i > ROAD_LEN + VEHICLE_LEN;
-        veh_x_i(wrap_i) = -spacing_i * sum(~wrap_i) + min(veh_x_i(~wrap_i)) - spacing_i;
-
-        %% Move defect vehicles — slow near obstacle
-        for v = 1:NUM_VEHICLES
-            x = veh_x_d(v);
-            dist_to_obst = OBSTACLE_X - x;
-
-            if dist_to_obst > 0 && dist_to_obst < spacing_defect * 3
-                % Approaching defect — slow down proportionally
-                slow_factor = min(1, dist_to_obst / (spacing_defect * 2));
-                v_spd = veh_speed_d * (0.3 + 0.7 * slow_factor);
-            elseif x > OBSTACLE_X + blocked_px
-                % Past defect — accelerate back to defect speed
-                recovery = min(1, (x - OBSTACLE_X - blocked_px) / 20);
-                v_spd = veh_speed_d * (0.3 + 0.7 * recovery);
-            else
-                % In defect zone — minimum speed
-                v_spd = veh_speed_d * 0.3;
-            end
-
-            veh_x_d(v) = veh_x_d(v) + v_spd;
-        end
-
-        %% Wrap defect vehicles
-        wrap_d = veh_x_d > ROAD_LEN + VEHICLE_LEN;
-        if any(wrap_d)
-            min_x = min(veh_x_d(~wrap_d));
-            veh_x_d(wrap_d) = min_x - spacing_defect * (1:sum(wrap_d))';
-        end
-
-        %% Update patch positions
-        for v = 1:NUM_VEHICLES
-            lane = mod(v-1, num_lanes) + 1;
-
-            % Ideal
-            y_i  = ideal_lane_y(lane) - VEHICLE_H/2;
-            pos_i = get(vh_patches_i(v), 'Position');
-            set(vh_patches_i(v), 'Position', [veh_x_i(v) y_i VEHICLE_LEN VEHICLE_H]);
-
-            % Defect — colour shifts red/orange based on speed zone
-            y_d = defect_lane_y(lane) - VEHICLE_H/2;
-            x   = veh_x_d(v);
-            dist_to_obst = OBSTACLE_X - x;
-            if dist_to_obst > 0 && dist_to_obst < spacing_defect*3
-                alpha = max(0, min(1, 1 - dist_to_obst/(spacing_defect*3)));
-                veh_col = C_CAR_DEFECT * (1-alpha) + [0.95 0.55 0.10] * alpha;
-            elseif x > OBSTACLE_X && x < OBSTACLE_X + blocked_px
-                veh_col = [0.95 0.55 0.10];  % orange = in defect zone
-            else
-                veh_col = C_CAR_DEFECT;
-            end
-            set(vh_patches_d(v), 'Position', [veh_x_d(v) y_d VEHICLE_LEN VEHICLE_H]);
-            set(vh_patches_d(v), 'FaceColor', veh_col);
-
-            % Speed text on defect vehicles (update every 10 frames)
-            if mod(frame_cnt, 10) == 0
-                if dist_to_obst > 0 && dist_to_obst < spacing_defect*3
-                    spd_label = sprintf('%.0f', congested_speed * 0.4);
-                elseif x > OBSTACLE_X && x < OBSTACLE_X + blocked_px
-                    spd_label = sprintf('%.0f', congested_speed * 0.3);
-                else
-                    spd_label = sprintf('%.0f', congested_speed);
-                end
-                set(vh_spd_text(v), 'Position', [veh_x_d(v)+VEHICLE_LEN/2 y_d-1.2 0], ...
-                    'String', spd_label);
-            end
-        end
-
-        %% Pulsing capacity bar on defect side
-        pulse = 0.85 + 0.15 * sin(sim_time * 2);
-        current_h = defect_h * pulse;
-        current_h = min(current_h, BAR_H);
-        pos_d = get(fill_defect, 'Position');
-        set(fill_defect, 'Position', [pos_d(1) pos_d(2) pos_d(3) current_h]);
-
-        drawnow limitrate;
-        pause(0.01);
-    end
-
-    fprintf('Animation stopped.\n');
 end
 
+%% Road edges
+line([0 ROAD_LEN], [ROAD_TOP_I ROAD_TOP_I], 'Color', [1 1 1], 'LineWidth', 2, 'Parent', ax);
+line([0 ROAD_LEN], [ROAD_TOP_I+LANE_H*num_lanes ROAD_TOP_I+LANE_H*num_lanes], ...
+     'Color', [1 1 1], 'LineWidth', 2, 'Parent', ax);
+line([0 ROAD_LEN], [ROAD_TOP_D ROAD_TOP_D], 'Color', [1 1 1], 'LineWidth', 2, 'Parent', ax);
+line([0 ROAD_LEN], [ROAD_TOP_D+LANE_H*num_lanes ROAD_TOP_D+LANE_H*num_lanes], ...
+     'Color', [1 1 1], 'LineWidth', 2, 'Parent', ax);
 
-%% ================================================================
-%% DRAWING HELPERS
-%% ================================================================
+%% --- Draw defects ---
+blk_px = (blocked_width_m / total_width_m) * ROAD_LEN * 0.35;
+rectangle('Position', [OBS_X ROAD_TOP_D blk_px LANE_H*num_lanes], ...
+          'FaceColor', [0.89 0.29 0.28 0.2], ...
+          'EdgeColor', [0.89 0.29 0.28 0.6], 'LineWidth', 1);
 
-function draw_pothole(ax, cx, cy, col, depth)
-    depths = struct('shallow', 0.8, 'moderate', 1.4, 'deep', 2.2, 'unknown', 1.0);
-    r = 1.8;
-    if isfield(depths, depth), r = depths.(depth); end
+if has_pothole
     theta = linspace(0, 2*pi, 40);
-    xp = cx + r * cos(theta);
-    yp = cy + r * 0.5 * sin(theta);
-    fill(xp, yp, col, 'EdgeColor', [0.6 0.2 0.2], 'LineWidth', 1.5, 'Parent', ax);
-    text(cx, cy + 2.5, sprintf('Pothole (%s)', depth), ...
-         'Color', [1 0.7 0.7], 'FontSize', 7, 'HorizontalAlignment', 'center', 'Parent', ax);
+    fill(OBS_X + 1.5 + 1.8*cos(theta), ...
+         ROAD_TOP_D + LANE_H*0.4 + 0.9*sin(theta), ...
+         [0.25 0.18 0.18], 'EdgeColor', [0.7 0.2 0.2], 'LineWidth', 1.5);
+    text(OBS_X + 1.5, ROAD_TOP_D + LANE_H*0.4 + 2.8, ...
+         ['Pothole (' worst_depth ')'], ...
+         'Color', [1 0.7 0.7], 'FontSize', 7, 'HorizontalAlignment', 'center');
 end
 
-function draw_vendor(ax, cx, cy, col)
-    rectangle('Parent', ax, 'Position', [cx-1.5 cy-2 3 2.5], ...
-              'FaceColor', col, 'EdgeColor', [0.7 0.5 0], 'Curvature', [0.1 0.1]);
-    line([cx-1.5 cx+1.5], [cy cy], 'Color', [0.7 0.5 0], 'LineWidth', 1.5, 'Parent', ax);
-    text(cx, cy + 1.5, 'Vendor', 'Color', [0.95 0.80 0.20], ...
-         'FontSize', 7, 'HorizontalAlignment', 'center', 'Parent', ax);
+if has_vendor
+    rectangle('Position', [OBS_X+blk_px*0.5-1.5  ROAD_TOP_D+LANE_H*0.55  3  2.5], ...
+              'FaceColor', [0.95 0.68 0.10], 'EdgeColor', [0.75 0.50 0], 'Curvature', 0.1);
+    text(OBS_X + blk_px*0.5, ROAD_TOP_D + LANE_H*0.55 + 3.8, 'Vendor', ...
+         'Color', [0.95 0.82 0.20], 'FontSize', 7, 'HorizontalAlignment', 'center');
 end
 
-function draw_parked_car(ax, cx, cy, col)
-    rectangle('Parent', ax, 'Position', [cx-2 cy 4 2], ...
-              'FaceColor', col, 'EdgeColor', [0.7 0.1 0.1], 'Curvature', [0.2 0.3]);
-    rectangle('Parent', ax, 'Position', [cx-1.2 cy+1.2 2.4 0.8], ...
-              'FaceColor', [0.3 0.5 0.7], 'EdgeColor', 'none', 'Curvature', 0.3);
-    text(cx, cy - 1.2, 'Illegal parking', 'Color', [1 0.6 0.6], ...
-         'FontSize', 7, 'HorizontalAlignment', 'center', 'Parent', ax);
+if has_parking
+    rectangle('Position', [OBS_X+blk_px*0.4-2  ROAD_TOP_D+LANE_H*0.8  4  2], ...
+              'FaceColor', [0.89 0.29 0.28], 'EdgeColor', [0.7 0.1 0.1], 'Curvature', 0.25);
+    text(OBS_X + blk_px*0.4, ROAD_TOP_D + LANE_H*0.8 - 1.5, 'Illegal Parking', ...
+         'Color', [1 0.6 0.6], 'FontSize', 7, 'HorizontalAlignment', 'center');
 end
 
-function draw_barricade(ax, cx, y_top, road_h, col)
-    for i = 0:2
-        x_bar = cx + i * 1.8;
-        rectangle('Parent', ax, 'Position', [x_bar-0.3 y_top 0.6 road_h], ...
-                  'FaceColor', col, 'EdgeColor', [0.7 0.3 0]);
+if has_barricade
+    for bi = 0:2
+        rectangle('Position', [OBS_X+bi*1.8-0.3  ROAD_TOP_D  0.6  LANE_H*num_lanes], ...
+                  'FaceColor', [0.95 0.50 0.10], 'EdgeColor', [0.75 0.30 0]);
     end
-    text(cx + 1.8, y_top + road_h + 1.5, 'Barricade', 'Color', [1 0.75 0.4], ...
-         'FontSize', 7, 'HorizontalAlignment', 'center', 'Parent', ax);
+    text(OBS_X + 1.8, ROAD_TOP_D + LANE_H*num_lanes + 1.5, 'Barricade', ...
+         'Color', [1 0.75 0.4], 'FontSize', 7, 'HorizontalAlignment', 'center');
 end
 
-function draw_misc(ax, cx, cy, col)
-    rectangle('Parent', ax, 'Position', [cx-1 cy-1 2 2], ...
-              'FaceColor', col, 'EdgeColor', [0.6 0.4 0], 'Curvature', 0.2);
-    text(cx, cy + 1.8, 'Obstacle', 'Color', [1 0.85 0.5], ...
-         'FontSize', 7, 'HorizontalAlignment', 'center', 'Parent', ax);
+%% Blocked zone label
+text(OBS_X + blk_px/2, ROAD_TOP_D + LANE_H*num_lanes + 1.2, ...
+     sprintf('%.1fm blocked', blocked_width_m), ...
+     'Color', [0.89 0.29 0.28], 'FontSize', 8, 'HorizontalAlignment', 'center');
+
+%% --- Road labels ---
+text(ROAD_LEN*0.5, ROAD_TOP_I - 2.5, 'IDEAL ROAD - NO DEFECTS', ...
+     'Color', C_GI, 'FontSize', 12, 'FontWeight', 'bold', ...
+     'HorizontalAlignment', 'center');
+text(ROAD_LEN*0.5, ROAD_TOP_D - 2.5, ...
+     ['DEFECT ROAD - ' upper(defects_found)], ...
+     'Color', C_GD, 'FontSize', 12, 'FontWeight', 'bold', ...
+     'HorizontalAlignment', 'center');
+
+%% --- Stats annotations ---
+NL = newline;
+annotation('rectangle', [0.01 0.01 0.47 0.17], ...
+           'Color', C_GI, 'LineWidth', 1.5, 'FaceColor', [0.04 0.14 0.09]);
+annotation('rectangle', [0.52 0.01 0.47 0.17], ...
+           'Color', C_GD, 'LineWidth', 1.5, 'FaceColor', [0.16 0.05 0.05]);
+
+ideal_str = ['IDEAL ROAD' NL ...
+    sprintf('Design Service Volume : %d PCU/hr  |  %d vehicles/hr', ...
+            round(base_dsv), round(base_veh_hr)) NL ...
+    sprintf('Free-flow speed       : %d km/h  |  Lanes: %d', ...
+            round(FREE_FLOW_SPEED), num_lanes) NL ...
+    sprintf('Carriageway: %s  |  Fringe: %s  |  Regime: %s', ...
+            carriageway_key, fringe_condition, traffic_regime)];
+
+annotation('textbox', [0.01 0.01 0.47 0.17], 'String', ideal_str, ...
+           'Color', [0.80 0.96 0.88], 'FontSize', 10, ...
+           'FontName', 'Courier New', 'EdgeColor', 'none', ...
+           'VerticalAlignment', 'middle', 'HorizontalAlignment', 'center');
+
+defect_str = ['DEFECT ROAD' NL ...
+    sprintf('Reduced Capacity : %d PCU/hr  |  %d veh/hr  (-%.1f%%)', ...
+            round(reduced_cap), round(reduced_veh_hr), cap_loss_pct) NL ...
+    sprintf('Congested speed  : %.1f km/h  |  Width factor: %.3f', ...
+            congested_speed, width_factor) NL ...
+    sprintf('Pothole penalty  : %.2f  |  Blocked width: %.1f m', ...
+            pothole_penalty, blocked_width_m)];
+
+annotation('textbox', [0.52 0.01 0.47 0.17], 'String', defect_str, ...
+           'Color', [0.98 0.78 0.78], 'FontSize', 10, ...
+           'FontName', 'Courier New', 'EdgeColor', 'none', ...
+           'VerticalAlignment', 'middle', 'HorizontalAlignment', 'center');
+
+%% --- Title ---
+title_str = sprintf('Indian Road Capacity Digital Twin  |  %s  |  Loss: %.1f%%', ...
+                    image_name, cap_loss_pct);
+annotation('textbox', [0.01 0.94 0.98 0.05], 'String', title_str, ...
+           'Color', [0.95 0.95 0.95], 'FontSize', 12, 'FontWeight', 'bold', ...
+           'EdgeColor', 'none', 'HorizontalAlignment', 'center', 'FaceColor', 'none');
+
+%% --- Capacity bars (right side) ---
+BAR_X = 88; BAR_W = 4; BAR_H = 16;
+
+rectangle('Position', [BAR_X ROAD_TOP_I+1 BAR_W BAR_H], ...
+          'FaceColor', [0.12 0.30 0.18], 'EdgeColor', C_GI);
+rectangle('Position', [BAR_X ROAD_TOP_I+1 BAR_W BAR_H], ...
+          'FaceColor', C_GI, 'EdgeColor', 'none');
+text(BAR_X+BAR_W/2, ROAD_TOP_I+BAR_H+2, ...
+     sprintf('%d\nPCU/hr', round(base_dsv)), ...
+     'Color', C_GI, 'FontSize', 8, 'HorizontalAlignment', 'center');
+
+rectangle('Position', [BAR_X ROAD_TOP_D+1 BAR_W BAR_H], ...
+          'FaceColor', [0.25 0.08 0.08], 'EdgeColor', C_GD);
+defect_h = BAR_H * (reduced_cap / base_dsv);
+fill_d = rectangle('Position', [BAR_X ROAD_TOP_D+1 BAR_W defect_h], ...
+                    'FaceColor', C_GD, 'EdgeColor', 'none');
+text(BAR_X+BAR_W/2, ROAD_TOP_D+BAR_H+2, ...
+     sprintf('%d\nPCU/hr', round(reduced_cap)), ...
+     'Color', C_GD, 'FontSize', 8, 'HorizontalAlignment', 'center');
+
+%% --- Vehicle patches ---
+vp_i = gobjects(N_VEH, 1);
+vp_d = gobjects(N_VEH, 1);
+
+for v = 1:N_VEH
+    ln = mod(v-1, num_lanes) + 1;
+    vp_i(v) = rectangle('Position', [vx_i(v) lane_y_i(ln)-VEH_H/2 VEH_LEN VEH_H], ...
+                         'FaceColor', C_GI, 'EdgeColor', [1 1 1 0.25], 'Curvature', [0.3 0.4]);
+    vp_d(v) = rectangle('Position', [vx_d(v) lane_y_d(ln)-VEH_H/2 VEH_LEN VEH_H], ...
+                         'FaceColor', C_GD, 'EdgeColor', [1 1 1 0.25], 'Curvature', [0.3 0.4]);
 end
 
+%% --- Animation loop ---
+fprintf('\n==========================================\n');
+fprintf('  Digital Twin Animation Running\n');
+fprintf('  Base DSV    : %d PCU/hr\n', round(base_dsv));
+fprintf('  Reduced cap : %d PCU/hr\n', round(reduced_cap));
+fprintf('  Loss        : %.1f%%\n', cap_loss_pct);
+fprintf('  Defects     : %s\n', defects_found);
+fprintf('  Close the figure window to stop.\n');
+fprintf('==========================================\n\n');
 
-%% ================================================================
-%% STATS TEXT FORMATTERS
-%% ================================================================
+sim_t = 0;
 
-function s = format_stats_ideal(dsv, speed, spacing, lanes)
-    s = sprintf(['IDEAL ROAD\n' ...
-                 'Design Service Volume : %d PCU/hr\n' ...
-                 'Free-flow speed       : %.0f km/h\n' ...
-                 'Vehicle spacing       : %.1f m\n' ...
-                 'Number of lanes       : %d\n' ...
-                 'Capacity status       : 100%% (full IRC:106 DSV)'], ...
-                round(dsv), speed, spacing, lanes);
-end
+while isvalid(fig)
+    sim_t = sim_t + 0.05;
 
-function s = format_stats_defect(base, reduced, loss, cspd, wf, pen)
-    pen_label = 'none';
-    if pen == 0.95, pen_label = 'shallow pothole (-5%)';
-    elseif pen == 0.85, pen_label = 'moderate pothole (-15%)';
-    elseif pen == 0.70, pen_label = 'deep pothole (-30%)'; end
-
-    s = sprintf(['DEFECT ROAD\n' ...
-                 'Reduced capacity      : %d PCU/hr  (was %d)\n' ...
-                 'Capacity lost         : %.1f%%\n' ...
-                 'Congested speed       : %.1f km/h\n' ...
-                 'Width factor          : %.3f\n' ...
-                 'Pothole penalty       : %.2f  [%s]'], ...
-                round(reduced), round(base), loss, cspd, wf, pen, pen_label);
-end
-
-
-%% ================================================================
-%% AUTO-DISCOVER LATEST ANALYSIS JSON
-%% ================================================================
-
-function json_path = find_latest_json()
-    script_dir   = fileparts(mfilename('fullpath'));
-    results_root = fullfile(script_dir, '..', 'road_analyzer_deploy', ...
-                            'road_analyzer', 'results');
-    files = dir(fullfile(results_root, '**', '*_analysis.json'));
-    if isempty(files)
-        error(['No *_analysis.json found under %s\n' ...
-               'Run your web dashboard first and analyse an image.'], results_root);
+    %% Move ideal vehicles at constant speed
+    vx_i = vx_i + vs_i;
+    wrap_i = vx_i > ROAD_LEN + VEH_LEN;
+    if any(wrap_i)
+        vx_i(wrap_i) = min(vx_i(~wrap_i)) - spc_i * (1:sum(wrap_i))';
     end
-    [~, newest] = max([files.datenum]);
-    json_path = fullfile(files(newest).folder, files(newest).name);
-    fprintf('Auto-discovered: %s\n', json_path);
+
+    %% Move defect vehicles — slow near obstacle
+    for v = 1:N_VEH
+        x      = vx_d(v);
+        d2obs  = OBS_X - x;
+
+        if d2obs > 0 && d2obs < spc_d * 3
+            slow   = min(1, d2obs / (spc_d * 2));
+            spd_v  = vs_d * (0.25 + 0.75 * slow);
+        elseif x >= OBS_X && x <= OBS_X + blk_px
+            spd_v  = vs_d * 0.25;
+        elseif x > OBS_X + blk_px
+            recovery = min(1, (x - OBS_X - blk_px) / 20);
+            spd_v    = vs_d * (0.25 + 0.75 * recovery);
+        else
+            spd_v  = vs_d;
+        end
+        vx_d(v) = vx_d(v) + spd_v;
+    end
+
+    wrap_d = vx_d > ROAD_LEN + VEH_LEN;
+    if any(wrap_d)
+        vx_d(wrap_d) = min(vx_d(~wrap_d)) - spc_d * (1:sum(wrap_d))';
+    end
+
+    %% Update patch positions and colours
+    for v = 1:N_VEH
+        ln = mod(v-1, num_lanes) + 1;
+        x  = vx_d(v);
+        d2obs = OBS_X - x;
+
+        %% Ideal vehicles — always green
+        set(vp_i(v), 'Position', [vx_i(v) lane_y_i(ln)-VEH_H/2 VEH_LEN VEH_H]);
+
+        %% Defect vehicles — colour shifts green→orange→red based on zone
+        if x >= OBS_X && x <= OBS_X + blk_px
+            col = [0.95 0.50 0.10];     % orange = in defect zone
+        elseif d2obs > 0 && d2obs < spc_d * 3
+            alpha = 1 - d2obs / (spc_d * 3);
+            col   = C_GD * (1-alpha) + [0.95 0.50 0.10] * alpha;
+        else
+            col = C_GD;                 % red = free on defect road
+        end
+
+        set(vp_d(v), 'Position', [vx_d(v) lane_y_d(ln)-VEH_H/2 VEH_LEN VEH_H], ...
+            'FaceColor', col);
+    end
+
+    %% Pulsing capacity bar
+    pulse_h = defect_h * (0.88 + 0.12 * sin(sim_t * 2.5));
+    set(fill_d, 'Position', [BAR_X ROAD_TOP_D+1 BAR_W min(pulse_h, BAR_H)]);
+
+    drawnow limitrate;
+    pause(0.012);
+end
+
+fprintf('Animation stopped.\n');
 end
