@@ -431,14 +431,18 @@ class RoadConfig:
 class RoadAnalyzer:
     WARMUP_CALL_WINDOW = 3
 
-    def __init__(self, model_path: str, enable_depth: bool = True):
+    def __init__(self, model_path: str, enable_depth: bool = False):
+        # enable_depth=False by default — MiDaS takes 3-5 minutes on CPU.
+        # Pothole severity is estimated from bounding box area ratio instead.
+        # Set enable_depth=True only if you have a GPU or can wait.
         from ultralytics import YOLO
         self.model_path   = str(model_path)
         self.model        = YOLO(self.model_path)
         self._call_count  = 0
         self.enable_depth = enable_depth
         self._depth_estimator: Optional["PotholeDepthEstimator"] = None
-        logger.info("RoadAnalyzer: model loaded from %s", self.model_path)
+        logger.info("RoadAnalyzer: model loaded from %s (depth_estimation=%s)",
+                    self.model_path, enable_depth)
 
     def _get_depth_estimator(self) -> "PotholeDepthEstimator":
         if self._depth_estimator is None:
@@ -511,11 +515,16 @@ class RoadAnalyzer:
 
         detections, vetoed_count = self._detect(image_path)
 
-        # ---- Pothole depth scoring (one MiDaS call per image) ----
+        # ---- Pothole depth scoring ----
+        # Fast method: estimate severity from bounding box area relative to image.
+        # Large pothole bbox = more severe. No MiDaS download needed.
+        # MiDaS (enable_depth=True) only runs if explicitly enabled.
         pothole_depth_results: Dict[int, dict] = {}
-        if self.enable_depth:
-            pothole_indices = [i for i, d in enumerate(detections) if d["cls_name"] == "pothole"]
-            if pothole_indices:
+        pothole_indices = [i for i, d in enumerate(detections) if d["cls_name"] == "pothole"]
+
+        if pothole_indices:
+            if self.enable_depth:
+                # Slow but accurate MiDaS method
                 try:
                     de     = self._get_depth_estimator()
                     boxes  = [detections[i]["xyxy"] for i in pothole_indices]
@@ -523,8 +532,15 @@ class RoadAnalyzer:
                     for i, score in zip(pothole_indices, scores):
                         pothole_depth_results[i] = score
                 except Exception as e:
-                    logger.warning("Pothole depth estimation failed (%s: %s) — continuing without depth.",
-                                   type(e).__name__, e)
+                    logger.warning("MiDaS depth failed (%s) — using bbox fallback.", e)
+                    for i in pothole_indices:
+                        pothole_depth_results[i] = _fast_pothole_severity(
+                            detections[i]["xyxy"], img_w, img_h)
+            else:
+                # Fast bbox-area method — instant, no download
+                for i in pothole_indices:
+                    pothole_depth_results[i] = _fast_pothole_severity(
+                        detections[i]["xyxy"], img_w, img_h)
 
         # ---- Worst pothole severity → penalty factor ----
         severity_rank = {"deep": 2, "moderate": 1, "shallow": 0, "unknown": -1}
@@ -870,6 +886,44 @@ class RoadAnalyzer:
             "worst_image_or_frame":    results[worst_i]["image"],
             "avg_capacity_loss_pct":   round(sum(losses) / len(losses), 1),
         }
+
+
+# ================================================================
+# Fast pothole severity from bounding box area (no model download)
+# ================================================================
+def _fast_pothole_severity(box_xyxy: tuple, img_w: int, img_h: int) -> dict:
+    """
+    Estimate pothole severity from bounding box area ratio.
+    No model download required — runs in milliseconds.
+
+    Logic (consistent with IRC:SP:83 visual distress categories):
+      Small bbox  (<0.5% of image) → shallow  → penalty 0.95
+      Medium bbox (0.5-2% of image)→ moderate → penalty 0.85
+      Large bbox  (>2% of image)   → deep     → penalty 0.70
+
+    This is a geometric proxy, not a depth measurement.
+    For accurate depth, set enable_depth=True in RoadAnalyzer.
+    """
+    x1, y1, x2, y2  = box_xyxy
+    box_area         = max(0.0, (x2-x1)) * max(0.0, (y2-y1))
+    image_area       = img_w * img_h
+    area_ratio       = box_area / image_area if image_area > 0 else 0.0
+
+    if area_ratio < 0.005:
+        sev, note, score, depth_cm = "shallow",  "Small pothole — minor speed reduction.",    0.10, 2.0
+    elif area_ratio < 0.020:
+        sev, note, score, depth_cm = "moderate", "Medium pothole — braking/headway impact.",  0.25, 5.0
+    else:
+        sev, note, score, depth_cm = "deep",     "Large pothole — forced lane merge likely.", 0.50, 9.0
+
+    return {
+        "severity":             sev,
+        "note":                 note,
+        "relative_depth_score": round(score, 3),
+        "estimated_depth_cm":   depth_cm,
+        "method":               "bbox_area_ratio",
+        "area_ratio_pct":       round(area_ratio * 100, 3),
+    }
 
 
 # ================================================================
