@@ -844,3 +844,112 @@ canvas { width: 100% !important; }
   .matlab-twin-bar { flex-direction: column; align-items: flex-start; }
   .matlab-dl-btn   { width: 100%; text-align: center; }
 }
+
+/* ================================================================
+   DASHBOARD DIGITAL TWIN PANEL
+   ================================================================ */
+.twin-panel {
+  background: #0b1523;
+  border: 1px solid #1e3a5f;
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 22px;
+}
+.twin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.twin-title {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.15rem;
+  color: #e2e8f0;
+  letter-spacing: 0.04em;
+}
+.twin-actions { display: flex; gap: 8px; }
+.twin-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 12px;
+}
+.twin-road-labels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.twin-lbl {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.ideal-lbl  { color: #4ade80; background: #0d2b1a; }
+.defect-lbl { color: #f87171; background: #2d0a0a; }
+
+.twin-canvas-wrap {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 14px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+}
+.twin-canvas-wrap canvas {
+  display: block;
+  width: 100% !important;
+}
+
+.twin-stats-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.twin-stat-card {
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.ideal-card  { background: #0d2b1a; border-color: #14532d; }
+.loss-card   { background: #1c1200; border-color: #78350f; }
+.defect-card { background: #2d0a0a; border-color: #7f1d1d; }
+
+.tsc-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: monospace;
+  margin-bottom: 4px;
+}
+.tsc-val {
+  font-family: 'Oswald', sans-serif;
+  font-size: 1.6rem;
+  color: #f1f5f9;
+  line-height: 1;
+  margin-bottom: 3px;
+}
+.loss-val   { color: #f97316; }
+.ideal-card .tsc-val  { color: #4ade80; }
+.defect-card .tsc-val { color: #f87171; }
+.tsc-unit { font-size: 12px; color: var(--text-faint); }
+.tsc-sub  { font-size: 11px; color: var(--text-faint); font-family: monospace; }
+
+.twin-formula {
+  font-size: 11.5px;
+  color: #60a5fa;
+  background: #0d1f35;
+  border: 1px solid #1e3a5f;
+  border-radius: 6px;
+  padding: 8px 12px;
+  word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .twin-road-labels { grid-template-columns: 1fr; }
+  .twin-stats-row   { grid-template-columns: 1fr; }
+}
