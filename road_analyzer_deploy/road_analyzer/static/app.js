@@ -140,74 +140,35 @@
   // Config options (populate selects from backend)
   // ----------------------------------------------------------------
   async function loadConfigOptions() {
-    try {
-      const res  = await fetch("/api/config-options");
-      const data = await res.json();
-      configData = data;
+    // Populate with fallback immediately — dropdowns always have values
+    populateDropdowns(FALLBACK_CONFIG);
+    modelStatusEl.textContent = "⟳ Connecting to server…";
 
-      // Carriageway dropdown
-      carriagewaySel.innerHTML = (data.carriageway_options || [])
-        .map((o) => `<option value="${o.key}">${o.label}</option>`)
-        .join("");
-
-      carriagewaySel.addEventListener("change", () => {
-        const opt = (data.carriageway_options || []).find(
-          (o) => o.key === carriagewaySel.value
-        );
-        // Filter fringe options to only those that have a valid DSV
-        if (opt && opt.available_fringes) {
-          Array.from(fringeSel.options).forEach((opt_el) => {
-            opt_el.disabled = !opt.available_fringes.includes(opt_el.value);
-          });
-          if (!opt.available_fringes.includes(fringeSel.value)) {
-            fringeSel.value = opt.available_fringes[0];
-            fringeSel.dispatchEvent(new Event("change"));
-          }
+    // Then fetch real data from server with retries
+    let retries = 0;
+    async function tryFetch() {
+      try {
+        const res  = await fetch("/api/config-options");
+        if (!res.ok) throw new Error("Server returned " + res.status);
+        const data = await res.json();
+        populateDropdowns(data);
+        configData = data;
+        modelStatusEl.textContent = data.model_loaded
+          ? "✓ Model loaded and ready."
+          : "⚠ No trained model found. Copy best.pt into road_analyzer/models/.";
+        if (!data.model_loaded) modelStatusEl.classList.add("warn");
+      } catch (e) {
+        retries++;
+        if (retries < 6) {
+          modelStatusEl.textContent = "⟳ Server waking up… (" + retries + "/5 attempts)";
+          setTimeout(tryFetch, 4000);
+        } else {
+          modelStatusEl.textContent = "⚠ Could not reach server — using offline defaults.";
+          modelStatusEl.classList.add("warn");
         }
-        updateDsvPreview();
-      });
-
-      // Fringe dropdown
-      fringeSel.innerHTML = (data.fringe_conditions || [])
-        .map((f) => `<option value="${f.key}">${titleCase(f.key)}</option>`)
-        .join("");
-
-      fringeSel.addEventListener("change", () => {
-        const f = (data.fringe_conditions || []).find((x) => x.key === fringeSel.value);
-        fringeDescEl.textContent = f ? f.description : "";
-        updateDsvPreview();
-      });
-      fringeSel.dispatchEvent(new Event("change"));
-
-      // Traffic regime dropdown
-      if (regimeSel) {
-        regimeSel.innerHTML = (data.traffic_regimes || [
-          { key: "low",  description: "Less than 15% heavy vehicles - mostly cars, autos, two-wheelers" },
-          { key: "high", description: "15% or more heavy vehicles - significant freight/bus movement" },
-        ]).map((r) => `<option value="${r.key}">${r.key === "low" ? "Low (<15% heavy vehicles)" : "High (≥15% heavy vehicles)"}</option>`)
-          .join("");
-        regimeSel.addEventListener("change", () => {
-          const r = (data.traffic_regimes || []).find((x) => x.key === regimeSel.value);
-          if (regimeDescEl) regimeDescEl.textContent = r ? r.description : "";
-          updateDsvPreview();
-        });
-        regimeSel.dispatchEvent(new Event("change"));
       }
-
-      carriagewaySel.dispatchEvent(new Event("change"));
-
-      // Model status
-      if (!data.model_loaded) {
-        modelStatusEl.textContent =
-          "⚠ No trained model found. Copy best.pt into road_analyzer/models/.";
-        modelStatusEl.classList.add("warn");
-      } else {
-        modelStatusEl.textContent = "✓ Model loaded and ready.";
-      }
-    } catch (e) {
-      modelStatusEl.textContent = "⚠ Could not reach /api/config-options - is the server running?";
-      modelStatusEl.classList.add("warn");
     }
+    tryFetch();
   }
 
   // ----------------------------------------------------------------
@@ -861,6 +822,240 @@ end
 `;
   }
 
+  // ---- Canvas Road Animation ----
+  let _twinAnim = null;
+
+  function startTwinAnimation(data) {
+    const canvas  = document.getElementById('twin-canvas');
+    if (!canvas) return;
+    const ctx     = canvas.getContext('2d');
+    const W       = canvas.offsetWidth || 800;
+    canvas.width  = W;
+    const H       = 260;
+
+    if (_twinAnim) cancelAnimationFrame(_twinAnim);
+
+    const base    = data.original_capacity_pcu_hr || 1500;
+    const reduced = data.reduced_capacity_pcu_hr  || 1200;
+    const lossPct = data.capacity_loss_pct         || 0;
+    const lanes   = (data.road_config || {}).num_lanes || 2;
+    const totalW  = (data.road_config || {}).total_width_m || 7;
+    const blocked = (data.capacity_calculation || {}).total_blocked_m || 0;
+    const pen     = (data.capacity_calculation || {}).pothole_penalty || 1;
+    const defects = Object.keys(data.per_defect || {});
+
+    const FREE_SPD   = 50;
+    const vcRatio    = reduced / base;
+    const congSpd    = FREE_SPD * (1 - (1 - vcRatio) * 0.5);
+
+    // Road layout
+    const ROAD_H     = H / 2 - 10;
+    const LANE_H     = ROAD_H / lanes;
+    const ROAD_TOP_I = 8;
+    const ROAD_TOP_D = H / 2 + 8;
+    const OBS_X      = W * 0.58;
+    const BLK_W      = Math.min((blocked / totalW) * W * 0.3, W * 0.25);
+    const VW         = 28;
+    const VH         = Math.max(8, LANE_H - 4);
+    const N_VEH      = 8;
+
+    const hiIdeal   = 3600 / Math.max(base, 1);
+    const hiDefect  = 3600 / Math.max(reduced, 1);
+    const spcI      = Math.max((FREE_SPD/3.6) * hiIdeal * 0.1,  VW + 8);
+    const spcD      = Math.max((congSpd/3.6)  * hiDefect * 0.1, VW + 4);
+    const vsI       = FREE_SPD  / 3.6 * 0.15;
+    const vsD       = congSpd   / 3.6 * 0.15;
+
+    // Vehicle positions
+    let vxI = Array.from({length: N_VEH}, (_, i) => -spcI * (N_VEH - 1 - i));
+    let vxD = Array.from({length: N_VEH}, (_, i) => -spcD * (N_VEH - 1 - i));
+
+    const laneYI = (ln) => ROAD_TOP_I  + (ln + 0.5) * LANE_H;
+    const laneYD = (ln) => ROAD_TOP_D  + (ln + 0.5) * LANE_H;
+
+    const hasDefect = (name) => defects.includes(name);
+
+    function drawRoad(yTop, color, dashed) {
+      ctx.fillStyle = color;
+      ctx.fillRect(0, yTop, W, ROAD_H);
+      // Lane dividers
+      ctx.setLineDash([14, 10]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 1.5;
+      for (let ln = 1; ln < lanes; ln++) {
+        ctx.beginPath();
+        ctx.moveTo(0, yTop + ln * LANE_H);
+        ctx.lineTo(W, yTop + ln * LANE_H);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      // Edge lines
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, yTop); ctx.lineTo(W, yTop); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, yTop+ROAD_H); ctx.lineTo(W, yTop+ROAD_H); ctx.stroke();
+    }
+
+    function drawDefects(yTop) {
+      // Blocked zone overlay
+      ctx.fillStyle = 'rgba(220,50,50,0.18)';
+      ctx.fillRect(OBS_X, yTop, BLK_W, ROAD_H);
+      ctx.strokeStyle = 'rgba(220,50,50,0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(OBS_X, yTop, BLK_W, ROAD_H);
+
+      // Pothole
+      if (hasDefect('pothole')) {
+        ctx.beginPath();
+        ctx.ellipse(OBS_X + BLK_W*0.3, yTop + LANE_H*0.5, 14, 8, 0, 0, Math.PI*2);
+        ctx.fillStyle = '#3a1a1a';
+        ctx.fill();
+        ctx.strokeStyle = '#c04040';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = '#fca5a5';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Pothole', OBS_X + BLK_W*0.3, yTop + LANE_H*0.5 - 12);
+      }
+      // Vendor
+      if (hasDefect('street_vendor')) {
+        const vx = OBS_X + BLK_W * 0.62;
+        const vy = yTop + LANE_H * (lanes > 1 ? 1.0 : 0.25);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(vx - 12, vy - 10, 24, 16);
+        ctx.fillStyle = '#fde68a';
+        ctx.font = '8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Vendor', vx, vy - 13);
+      }
+      // Illegal parking
+      if (hasDefect('illegal_parking')) {
+        const px = OBS_X + BLK_W * 0.5;
+        const py = yTop + ROAD_H * 0.65;
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.roundRect(px-16, py-7, 32, 14, 3);
+        ctx.fill();
+        ctx.fillStyle = '#fca5a5';
+        ctx.font = '7px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Parking', px, py - 10);
+      }
+      // Barricade
+      if (hasDefect('barricade')) {
+        for (let bi = 0; bi < 3; bi++) {
+          ctx.fillStyle = '#f97316';
+          ctx.fillRect(OBS_X + bi*8 + 2, yTop + 2, 5, ROAD_H - 4);
+        }
+      }
+      // Garbage
+      if (hasDefect('garbage')) {
+        ctx.fillStyle = '#65a30d';
+        ctx.fillRect(OBS_X + BLK_W*0.7, yTop + ROAD_H*0.5, 14, 12);
+        ctx.fillStyle = '#d9f99d';
+        ctx.font = '7px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Garbage', OBS_X+BLK_W*0.77, yTop+ROAD_H*0.5-4);
+      }
+
+      // Blocked label
+      ctx.fillStyle = '#fca5a5';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(blocked.toFixed(1)+'m blocked', OBS_X + BLK_W/2, yTop + ROAD_H + 7);
+    }
+
+    function drawVehicle(ctx, x, y, color) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.roundRect(x, y - VH/2, VW, VH, 3);
+      ctx.fill();
+      // Windshield
+      ctx.fillStyle = 'rgba(150,210,255,0.5)';
+      ctx.fillRect(x + VW*0.55, y - VH/2 + 2, VW*0.3, VH - 4);
+    }
+
+    function getDefectColor(x) {
+      const d = OBS_X - x;
+      if (x >= OBS_X && x <= OBS_X + BLK_W) return '#f97316';
+      if (d > 0 && d < spcD * 3) {
+        const a = Math.max(0, Math.min(1, 1 - d/(spcD*3)));
+        return `rgba(${Math.round(227+28*a)},${Math.round(73-23*a)},${Math.round(72-62*a)},1)`;
+      }
+      return '#e34948';
+    }
+
+    function frame() {
+      if (!canvas.isConnected) return;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, W, H);
+
+      // Roads
+      drawRoad(ROAD_TOP_I, '#535a66', false);
+      drawRoad(ROAD_TOP_D, '#4d5260', true);
+      drawDefects(ROAD_TOP_D);
+
+      // Ideal vehicles
+      vxI = vxI.map((x, i) => {
+        const nx = x + vsI;
+        return nx > W + VW ? -spcI * (N_VEH - 1) + Math.min(...vxI.filter(v=>v<=W+VW)) : nx;
+      });
+      // wrap properly
+      const maxWrapI = vxI.filter(x => x > W+VW).length;
+      if (maxWrapI > 0) {
+        const minX = Math.min(...vxI.filter(x => x <= W+VW));
+        let wi = 0;
+        vxI = vxI.map(x => x > W+VW ? minX - spcI*(++wi) : x);
+      }
+
+      vxI.forEach((x, i) => {
+        const ln = i % lanes;
+        drawVehicle(ctx, x, laneYI(ln), '#1baf7a');
+      });
+
+      // Defect vehicles — slow near obstacle
+      vxD = vxD.map((x, i) => {
+        const d = OBS_X - x;
+        let spd;
+        if (d > 0 && d < spcD*3)      spd = vsD * (0.25 + 0.75 * Math.min(1, d/(spcD*2)));
+        else if (x >= OBS_X && x <= OBS_X+BLK_W) spd = vsD * 0.2;
+        else if (x > OBS_X+BLK_W)     spd = vsD * (0.25 + 0.75 * Math.min(1, (x-OBS_X-BLK_W)/40));
+        else                            spd = vsD;
+        return x + spd;
+      });
+      const maxWrapD = vxD.filter(x => x > W+VW).length;
+      if (maxWrapD > 0) {
+        const minX = Math.min(...vxD.filter(x => x <= W+VW));
+        let wd = 0;
+        vxD = vxD.map(x => x > W+VW ? minX - spcD*(++wd) : x);
+      }
+
+      vxD.forEach((x, i) => {
+        const ln = i % lanes;
+        drawVehicle(ctx, x, laneYD(ln), getDefectColor(x));
+      });
+
+      // Speed labels
+      ctx.fillStyle = '#1baf7a';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`→ ${FREE_SPD} km/h`, 8, ROAD_TOP_I + ROAD_H/2 + 4);
+      ctx.fillStyle = '#e34948';
+      ctx.fillText(`→ ${congSpd.toFixed(1)} km/h`, 8, ROAD_TOP_D + ROAD_H/2 + 4);
+
+      _twinAnim = requestAnimationFrame(frame);
+    }
+
+    // Set formula text
+    const calc = data.capacity_calculation || {};
+    const formulaEl = document.getElementById('twin-formula');
+    if (formulaEl && calc.formula) formulaEl.textContent = 'Formula: ' + calc.formula;
+
+    frame();
+  }
+
   function attachMatlabButton(data) {
     const btn = document.getElementById('matlab-dl-btn');
     if (!btn) return;
@@ -890,6 +1085,9 @@ end
 
     // Attach MATLAB download button click handler
     attachMatlabButton(data);
+
+    // Start canvas animation after panel renders
+    requestAnimationFrame(() => startTwinAnimation(data));
   }
 
   // ----------------------------------------------------------------
