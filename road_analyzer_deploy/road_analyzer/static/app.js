@@ -109,7 +109,136 @@
   }
 
   // ----------------------------------------------------------------
-  // DSV preview - updates when carriageway or fringe changes
+  // Hardcoded fallback config — dropdowns always work even if server
+  // is sleeping (Render free tier cold start can take 60 seconds)
+  // ----------------------------------------------------------------
+  const FALLBACK_CONFIG = {
+    carriageway_options: [
+      { key: "2lane_oneway",    label: "2-Lane One-Way",
+        available_fringes: ["arterial","sub_arterial","collector"],
+        dsv_values: { arterial:2400, sub_arterial:1900, collector:1400 } },
+      { key: "2lane_twoway",    label: "2-Lane Two-Way",
+        available_fringes: ["arterial","sub_arterial","collector"],
+        dsv_values: { arterial:1500, sub_arterial:1200, collector:900 } },
+      { key: "3lane_oneway",    label: "3-Lane One-Way",
+        available_fringes: ["arterial","sub_arterial","collector"],
+        dsv_values: { arterial:3600, sub_arterial:2900, collector:2200 } },
+      { key: "4lane_undivided", label: "4-Lane Undivided",
+        available_fringes: ["arterial","sub_arterial","collector"],
+        dsv_values: { arterial:3000, sub_arterial:2400, collector:1800 } },
+      { key: "4lane_divided",   label: "4-Lane Divided",
+        available_fringes: ["arterial","sub_arterial"],
+        dsv_values: { arterial:3600, sub_arterial:2900 } },
+      { key: "6lane_undivided", label: "6-Lane Undivided",
+        available_fringes: ["arterial","sub_arterial"],
+        dsv_values: { arterial:4800, sub_arterial:3800 } },
+      { key: "6lane_divided",   label: "6-Lane Divided",
+        available_fringes: ["arterial","sub_arterial"],
+        dsv_values: { arterial:5400, sub_arterial:4300 } },
+      { key: "8lane_divided",   label: "8-Lane Divided",
+        available_fringes: ["arterial"],
+        dsv_values: { arterial:7200 } },
+    ],
+    fringe_conditions: [
+      { key: "arterial",     description: "No frontage access, no standing vehicles, very little cross traffic" },
+      { key: "sub_arterial", description: "Frontage development, side roads, bus stops, no standing vehicles" },
+      { key: "collector",    description: "Free frontage access, parked vehicles, bus stops, heavy cross traffic" },
+    ],
+    traffic_regimes: [
+      { key: "low",  description: "Less than 15% heavy vehicles — mostly cars, autos, two-wheelers" },
+      { key: "high", description: "15% or more heavy vehicles — significant freight or bus movement" },
+    ],
+    model_loaded: true,
+  };
+
+  function populateDropdowns(data) {
+    configData = data;
+
+    // --- Carriageway dropdown ---
+    if (carriagewaySel) {
+      carriagewaySel.innerHTML = (data.carriageway_options || [])
+        .map((o) => `<option value="${o.key}">${o.label}</option>`)
+        .join("");
+    }
+
+    // --- Fringe dropdown ---
+    if (fringeSel) {
+      fringeSel.innerHTML = (data.fringe_conditions || [])
+        .map((f) => `<option value="${f.key}">${titleCase(f.key)}</option>`)
+        .join("");
+    }
+
+    // --- Traffic regime dropdown ---
+    if (regimeSel) {
+      regimeSel.innerHTML = (data.traffic_regimes || [])
+        .map((r) => `<option value="${r.key}">${
+          r.key === "low"
+            ? "Low — <15% heavy vehicles (cars, autos, two-wheelers)"
+            : "High — ≥15% heavy vehicles (trucks, buses)"
+        }</option>`)
+        .join("");
+    }
+
+    // Wire up carriageway change — filter fringe options
+    if (carriagewaySel) {
+      carriagewaySel.onchange = () => {
+        const opt = (data.carriageway_options || []).find((o) => o.key === carriagewaySel.value);
+        if (opt && fringeSel) {
+          Array.from(fringeSel.options).forEach((el) => {
+            el.disabled = !(opt.available_fringes || []).includes(el.value);
+          });
+          if (fringeSel.options[fringeSel.selectedIndex] &&
+              fringeSel.options[fringeSel.selectedIndex].disabled) {
+            const first = Array.from(fringeSel.options).find((el) => !el.disabled);
+            if (first) fringeSel.value = first.value;
+          }
+          if (fringeDescEl) {
+            const fc = (data.fringe_conditions || []).find((f) => f.key === fringeSel.value);
+            fringeDescEl.textContent = fc ? fc.description : "";
+          }
+        }
+        updateDsvPreview();
+      };
+    }
+
+    // Wire up fringe change
+    if (fringeSel) {
+      fringeSel.onchange = () => {
+        if (fringeDescEl) {
+          const fc = (data.fringe_conditions || []).find((f) => f.key === fringeSel.value);
+          fringeDescEl.textContent = fc ? fc.description : "";
+        }
+        updateDsvPreview();
+      };
+    }
+
+    // Wire up regime change
+    if (regimeSel) {
+      regimeSel.onchange = () => {
+        if (regimeDescEl) {
+          const r = (data.traffic_regimes || []).find((x) => x.key === regimeSel.value);
+          regimeDescEl.textContent = r ? r.description : "";
+        }
+        updateDsvPreview();
+      };
+      regimeSel.onchange();
+    }
+
+    // Trigger initial updates
+    if (carriagewaySel) carriagewaySel.onchange();
+
+    // Model status
+    if (!data.model_loaded) {
+      modelStatusEl.textContent = "⚠ Model not found — copy best.pt into road_analyzer/models/";
+      modelStatusEl.classList.add("warn");
+    } else {
+      modelStatusEl.textContent = "✓ Model loaded and ready.";
+      modelStatusEl.classList.remove("warn");
+    }
+  }
+
+  // ----------------------------------------------------------------
+  // DSV preview — updates when carriageway or fringe changes
   // ----------------------------------------------------------------
   // PCU avg factors for quick vehicles/hr preview
   const AVG_PCU = { low: 1.00, high: 1.30 };
