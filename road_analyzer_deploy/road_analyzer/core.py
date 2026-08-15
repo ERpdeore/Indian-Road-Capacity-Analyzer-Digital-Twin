@@ -504,8 +504,9 @@ class RoadAnalyzer:
         if traffic_regime not in ("low", "high"):
             traffic_regime = "low"
 
-        px_per_m = img_w / total_width_m
-        base_dsv = get_irc106_dsv(carriageway_key, fringe)
+        px_per_m       = img_w / total_width_m
+        base_dsv       = get_irc106_dsv(carriageway_key, fringe)
+        free_flow_speed = get_free_flow_speed(carriageway_key, fringe)
 
         # IRC:106 Table 1 — PCU conversion
         # DSV is in PCU/hr. Convert to vehicles/hr using avg PCU factor
@@ -660,6 +661,7 @@ class RoadAnalyzer:
                 "fringe_desc":      FRINGE_CONDITION_DESC.get(fringe, ""),
                 "source":           "IRC:106-1990 Table 2 (urban Design Service Volume)",
             },
+            "free_flow_speed_kmh": free_flow_speed,
             "traffic_regime": {
                 "regime":              traffic_regime,
                 "desc":                TRAFFIC_REGIME_DESC.get(traffic_regime, ""),
@@ -667,6 +669,10 @@ class RoadAnalyzer:
                 "base_vehicles_per_hr": round(base_vehicles_per_hr, 0),
                 "reduced_vehicles_per_hr": round(
                     dsv_to_vehicles_per_hr(reduced_cap, traffic_regime), 0
+                ),
+                "free_flow_speed_kmh":   free_flow_speed,
+                "congested_speed_kmh":   round(
+                    free_flow_speed * (1 - (1 - (reduced_cap/base_dsv)) * 0.5), 1
                 ),
                 "pcu_factors":         IRC106_PCU_FACTORS.get(traffic_regime, {}),
                 "note": (
