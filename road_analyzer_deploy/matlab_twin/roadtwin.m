@@ -32,6 +32,16 @@ POTHOLE_PENALTY = 0.85;
 NUM_LANES       = 2;
 DEFECTS         = 'pothole + street vendor';
 
+%% IRC Design Speed (km/h) — based on carriageway type and fringe condition
+%% IRC:106-1990 / IRC:64-1990 design speed guidance:
+%%   2-lane twoway arterial    = 50 km/h
+%%   4-lane divided arterial   = 80 km/h
+%%   6-lane divided arterial   = 100 km/h
+%%   any collector             = 30 km/h
+%%   any sub-arterial 2-lane   = 40 km/h
+%% When downloaded from dashboard, this is auto-filled correctly.
+FREE_FLOW_SPEED = 50;   %% <-- CHANGE THIS to match your road type
+
 HAS_POTHOLE   = true;
 HAS_VENDOR    = true;
 HAS_PARKING   = false;
@@ -45,7 +55,7 @@ VIDEO_FPS     = 20;
 %% ============================================================
 %% DERIVED
 %% ============================================================
-FREE_SPD = 50;
+FREE_SPD = FREE_FLOW_SPEED;
 CONG_SPD = FREE_SPD * (1 - (1 - REDUCED_CAP/BASE_DSV) * 0.5);
 
 fprintf('Base DSV      : %d PCU/hr\n', round(BASE_DSV));
