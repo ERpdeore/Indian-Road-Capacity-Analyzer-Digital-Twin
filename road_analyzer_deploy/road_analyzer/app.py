@@ -40,7 +40,8 @@ logger = logging.getLogger("road_analyzer.app")
 from road_analyzer.core import (
     RoadAnalyzer, IRC106_DSV, IRC106_DSV_LABELS,
     FRINGE_CONDITION_DESC, TRAFFIC_REGIME_DESC,
-    IRC106_PCU_FACTORS, CLASS_NAMES,
+    IRC106_PCU_FACTORS, IRC_FREE_FLOW_SPEED,
+    get_free_flow_speed, CLASS_NAMES,
 )
 
 # Digital Twin bridge — optional, disabled gracefully if MATLAB not installed
@@ -177,6 +178,10 @@ def config_options():
             "available_fringes": available_fringes,
             "dsv_values":        {f: v for f, v in fringe_vals.items() if v is not None},
         })
+    # Add free flow speed to each carriageway option
+    for opt in carriageway_options:
+        opt["free_flow_speeds"] = IRC_FREE_FLOW_SPEED.get(opt["key"], {})
+
     return {
         "carriageway_options": carriageway_options,
         "fringe_conditions": [
@@ -185,9 +190,10 @@ def config_options():
         "traffic_regimes": [
             {"key": k, "description": v} for k, v in TRAFFIC_REGIME_DESC.items()
         ],
-        "pcu_factors": IRC106_PCU_FACTORS,
-        "defect_classes": CLASS_NAMES,
-        "model_loaded":   Path(MODEL_PATH).exists(),
+        "pcu_factors":        IRC106_PCU_FACTORS,
+        "free_flow_speeds":   IRC_FREE_FLOW_SPEED,
+        "defect_classes":     CLASS_NAMES,
+        "model_loaded":       Path(MODEL_PATH).exists(),
     }
 
 
