@@ -116,28 +116,36 @@
     carriageway_options: [
       { key: "2lane_oneway",    label: "2-Lane One-Way",
         available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:2400, sub_arterial:1900, collector:1400 } },
+        dsv_values: { arterial:2400, sub_arterial:1900, collector:1400 },
+        free_flow_speeds: { arterial:50, sub_arterial:40, collector:30 } },
       { key: "2lane_twoway",    label: "2-Lane Two-Way",
         available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:1500, sub_arterial:1200, collector:900 } },
+        dsv_values: { arterial:1500, sub_arterial:1200, collector:900 },
+        free_flow_speeds: { arterial:50, sub_arterial:40, collector:30 } },
       { key: "3lane_oneway",    label: "3-Lane One-Way",
         available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:3600, sub_arterial:2900, collector:2200 } },
+        dsv_values: { arterial:3600, sub_arterial:2900, collector:2200 },
+        free_flow_speeds: { arterial:65, sub_arterial:50, collector:40 } },
       { key: "4lane_undivided", label: "4-Lane Undivided",
         available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:3000, sub_arterial:2400, collector:1800 } },
+        dsv_values: { arterial:3000, sub_arterial:2400, collector:1800 },
+        free_flow_speeds: { arterial:65, sub_arterial:50, collector:40 } },
       { key: "4lane_divided",   label: "4-Lane Divided",
         available_fringes: ["arterial","sub_arterial"],
-        dsv_values: { arterial:3600, sub_arterial:2900 } },
+        dsv_values: { arterial:3600, sub_arterial:2900 },
+        free_flow_speeds: { arterial:80, sub_arterial:65, collector:50 } },
       { key: "6lane_undivided", label: "6-Lane Undivided",
         available_fringes: ["arterial","sub_arterial"],
-        dsv_values: { arterial:4800, sub_arterial:3800 } },
+        dsv_values: { arterial:4800, sub_arterial:3800 },
+        free_flow_speeds: { arterial:80, sub_arterial:65, collector:50 } },
       { key: "6lane_divided",   label: "6-Lane Divided",
         available_fringes: ["arterial","sub_arterial"],
-        dsv_values: { arterial:5400, sub_arterial:4300 } },
+        dsv_values: { arterial:5400, sub_arterial:4300 },
+        free_flow_speeds: { arterial:100, sub_arterial:80, collector:65 } },
       { key: "8lane_divided",   label: "8-Lane Divided",
         available_fringes: ["arterial"],
-        dsv_values: { arterial:7200 } },
+        dsv_values: { arterial:7200 },
+        free_flow_speeds: { arterial:120, sub_arterial:100, collector:80 } },
     ],
     fringe_conditions: [
       { key: "arterial",     description: "No frontage access, no standing vehicles, very little cross traffic" },
@@ -243,21 +251,33 @@
   // PCU avg factors for quick vehicles/hr preview
   const AVG_PCU = { low: 1.00, high: 1.30 };
 
+  function getFreeFlowSpeed() {
+    if (!configData) return 50;
+    const key    = carriagewaySel ? carriagewaySel.value : "";
+    const fringe = fringeSel ? fringeSel.value : "arterial";
+    const opt    = (configData.carriageway_options || []).find((o) => o.key === key);
+    if (opt && opt.free_flow_speeds && opt.free_flow_speeds[fringe] !== undefined) {
+      return opt.free_flow_speeds[fringe];
+    }
+    return 50; // fallback
+  }
+
   function updateDsvPreview() {
     if (!configData) return;
-    const key    = carriagewaySel.value;
-    const fringe = fringeSel.value;
+    const key    = carriagewaySel ? carriagewaySel.value : "";
+    const fringe = fringeSel ? fringeSel.value : "arterial";
     const regime = regimeSel ? regimeSel.value : "low";
     const opt    = (configData.carriageway_options || []).find((o) => o.key === key);
     if (opt && opt.dsv_values && opt.dsv_values[fringe] !== undefined) {
-      const dsv     = opt.dsv_values[fringe];
-      const avgPcu  = AVG_PCU[regime] || 1.00;
+      const dsv      = opt.dsv_values[fringe];
+      const avgPcu   = AVG_PCU[regime] || 1.00;
       const vehPerHr = Math.round(dsv / avgPcu);
+      const freeSpd  = getFreeFlowSpeed();
       dsvValueEl.textContent = dsv.toLocaleString("en-IN");
       const noteEl = document.getElementById("dsv-note");
       if (noteEl) {
         noteEl.textContent =
-          `≈ ${vehPerHr.toLocaleString("en-IN")} vehicles/hr under ${regime} heavy-vehicle regime (IRC:106 Table 1)`;
+          `≈ ${vehPerHr.toLocaleString("en-IN")} vehicles/hr · Free-flow speed: ${freeSpd} km/h (IRC design speed)`;
       }
       dsvPreview.style.display = "";
     } else {
@@ -973,7 +993,10 @@ end
     const pen     = (data.capacity_calculation || {}).pothole_penalty || 1;
     const defects = Object.keys(data.per_defect || {});
 
-    const FREE_SPD   = 50;
+    // Use server-provided free flow speed, or derive from carriageway+fringe
+    const FREE_SPD   = data.free_flow_speed_kmh ||
+                       (data.traffic_regime && data.traffic_regime.free_flow_speed_kmh) ||
+                       getFreeFlowSpeed() || 50;
     const vcRatio    = reduced / base;
     const congSpd    = FREE_SPD * (1 - (1 - vcRatio) * 0.5);
 
