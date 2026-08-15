@@ -753,11 +753,11 @@
 %% HOW TO RUN:
 %%   1. Open MATLAB R2022b or later
 %%   2. cd to the folder containing this file
-%%   3. Type:  road_twin_animation_standalone
+%%   3. Type:  roadtwin
 %%   4. Press Enter - animation window opens automatically
 %% ================================================================
 
-function road_twin_animation_standalone()
+function roadtwin()
 
 %% --- Parameters from your analysis (IRC:106-1990) ---
 base_dsv         = ${base};        %% PCU/hr  - IRC:106 Table 2 DSV
@@ -1194,7 +1194,7 @@ end
       const url    = URL.createObjectURL(blob);
       const a      = document.createElement('a');
       a.href       = url;
-      a.download   = 'road_twin_animation_standalone.m';
+      a.download   = 'roadtwin.m';
       a.click();
       URL.revokeObjectURL(url);
     });
