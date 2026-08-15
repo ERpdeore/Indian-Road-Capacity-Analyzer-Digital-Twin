@@ -1,244 +1,444 @@
+function roadtwin()
 %% ================================================================
 %% INDIAN ROAD CAPACITY DIGITAL TWIN
-%% roadtwin.m
+%% File: roadtwin.m
 %%
-%% USAGE (in MATLAB Command Window):
-%%   >> roadtwin
+%% USAGE:
+%%   1. Open MATLAB
+%%   2. cd to folder containing this file
+%%   3. Type: roadtwin
+%%   4. Press Enter
 %%
-%% This script animates two roads side by side:
-%%   TOP    - Ideal road: full capacity, vehicles at 50 km/h
-%%   BOTTOM - Defect road: reduced capacity, vehicles slow near obstacle
+%% WHAT YOU SEE:
+%%   TOP    = Ideal road  : vehicles flow at 50 km/h, full capacity
+%%   BOTTOM = Defect road : vehicles slow at obstacle, queue builds
 %%
-%% HOW TO USE WITH YOUR REAL DATA:
-%%   1. Run analysis on your dashboard
-%%   2. Click "Download MATLAB Script" button
-%%   3. Rename downloaded file to roadtwin.m
-%%   4. Run: >> roadtwin
-%%
+%% VIDEO: roadtwin_video.avi saved in same folder after animation
 %% ================================================================
 
-function roadtwin()
+clc;
+fprintf('Road Digital Twin starting...\n');
 
-%% ---- PARAMETERS (auto-filled by dashboard, or edit manually) ----
-base_dsv        = 1500;       %% PCU/hr  IRC:106 Table 2
-reduced_cap     = 1050;       %% PCU/hr  after defects
-cap_loss_pct    = 30.0;       %% % capacity lost
-total_width_m   = 7.0;        %% metres
-blocked_m       = 2.1;        %% metres blocked (overlap-aware)
-width_factor    = 0.700;      %% effective/total width
-pothole_penalty = 0.85;       %% 0.95 shallow / 0.85 moderate / 0.70 deep
-num_lanes       = 2;
-image_name      = 'demo_road.jpg';
-defects_found   = 'pothole + street vendor';
-has_pothole     = true;
-has_vendor      = true;
-has_parking     = false;
-has_barricade   = false;
+%% ============================================================
+%% PARAMETERS  (edit to match your analysis output)
+%% ============================================================
+BASE_DSV        = 1500;
+REDUCED_CAP     = 1050;
+CAP_LOSS_PCT    = 30.0;
+TOTAL_WIDTH_M   = 7.0;
+BLOCKED_M       = 2.1;
+WIDTH_FACTOR    = 0.700;
+POTHOLE_PENALTY = 0.85;
+NUM_LANES       = 2;
+DEFECTS         = 'pothole + street vendor';
 
-%% ---- DERIVED ----
-FREE_SPD   = 50;
-vc         = reduced_cap / base_dsv;
-cong_spd   = FREE_SPD * (1 - (1 - vc) * 0.5);
-h_i        = 3600 / max(base_dsv,  1);
-h_d        = 3600 / max(reduced_cap, 1);
-spc_i      = max((FREE_SPD/3.6)*h_i,  6);
-spc_d      = max((cong_spd/3.6)*h_d,  4);
+HAS_POTHOLE   = true;
+HAS_VENDOR    = true;
+HAS_PARKING   = false;
+HAS_BARRICADE = false;
+HAS_GARBAGE   = false;
 
-%% ---- LAYOUT ----
-RL  = 100;  LH = 8;
-TI  = 5;    TD = 50;
-VL  = 4;    VH = 3;
-OX  = 55;   NV = 12;
-BPX = (blocked_m/total_width_m)*RL*0.35;
+SAVE_VIDEO    = true;
+VIDEO_SEC     = 8;
+VIDEO_FPS     = 20;
 
-ly_i = arrayfun(@(l) TI + (l-0.5)*LH, 1:num_lanes);
-ly_d = arrayfun(@(l) TD + (l-0.5)*LH, 1:num_lanes);
+%% ============================================================
+%% DERIVED
+%% ============================================================
+FREE_SPD = 50;
+CONG_SPD = FREE_SPD * (1 - (1 - REDUCED_CAP/BASE_DSV) * 0.5);
 
-vx_i = linspace(-spc_i*(NV-1), 0, NV)';
-vx_d = linspace(-spc_d*(NV-1), 0, NV)';
-vs_i = FREE_SPD/3.6*0.1;
-vs_d = cong_spd/3.6*0.1;
+fprintf('Base DSV      : %d PCU/hr\n', round(BASE_DSV));
+fprintf('Reduced cap   : %d PCU/hr  (%.1f%% loss)\n', round(REDUCED_CAP), CAP_LOSS_PCT);
+fprintf('Ideal speed   : %d km/h\n', round(FREE_SPD));
+fprintf('Congested spd : %.1f km/h\n', CONG_SPD);
+fprintf('Defects       : %s\n\n', DEFECTS);
 
-%% ---- COLOURS ----
-CI = [0.11 0.62 0.46];
-CD = [0.89 0.29 0.28];
-RI = [0.55 0.58 0.62];
-RD = [0.50 0.52 0.55];
+%% ============================================================
+%% LAYOUT
+%% ============================================================
+RL    = 120;
+LH    = 10;
+TI    = 8;
+TD    = 55;
+VW    = 5;
+VH    = 6;
+NV    = 10;
+OX    = 68;
+RDH   = LH * NUM_LANES;
+BLKW  = max((BLOCKED_M/TOTAL_WIDTH_M)*RL*0.28, 3);
 
-%% ---- FIGURE ----
-fig = figure('Name','Road Digital Twin','Color',[0.09 0.11 0.14],...
-    'Position',[60 60 1200 680],'NumberTitle','off',...
-    'MenuBar','none','ToolBar','none');
-ax = axes('Parent',fig,'Position',[0.01 0.22 0.97 0.74],...
-    'XLim',[0 RL],'YLim',[0 70],...
-    'Color',[0.09 0.11 0.14],'XColor',[0.09 0.11 0.14],'YColor',[0.09 0.11 0.14]);
+LYI = arrayfun(@(l) TI + (l-0.5)*LH, 1:NUM_LANES);
+LYD = arrayfun(@(l) TD + (l-0.5)*LH, 1:NUM_LANES);
+
+SI   = FREE_SPD/3.6*0.18;
+SD   = CONG_SPD/3.6*0.18;
+SPCI = max(SI*(3600/max(BASE_DSV,1)),    VW+6);
+SPCD = max(SD*(3600/max(REDUCED_CAP,1)), VW+3);
+
+VXI = (-SPCI*(NV-1) : SPCI : 0)';
+VXD = (-SPCD*(NV-1) : SPCD : 0)';
+if length(VXI) > NV, VXI = VXI(1:NV); end
+if length(VXD) > NV, VXD = VXD(1:NV); end
+NVI = length(VXI);
+NVD = length(VXD);
+CURD = ones(NVD,1)*SD;
+
+%% ============================================================
+%% COLOURS
+%% ============================================================
+CBG  = [0.08 0.10 0.14];
+CRI  = [0.30 0.33 0.38];
+CRD  = [0.28 0.30 0.35];
+CGI  = [0.13 0.74 0.55];
+CGD  = [0.88 0.28 0.28];
+CSLO = [0.95 0.52 0.10];
+CTGI = [0.20 0.90 0.65];
+CTGD = [0.95 0.40 0.40];
+CW   = [1.00 1.00 1.00];
+CPH  = [0.20 0.14 0.14];
+CVN  = [0.95 0.70 0.10];
+CPK  = [0.80 0.20 0.20];
+CBR  = [0.95 0.50 0.10];
+
+%% ============================================================
+%% FIGURE
+%% ============================================================
+fig = figure('Name','Road Digital Twin','NumberTitle','off',...
+    'Color',CBG,'Position',[40 40 1280 700],...
+    'MenuBar','none','ToolBar','none','Resize','on');
+
+ax = axes('Parent',fig,'Position',[0.01 0.20 0.97 0.76],...
+    'XLim',[0 RL],'YLim',[0 100],...
+    'Color',CBG,'XColor',CBG,'YColor',CBG,...
+    'XTick',[],'YTick',[]);
 hold(ax,'on');
 
-%% ---- DRAW ROADS ----
-rectangle('Position',[0 TI RL LH*num_lanes],'FaceColor',RI,'EdgeColor','none');
-rectangle('Position',[0 TD RL LH*num_lanes],'FaceColor',RD,'EdgeColor','none');
+%% ============================================================
+%% STATIC ELEMENTS
+%% ============================================================
 
-for ln = 1:num_lanes-1
-    yd_i = TI+ln*LH; yd_d = TD+ln*LH;
-    for x = 0:8:RL
-        line([x x+4],[yd_i yd_i],'Color',[1 1 1 0.25],'LineWidth',1);
-        line([x x+4],[yd_d yd_d],'Color',[1 1 1 0.25],'LineWidth',1);
-    end
-end
-line([0 RL],[TI TI],'Color',[1 1 1],'LineWidth',2);
-line([0 RL],[TI+LH*num_lanes TI+LH*num_lanes],'Color',[1 1 1],'LineWidth',2);
-line([0 RL],[TD TD],'Color',[1 1 1],'LineWidth',2);
-line([0 RL],[TD+LH*num_lanes TD+LH*num_lanes],'Color',[1 1 1],'LineWidth',2);
+%% Ideal road surface
+patch([0 RL RL 0],[TI TI TI+RDH TI+RDH],CRI,'EdgeColor','none','Parent',ax);
 
-%% ---- BLOCKED ZONE ----
-rectangle('Position',[OX TD BPX LH*num_lanes],...
-    'FaceColor',[0.89 0.29 0.28 0.2],'EdgeColor',[0.89 0.29 0.28 0.5],'LineWidth',1);
-text(OX+BPX/2, TD+LH*num_lanes+1.5, sprintf('%.1fm blocked',blocked_m),...
-    'Color',[0.89 0.29 0.28],'FontSize',8,'HorizontalAlignment','center');
+%% Defect road surface
+patch([0 RL RL 0],[TD TD TD+RDH TD+RDH],CRD,'EdgeColor','none','Parent',ax);
 
-%% ---- DRAW DEFECTS ----
-if has_pothole
-    th = linspace(0,2*pi,40);
-    fill(OX+2+1.8*cos(th), TD+LH*0.4+0.9*sin(th),...
-        [0.25 0.18 0.18],'EdgeColor',[0.7 0.2 0.2],'LineWidth',1.5);
-    text(OX+2, TD+LH*0.4+2.8,'Pothole',...
-        'Color',[1 0.7 0.7],'FontSize',7,'HorizontalAlignment','center');
-end
-if has_vendor
-    rectangle('Position',[OX+BPX*0.5-1.5 TD+LH*0.55 3 2.5],...
-        'FaceColor',[0.95 0.68 0.10],'EdgeColor',[0.75 0.50 0],'Curvature',0.1);
-    text(OX+BPX*0.5, TD+LH*0.55+3.8,'Vendor',...
-        'Color',[0.95 0.82 0.20],'FontSize',7,'HorizontalAlignment','center');
-end
-if has_parking
-    rectangle('Position',[OX+BPX*0.4-2 TD+LH*0.8 4 2],...
-        'FaceColor',[0.89 0.29 0.28],'EdgeColor',[0.7 0.1 0.1],'Curvature',0.25);
-    text(OX+BPX*0.4, TD+LH*0.8-1.5,'Illegal Parking',...
-        'Color',[1 0.6 0.6],'FontSize',7,'HorizontalAlignment','center');
-end
-if has_barricade
-    for bi = 0:2
-        rectangle('Position',[OX+bi*1.8-0.3 TD 0.6 LH*num_lanes],...
-            'FaceColor',[0.95 0.50 0.10],'EdgeColor',[0.75 0.30 0]);
+%% Lane dividers
+for ln = 1:NUM_LANES-1
+    ydi = TI+ln*LH; ydd = TD+ln*LH;
+    for xs = 0:10:RL
+        xe = min(xs+5,RL);
+        line([xs xe],[ydi ydi],'Color',[1 1 1 0.28],'LineWidth',1.2,'Parent',ax);
+        line([xs xe],[ydd ydd],'Color',[1 1 1 0.22],'LineWidth',1.2,'Parent',ax);
     end
 end
 
-%% ---- LABELS ----
-text(RL*0.5, TI-2.5,'IDEAL ROAD - NO DEFECTS',...
-    'Color',CI,'FontSize',12,'FontWeight','bold','HorizontalAlignment','center');
-text(RL*0.5, TD-2.5,['DEFECT ROAD - ' upper(defects_found)],...
-    'Color',CD,'FontSize',12,'FontWeight','bold','HorizontalAlignment','center');
+%% Road edges
+line([0 RL],[TI TI],     'Color',CW,'LineWidth',2,'Parent',ax);
+line([0 RL],[TI+RDH TI+RDH],'Color',CW,'LineWidth',2,'Parent',ax);
+line([0 RL],[TD TD],     'Color',CW,'LineWidth',2,'Parent',ax);
+line([0 RL],[TD+RDH TD+RDH],'Color',CW,'LineWidth',2,'Parent',ax);
 
-%% ---- CAPACITY BARS ----
-BAX=88; BAW=4; BAH=16;
-rectangle('Position',[BAX TI+1 BAW BAH],'FaceColor',[0.10 0.28 0.16],'EdgeColor',CI);
-rectangle('Position',[BAX TI+1 BAW BAH],'FaceColor',CI,'EdgeColor','none');
-text(BAX+BAW/2, TI+BAH+2.5,sprintf('%d PCU/hr',round(base_dsv)),...
-    'Color',CI,'FontSize',8,'HorizontalAlignment','center');
+%% Blocked zone
+patch([OX OX+BLKW OX+BLKW OX],[TD TD TD+RDH TD+RDH],...
+    [0.8 0.15 0.15],'FaceAlpha',0.18,'EdgeColor',[0.9 0.2 0.2],...
+    'LineWidth',1.5,'Parent',ax);
+text(OX+BLKW/2,TD+RDH+2,sprintf('%.1f m blocked',BLOCKED_M),...
+    'Color',CTGD,'FontSize',8,'HorizontalAlignment','center','Parent',ax);
 
-rectangle('Position',[BAX TD+1 BAW BAH],'FaceColor',[0.24 0.08 0.08],'EdgeColor',CD);
-dh = BAH*(reduced_cap/base_dsv);
-fd = rectangle('Position',[BAX TD+1 BAW dh],'FaceColor',CD,'EdgeColor','none');
-text(BAX+BAW/2, TD+BAH+2.5,sprintf('%d PCU/hr',round(reduced_cap)),...
-    'Color',CD,'FontSize',8,'HorizontalAlignment','center');
+%% Defects
+draw_defects_fn(ax,OX,BLKW,TD,LH,NUM_LANES,...
+    HAS_POTHOLE,HAS_VENDOR,HAS_PARKING,HAS_BARRICADE,HAS_GARBAGE,...
+    CPH,CVN,CPK,CBR);
 
-%% ---- STATS PANEL ----
+%% Road labels
+text(RL*0.5,TI-3.5,'IDEAL ROAD  -  NO DEFECTS',...
+    'Color',CTGI,'FontSize',13,'FontWeight','bold',...
+    'HorizontalAlignment','center','Parent',ax);
+text(RL*0.5,TD-3.5,['DEFECT ROAD  -  ' upper(DEFECTS)],...
+    'Color',CTGD,'FontSize',13,'FontWeight','bold',...
+    'HorizontalAlignment','center','Parent',ax);
+
+%% Speed display
+spd_i_txt = text(4,TI+RDH/2,sprintf('%d km/h',round(FREE_SPD)),...
+    'Color',CTGI,'FontSize',10,'FontWeight','bold','Parent',ax);
+spd_d_txt = text(4,TD+RDH/2,sprintf('%.1f km/h',CONG_SPD),...
+    'Color',CTGD,'FontSize',10,'FontWeight','bold','Parent',ax);
+
+%% Capacity bars
+BX=110; BW=5; BH=RDH*0.85;
+patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...
+    [0.12 0.30 0.20],'EdgeColor',CTGI,'LineWidth',1,'Parent',ax);
+patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...
+    CGI,'EdgeColor','none','Parent',ax);
+text(BX+BW/2,TI+BH+3,sprintf('%d PCU/hr',round(BASE_DSV)),...
+    'Color',CTGI,'FontSize',8,'HorizontalAlignment','center','Parent',ax);
+
+patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+BH TD+1+BH],...
+    [0.28 0.08 0.08],'EdgeColor',CTGD,'LineWidth',1,'Parent',ax);
+DBH  = BH*(REDUCED_CAP/BASE_DSV);
+fd   = patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+DBH TD+1+DBH],...
+    CGD,'EdgeColor','none','Parent',ax);
+text(BX+BW/2,TD+BH+3,sprintf('%d PCU/hr',round(REDUCED_CAP)),...
+    'Color',CTGD,'FontSize',8,'HorizontalAlignment','center','Parent',ax);
+
+%% Stats panels
 NL = newline;
-annotation('rectangle',[0.01 0.01 0.47 0.18],'Color',CI,'LineWidth',1.5,'FaceColor',[0.04 0.14 0.09]);
-annotation('rectangle',[0.52 0.01 0.47 0.18],'Color',CD,'LineWidth',1.5,'FaceColor',[0.16 0.05 0.05]);
+annotation(fig,'rectangle',[0.01 0.01 0.48 0.17],...
+    'Color',CTGI,'LineWidth',1.5,'FaceColor',[0.04 0.14 0.09]);
+annotation(fig,'rectangle',[0.51 0.01 0.48 0.17],...
+    'Color',CTGD,'LineWidth',1.5,'FaceColor',[0.16 0.05 0.05]);
 
-s1 = ['IDEAL ROAD' NL ...
-      sprintf('DSV : %d PCU/hr', round(base_dsv)) NL ...
-      sprintf('Speed : %d km/h  |  Lanes : %d', round(FREE_SPD), num_lanes) NL ...
-      sprintf('Carriageway : %s', strrep(image_name,'.jpg',''))];
-annotation('textbox',[0.01 0.01 0.47 0.18],'String',s1,...
-    'Color',[0.80 0.96 0.88],'FontSize',10,'FontName','Courier New',...
+s1 = ['IDEAL ROAD (IRC:106-1990)' NL ...
+      sprintf('Design Service Volume : %d PCU/hr',round(BASE_DSV)) NL ...
+      sprintf('Free-flow speed       : %d km/h',round(FREE_SPD)) NL ...
+      sprintf('Lanes : %d  |  Full capacity : 100%%',NUM_LANES)];
+annotation(fig,'textbox',[0.01 0.01 0.48 0.17],'String',s1,...
+    'Color',[0.78 0.95 0.86],'FontSize',10,'FontName','Courier New',...
     'EdgeColor','none','VerticalAlignment','middle','HorizontalAlignment','center');
 
-s2 = ['DEFECT ROAD' NL ...
-      sprintf('Capacity : %d PCU/hr  (-%.1f%%)', round(reduced_cap), cap_loss_pct) NL ...
-      sprintf('Speed : %.1f km/h  |  Width factor : %.3f', cong_spd, width_factor) NL ...
-      sprintf('Pothole penalty : %.2f  |  Blocked : %.1f m', pothole_penalty, blocked_m)];
-annotation('textbox',[0.52 0.01 0.47 0.18],'String',s2,...
+s2 = ['DEFECT ROAD (Current State)' NL ...
+      sprintf('Reduced Capacity : %d PCU/hr  (-%.1f%%)',round(REDUCED_CAP),CAP_LOSS_PCT) NL ...
+      sprintf('Congested speed  : %.1f km/h  (was %d km/h)',CONG_SPD,round(FREE_SPD)) NL ...
+      sprintf('Width factor : %.3f  |  Pothole penalty : %.2f',WIDTH_FACTOR,POTHOLE_PENALTY)];
+annotation(fig,'textbox',[0.51 0.01 0.48 0.17],'String',s2,...
     'Color',[0.98 0.78 0.78],'FontSize',10,'FontName','Courier New',...
     'EdgeColor','none','VerticalAlignment','middle','HorizontalAlignment','center');
 
-ttl = sprintf('Indian Road Digital Twin  |  %s  |  Loss: %.1f%%', image_name, cap_loss_pct);
-annotation('textbox',[0.01 0.94 0.98 0.05],'String',ttl,...
-    'Color',[0.95 0.95 0.95],'FontSize',12,'FontWeight','bold',...
+annotation(fig,'textbox',[0.01 0.94 0.98 0.05],...
+    'String',sprintf('Indian Road Digital Twin  |  Loss: %.1f%%  |  %s',CAP_LOSS_PCT,DEFECTS),...
+    'Color',[0.95 0.95 0.95],'FontSize',11,'FontWeight','bold',...
     'EdgeColor','none','HorizontalAlignment','center','FaceColor','none');
 
-%% ---- VEHICLE PATCHES ----
-vpi = gobjects(NV,1);
-vpd = gobjects(NV,1);
-for v = 1:NV
-    ln = mod(v-1,num_lanes)+1;
-    vpi(v) = rectangle('Position',[vx_i(v) ly_i(ln)-VH/2 VL VH],...
-        'FaceColor',CI,'EdgeColor',[1 1 1 0.2],'Curvature',[0.3 0.4]);
-    vpd(v) = rectangle('Position',[vx_d(v) ly_d(ln)-VH/2 VL VH],...
-        'FaceColor',CD,'EdgeColor',[1 1 1 0.2],'Curvature',[0.3 0.4]);
+%% ============================================================
+%% VEHICLE PATCHES
+%% ============================================================
+vi = gobjects(NVI,1);
+vd = gobjects(NVD,1);
+sl = gobjects(NVD,1);
+
+for v = 1:NVI
+    ln = mod(v-1,NUM_LANES)+1;
+    yi = LYI(ln)-VH/2;
+    vi(v) = patch(VXI(v)+[0 VW VW 0],yi+[0 0 VH VH],...
+        CGI,'EdgeColor',[1 1 1 0.2],'LineWidth',0.5,'Parent',ax);
+end
+for v = 1:NVD
+    ln = mod(v-1,NUM_LANES)+1;
+    yd = LYD(ln)-VH/2;
+    vd(v) = patch(VXD(v)+[0 VW VW 0],yd+[0 0 VH VH],...
+        CGD,'EdgeColor',[1 1 1 0.2],'LineWidth',0.5,'Parent',ax);
+    sl(v) = text(VXD(v)+VW/2,yd+VH+1.8,'',...
+        'Color',[1.0 0.85 0.40],'FontSize',7,...
+        'HorizontalAlignment','center','Parent',ax);
 end
 
-%% ---- ANIMATION ----
-fprintf('\nDigital Twin running. Close figure to stop.\n');
-fprintf('Base DSV  : %d PCU/hr\n', round(base_dsv));
-fprintf('Reduced   : %d PCU/hr  (-%.1f%%)\n', round(reduced_cap), cap_loss_pct);
-fprintf('Defects   : %s\n\n', defects_found);
+%% ============================================================
+%% VIDEO WRITER
+%% ============================================================
+vw = [];
+if SAVE_VIDEO
+    try
+        vw = VideoWriter('roadtwin_video.avi','Motion JPEG AVI');
+        vw.FrameRate = VIDEO_FPS;
+        vw.Quality   = 90;
+        open(vw);
+        fprintf('Recording %d sec video at %d fps...\n',VIDEO_SEC,VIDEO_FPS);
+    catch me
+        fprintf('Video writer error: %s\n',me.message);
+        vw = [];
+    end
+end
+total_frames = VIDEO_SEC * VIDEO_FPS;
+fc   = 0;
+simt = 0;
+DT   = 0.05;
 
-st = 0;
+%% ============================================================
+%% ANIMATION LOOP
+%% ============================================================
+fprintf('Running. Close figure to stop.\n\n');
+
 while isvalid(fig)
-    st = st + 0.05;
+    simt = simt + DT;
+    fc   = fc   + 1;
 
-    %% Ideal — constant speed
-    vx_i = vx_i + vs_i;
-    wr = vx_i > RL+VL;
-    if any(wr)
-        vx_i(wr) = min(vx_i(~wr)) - spc_i*(1:sum(wr))';
+    %% Ideal vehicles - constant speed
+    VXI = VXI + SI;
+    wi  = VXI > RL+VW;
+    if any(wi)
+        mn = min(VXI(~wi));
+        c  = sum(wi);
+        VXI(wi) = mn - SPCI*(1:c)';
     end
 
-    %% Defect — slow near obstacle
-    for v = 1:NV
-        x = vx_d(v);
-        d = OX - x;
-        if d > 0 && d < spc_d*3
-            sp = vs_d*(0.25 + 0.75*min(1, d/(spc_d*2)));
-        elseif x >= OX && x <= OX+BPX
-            sp = vs_d*0.25;
-        elseif x > OX+BPX
-            sp = vs_d*(0.25 + 0.75*min(1,(x-OX-BPX)/20));
-        else
-            sp = vs_d;
-        end
-        vx_d(v) = vx_d(v) + sp;
-    end
-    wr2 = vx_d > RL+VL;
-    if any(wr2)
-        vx_d(wr2) = min(vx_d(~wr2)) - spc_d*(1:sum(wr2))';
-    end
-
-    %% Update patches
-    for v = 1:NV
-        ln = mod(v-1,num_lanes)+1;
-        x  = vx_d(v);
+    %% Defect vehicles - physics speed
+    for v = 1:NVD
+        x  = VXD(v);
         d  = OX - x;
-        if x >= OX && x <= OX+BPX
-            col = [0.95 0.50 0.10];
-        elseif d > 0 && d < spc_d*3
-            a = 1 - d/(spc_d*3);
-            col = CD*(1-a) + [0.95 0.50 0.10]*a;
+        if d > SPCD*4
+            tsp = SD;
+        elseif d > 0
+            tsp = SD*(0.20 + 0.80*d/(SPCD*4));
+        elseif x >= OX && x <= OX+BLKW
+            tsp = SD*0.15;
         else
-            col = CD;
+            rec = min(1,(x-OX-BLKW)/(SPCD*6));
+            tsp = SD*(0.20 + 0.80*rec);
         end
-        set(vpi(v),'Position',[vx_i(v) ly_i(ln)-VH/2 VL VH]);
-        set(vpd(v),'Position',[vx_d(v) ly_d(ln)-VH/2 VL VH],'FaceColor',col);
+        CURD(v) = CURD(v) + (tsp-CURD(v))*0.15;
+        VXD(v)  = VXD(v)  + CURD(v);
+    end
+    wd = VXD > RL+VW;
+    if any(wd)
+        mn = min(VXD(~wd));
+        c  = sum(wd);
+        VXD(wd)  = mn - SPCD*(1:c)';
+        CURD(wd) = SD*0.5;
     end
 
-    %% Pulse defect bar
-    ph = dh*(0.88 + 0.12*sin(st*2.5));
-    set(fd,'Position',[BAX TD+1 BAW min(ph,BAH)]);
+    %% Update ideal patches
+    for v = 1:NVI
+        set(vi(v),'XData',VXI(v)+[0 VW VW 0]);
+    end
+
+    %% Update defect patches + speed labels
+    avg_kmh = 0; vis_cnt = 0;
+    for v = 1:NVD
+        ln = mod(v-1,NUM_LANES)+1;
+        yd = LYD(ln)-VH/2;
+        x  = VXD(v);
+        sr = CURD(v)/SD;
+        if sr > 0.75
+            col = CGD;
+        elseif sr > 0.35
+            a   = (0.75-sr)/0.40;
+            col = CGD*(1-a)+CSLO*a;
+        else
+            col = CSLO;
+        end
+        set(vd(v),'XData',x+[0 VW VW 0],...
+                  'YData',yd+[0 0 VH VH],...
+                  'FaceColor',col);
+        kmh = sr*CONG_SPD;
+        if x > -VW && x < RL
+            set(sl(v),'Position',[x+VW/2 yd+VH+1.8 0],...
+                      'String',sprintf('%.0f',kmh));
+            avg_kmh = avg_kmh + kmh;
+            vis_cnt = vis_cnt + 1;
+        else
+            set(sl(v),'String','');
+        end
+    end
+
+    if vis_cnt > 0
+        set(spd_d_txt,'String',sprintf('avg %.1f km/h',avg_kmh/vis_cnt));
+    end
+
+    %% Pulse capacity bar
+    ph = DBH*(0.88+0.12*sin(simt*2.8));
+    set(fd,'YData',[TD+1 TD+1 TD+1+ph TD+1+ph]);
 
     drawnow limitrate;
-    pause(0.012);
+
+    %% Write video frame
+    if ~isempty(vw) && fc <= total_frames
+        try
+            writeVideo(vw,getframe(fig));
+        catch
+        end
+        if fc == total_frames
+            close(vw);
+            vw = [];
+            fprintf('Video saved: roadtwin_video.avi\n');
+        end
+    end
+
+    pause(0.01);
 end
-fprintf('Stopped.\n');
+
+if ~isempty(vw)
+    try, close(vw); catch, end
+    fprintf('Video saved: roadtwin_video.avi\n');
 end
+fprintf('Done.\n');
+
+end %% function roadtwin
+
+
+%% ============================================================
+%% DRAW DEFECT OBJECTS
+%% ============================================================
+function draw_defects_fn(ax,OX,BLKW,RDT,LH,NL,...
+        has_ph,has_vn,has_pk,has_br,has_gb,...
+        CPH,CVN,CPK,CBR)
+
+RDH  = LH*NL;
+midy = RDT + RDH*0.35;
+
+if has_ph
+    th   = linspace(0,2*pi,60);
+    prx  = min(BLKW*0.28,3.5);
+    pry  = min(LH*0.28,2.0);
+    pcx  = OX+BLKW*0.25;
+    pcy  = midy;
+    fill(pcx+prx*cos(th),pcy+pry*sin(th),...
+        CPH,'EdgeColor',[0.65 0.18 0.18],'LineWidth',2,'Parent',ax);
+    for ang = 0:60:300
+        r1=prx*0.7; r2=prx*1.35; ar=deg2rad(ang);
+        line([pcx+r1*cos(ar) pcx+r2*cos(ar)],...
+             [pcy+r1*sin(ar) pcy+r2*sin(ar)],...
+             'Color',[0.55 0.18 0.18],'LineWidth',1,'Parent',ax);
+    end
+    text(pcx,pcy-pry-1.5,'Pothole',...
+        'Color',[1 0.70 0.70],'FontSize',8,'FontWeight','bold',...
+        'HorizontalAlignment','center','Parent',ax);
+end
+
+if has_vn
+    vx=OX+BLKW*0.55; vy=RDT+RDH*0.55;
+    vw2=min(BLKW*0.35,5); vh2=LH*0.40;
+    patch(vx+[0 vw2 vw2 0],vy+[0 0 vh2 vh2],...
+        CVN,'EdgeColor',[0.75 0.50 0],'LineWidth',1.5,'Parent',ax);
+    patch(vx-0.5+[0 vw2+1 vw2+1 0],vy+vh2+[0 0 1.2 1.2],...
+        [0.95 0.40 0.10],'EdgeColor',[0.75 0.30 0],'Parent',ax);
+    text(vx+vw2/2,vy+vh2+2.8,'Street Vendor',...
+        'Color',[0.95 0.82 0.20],'FontSize',8,'FontWeight','bold',...
+        'HorizontalAlignment','center','Parent',ax);
+end
+
+if has_pk
+    px=OX+BLKW*0.45; py=RDT+RDH*0.72;
+    pw=min(BLKW*0.45,6.5); phh=LH*0.36;
+    patch(px+[0 pw pw 0],py+[0 0 phh phh],...
+        CPK,'EdgeColor',[0.70 0.10 0.10],'LineWidth',1.5,'Parent',ax);
+    patch(px+pw*0.55+[0 pw*0.30 pw*0.30 0],...
+          py+[phh*0.15 phh*0.15 phh*0.85 phh*0.85],...
+          [0.30 0.55 0.80],'EdgeColor','none','Parent',ax);
+    text(px+pw/2,py-1.8,'Illegal Parking',...
+        'Color',[1 0.60 0.60],'FontSize',8,'FontWeight','bold',...
+        'HorizontalAlignment','center','Parent',ax);
+end
+
+if has_br
+    for bi=0:2
+        bx=OX+bi*(BLKW/3.5);
+        patch(bx+[0 1.2 1.2 0],RDT+[0 0 RDH RDH],...
+            CBR,'EdgeColor',[0.75 0.30 0],'LineWidth',1,'Parent',ax);
+    end
+    text(OX+BLKW*0.5,RDT+RDH+2.5,'Barricade',...
+        'Color',[1.0 0.75 0.40],'FontSize',8,'FontWeight','bold',...
+        'HorizontalAlignment','center','Parent',ax);
+end
+
+if has_gb
+    gx=OX+BLKW*0.68; gy=RDT+RDH*0.45;
+    patch(gx+[0 3.5 4 0.5],gy+[0 0 2.5 2.5],...
+        [0.42 0.55 0.28],'EdgeColor',[0.30 0.42 0.18],'Parent',ax);
+    text(gx+2,gy-1.5,'Garbage',...
+        'Color',[0.78 0.92 0.50],'FontSize',8,...
+        'HorizontalAlignment','center','Parent',ax);
+end
+
+end %% function draw_defects_fn
