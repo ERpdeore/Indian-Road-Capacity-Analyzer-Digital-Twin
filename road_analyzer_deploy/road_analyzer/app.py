@@ -156,6 +156,23 @@ def _new_job(prefix: str) -> tuple[str, Path]:
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Pre-load the YOLO model at startup so first request is fast."""
+    import threading
+    def _warm():
+        try:
+            if Path(MODEL_PATH).exists():
+                logger.info("Startup: pre-loading YOLO model...")
+                get_analyzer()
+                logger.info("Startup: YOLO model ready.")
+            else:
+                logger.warning("Startup: model not found at %s", MODEL_PATH)
+        except Exception as e:
+            logger.warning("Startup: model pre-load failed: %s", e)
+    threading.Thread(target=_warm, daemon=True).start()
+
+
 @app.get("/")
 def serve_index():
     index_path = STATIC_DIR / "index.html"
