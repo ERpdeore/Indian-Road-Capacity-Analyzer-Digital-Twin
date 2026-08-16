@@ -113,6 +113,27 @@ FRINGE_CONDITION_DESC: Dict[str, str] = {
 }
 
 # ================================================================
+# IRC Free Flow Speeds (km/h) — carriageway type + fringe condition
+# Source: IRC:64-1990 and IRC:106-1990 design speed guidance
+# ================================================================
+IRC_FREE_FLOW_SPEED: Dict[str, Dict[str, int]] = {
+    "2lane_oneway":    {"arterial": 50, "sub_arterial": 40, "collector": 30},
+    "2lane_twoway":    {"arterial": 50, "sub_arterial": 40, "collector": 30},
+    "3lane_oneway":    {"arterial": 65, "sub_arterial": 50, "collector": 40},
+    "4lane_undivided": {"arterial": 65, "sub_arterial": 50, "collector": 40},
+    "4lane_divided":   {"arterial": 80, "sub_arterial": 65, "collector": 50},
+    "6lane_undivided": {"arterial": 80, "sub_arterial": 65, "collector": 50},
+    "6lane_divided":   {"arterial": 100,"sub_arterial": 80, "collector": 65},
+    "8lane_divided":   {"arterial": 120,"sub_arterial": 100,"collector": 80},
+}
+
+
+def get_free_flow_speed(carriageway_key: str, fringe_condition: str) -> int:
+    """Return IRC design free-flow speed (km/h) for given road type and fringe."""
+    row = IRC_FREE_FLOW_SPEED.get(carriageway_key, {})
+    return row.get(fringe_condition, 50)
+
+# ================================================================
 # IRC:106-1990 — PCU Conversion Factors by Traffic Composition
 # Source: IRC:106-1990, Table 1
 #
