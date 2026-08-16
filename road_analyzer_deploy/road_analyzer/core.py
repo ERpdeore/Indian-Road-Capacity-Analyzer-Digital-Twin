@@ -471,7 +471,13 @@ class RoadAnalyzer:
         return self._depth_estimator
 
     def _run_predict_once(self, image_path: str) -> Tuple[List[dict], int, int]:
-        pred      = self.model.predict(str(image_path), conf=0.25, verbose=False)[0]
+        # imgsz=640 is YOLOv8 default — reduces to 640px before inference
+        # half=False keeps float32 (required on CPU, half only works on GPU)
+        # device='cpu' explicit — avoids CUDA check overhead
+        pred      = self.model.predict(
+            str(image_path), conf=0.25, verbose=False,
+            imgsz=640, device='cpu', half=False
+        )[0]
         boxes     = pred.boxes
         raw_count = 0 if boxes is None else len(boxes)
         raw_detections = []
@@ -490,13 +496,9 @@ class RoadAnalyzer:
 
     def _detect(self, image_path: str) -> Tuple[List[dict], int]:
         self._call_count += 1
-        is_warmup = self._call_count <= self.WARMUP_CALL_WINDOW
         kept, vetoed, raw_count = self._run_predict_once(image_path)
         logger.info("detect: call#%d image=%s raw=%d kept=%d vetoed=%d",
                     self._call_count, Path(image_path).name, raw_count, len(kept), vetoed)
-        if raw_count == 0 and is_warmup:
-            logger.warning("detect: call#%d zero boxes in warmup — retrying.", self._call_count)
-            kept, vetoed, raw_count = self._run_predict_once(image_path)
         return kept, vetoed
 
     # ----------------------------------------------------------
