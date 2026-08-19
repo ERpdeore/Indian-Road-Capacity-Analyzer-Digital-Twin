@@ -180,6 +180,34 @@ def _road_config_from_form(
     }
 
 
+def _to_results_url(path_str: Optional[str]) -> Optional[str]:
+    """Convert an absolute filesystem path under RESULTS_DIR into a URL
+    the browser can actually fetch via the /results static mount above.
+    Department report paths coming out of core.py are absolute disk
+    paths (needed for opening the file server-side) — without this
+    conversion the dashboard has no usable link to put in <a href>."""
+    if not path_str:
+        return None
+    try:
+        rel = Path(path_str).resolve().relative_to(RESULTS_DIR.resolve())
+        return f"/results/{rel.as_posix()}"
+    except ValueError:
+        return None
+
+
+def _urlify_department_reports(result: dict) -> None:
+    dept = result.get("department_reports")
+    if isinstance(dept, dict):
+        for k, v in list(dept.items()):
+            dept[k] = _to_results_url(v)
+    speed = result.get("speed_detection")
+    if isinstance(speed, dict) and speed.get("traffic_csv"):
+        speed["traffic_csv"] = _to_results_url(speed["traffic_csv"])
+        for flag in speed.get("flags", []):
+            if flag.get("evidence_image_path"):
+                flag["evidence_image_path"] = _to_results_url(flag["evidence_image_path"])
+
+
 def _new_job(prefix: str) -> tuple[str, Path]:
     job_id  = f"{prefix}_{uuid.uuid4().hex[:10]}"
     job_dir = RESULTS_DIR / job_id
@@ -191,6 +219,13 @@ def _new_job(prefix: str) -> tuple[str, Path]:
 # Static frontend
 # ----------------------------------------------------------------
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# BUG FIX: department report CSVs (traffic_dept/, pwd_dept/, municipal_dept/,
+# combined_summary.json, evidence crops) written under results/<job_id>/ were
+# never reachable by the browser — nothing mounted RESULTS_DIR. The frontend
+# had file paths to show/download but every link 404'd. StaticFiles rejects
+# path-traversal attempts (../) on its own, same as the /static mount above.
+app.mount("/results", StaticFiles(directory=str(RESULTS_DIR)), name="results")
 
 
 @app.on_event("startup")
@@ -290,6 +325,7 @@ async def analyze_image(
     json_path = result.pop("_json_path", None)
     result.pop("_csv_path", None)
     result["job_id"] = job_id
+    _urlify_department_reports(result)
 
     # Trigger MATLAB Digital Twin simulation in background
     if _DT_ENABLED and json_path:
@@ -314,6 +350,8 @@ def _run_batch_job(job_id: str, job_dir: Path,
         analyzer = get_analyzer()
         summary  = analyzer.analyse_batch(image_paths, road_config, output_dir=str(job_dir))
         summary.pop("_json_path", None)
+        for r in summary.get("per_image", []):
+            _urlify_department_reports(r)
         JOBS[job_id] = {"status": "done", "result": summary}
         logger.info("Batch job %s done — %d images", job_id, len(image_paths))
     except Exception as e:
@@ -358,15 +396,19 @@ async def analyze_batch(
 # VIDEO MODE
 # ----------------------------------------------------------------
 def _run_video_job(job_id: str, job_dir: Path, video_path: str,
-                    road_config: dict, sample_every_sec: float):
+                    road_config: dict, sample_every_sec: float,
+                    enable_speed_detection: bool, speed_limit_kmh: Optional[float]):
     try:
         analyzer = get_analyzer()
         summary  = analyzer.analyse_video(
             video_path, road_config,
             output_dir=str(job_dir),
             sample_every_sec=sample_every_sec,
+            enable_speed_detection=enable_speed_detection,
+            speed_limit_kmh=speed_limit_kmh,
         )
         summary.pop("_json_path", None)
+        _urlify_department_reports(summary)
         JOBS[job_id] = {"status": "done", "result": summary}
         logger.info("Video job %s done", job_id)
     except Exception as e:
@@ -385,6 +427,8 @@ async def analyze_video(
     usable_shoulder_m: float = Form(...),
     sample_every_sec:  float = Form(1.0),
     traffic_regime:    str   = Form("low"),
+    enable_speed_detection: bool = Form(False),
+    speed_limit_kmh:   Optional[float] = Form(None),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
@@ -399,9 +443,10 @@ async def analyze_video(
 
     JOBS[job_id] = {"status": "running"}
     background_tasks.add_task(
-        _run_video_job, job_id, job_dir, str(dest), road_config, sample_every_sec
+        _run_video_job, job_id, job_dir, str(dest), road_config,
+        sample_every_sec, enable_speed_detection, speed_limit_kmh,
     )
-    logger.info("Video job %s started", job_id)
+    logger.info("Video job %s started (speed_detection=%s)", job_id, enable_speed_detection)
     return {"job_id": job_id, "status": "running"}
 
 
