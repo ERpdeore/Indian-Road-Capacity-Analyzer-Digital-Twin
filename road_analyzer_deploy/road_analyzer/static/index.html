@@ -65,6 +65,18 @@
             <span class="field-hint">Lower = more thorough, slower to process</span>
           </div>
 
+          <!-- speed/challan detection row (video mode only, hidden by default) -->
+          <div class="field-row" id="speed-detect-row" style="display:none;">
+            <label class="field-label" for="enable-speed-detection">
+              <input type="checkbox" id="enable-speed-detection" name="enable_speed_detection">
+              Detect overspeeding vehicles
+            </label>
+            <input type="number" id="speed-limit-kmh" name="speed_limit_kmh"
+                   step="1" min="1" max="150" placeholder="Speed limit (km/h)"
+                   class="field-select" style="display:none; width:140px;">
+            <span class="field-hint">Slower — tracks every video frame, not just sampled ones</span>
+          </div>
+
           <!-- photo tips -->
           <div class="photo-tips-box">
             <div class="photo-tips-title">📷 For best detection accuracy</div>
