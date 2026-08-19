@@ -159,22 +159,75 @@
     model_loaded: true,
   };
 
+  // Has the user actually touched the carriageway/fringe/regime controls?
+  // Once true, a later config refresh (e.g. the real backend response
+  // arriving after the hardcoded fallback) must NOT overwrite their choice.
+  let userTouchedConfig = false;
+
+  // Rebuild the fringe <select> so it only contains options that are valid
+  // for the currently chosen carriageway. Rebuilding (rather than leaving
+  // every option in the DOM and toggling `.disabled`) avoids the browser-
+  // dependent quirks around disabled-but-selected <option> elements that
+  // were causing the carriageway/frontage selection to misbehave.
+  function rebuildFringeOptions(data, carriagewayKey, preferredFringe) {
+    if (!fringeSel) return;
+    const opt = (data.carriageway_options || []).find((o) => o.key === carriagewayKey);
+    const allowed = opt ? (opt.available_fringes || []) : Object.keys(
+      Object.fromEntries((data.fringe_conditions || []).map((f) => [f.key, true]))
+    );
+    const fringeList = (data.fringe_conditions || []).filter((f) => allowed.includes(f.key));
+
+    fringeSel.innerHTML = fringeList
+      .map((f) => `<option value="${f.key}">${titleCase(f.key)}</option>`)
+      .join("");
+
+    // Keep the user's previous fringe choice if it's still valid for the
+    // newly selected carriageway type; otherwise fall back to the first
+    // allowed option.
+    if (preferredFringe && allowed.includes(preferredFringe)) {
+      fringeSel.value = preferredFringe;
+    } else if (fringeList.length) {
+      fringeSel.value = fringeList[0].key;
+    }
+
+    if (fringeDescEl) {
+      const fc = fringeList.find((f) => f.key === fringeSel.value);
+      fringeDescEl.textContent = fc ? fc.description : "";
+    }
+  }
+
   function populateDropdowns(data) {
+    // Remember what the user had selected before this (re)populate, so a
+    // background config refresh never silently discards their in-progress
+    // selection — this was the root cause of the recurring carriageway /
+    // frontage-condition selection bug.
+    const prevCarriageway = carriagewaySel ? carriagewaySel.value : null;
+    const prevFringe      = fringeSel ? fringeSel.value : null;
+    const prevRegime      = regimeSel ? regimeSel.value : null;
+
     configData = data;
+
+    if (userTouchedConfig) {
+      // The user already interacted with the form (most likely: the
+      // fallback config loaded first, they picked options, and now the
+      // real /api/config-options response has arrived). Only refresh the
+      // underlying data model — do NOT touch the DOM selections.
+      return;
+    }
 
     // --- Carriageway dropdown ---
     if (carriagewaySel) {
       carriagewaySel.innerHTML = (data.carriageway_options || [])
         .map((o) => `<option value="${o.key}">${o.label}</option>`)
         .join("");
+      const cwOptions = (data.carriageway_options || []).map((o) => o.key);
+      carriagewaySel.value = (prevCarriageway && cwOptions.includes(prevCarriageway))
+        ? prevCarriageway
+        : (cwOptions[0] || "");
     }
 
-    // --- Fringe dropdown ---
-    if (fringeSel) {
-      fringeSel.innerHTML = (data.fringe_conditions || [])
-        .map((f) => `<option value="${f.key}">${titleCase(f.key)}</option>`)
-        .join("");
-    }
+    // --- Fringe dropdown (scoped to the selected carriageway) ---
+    rebuildFringeOptions(data, carriagewaySel ? carriagewaySel.value : null, prevFringe);
 
     // --- Traffic regime dropdown ---
     if (regimeSel) {
@@ -185,26 +238,17 @@
             : "High — ≥15% heavy vehicles (trucks, buses)"
         }</option>`)
         .join("");
+      const regimeOptions = (data.traffic_regimes || []).map((r) => r.key);
+      regimeSel.value = (prevRegime && regimeOptions.includes(prevRegime))
+        ? prevRegime
+        : (regimeOptions[0] || "");
     }
 
-    // Wire up carriageway change — filter fringe options
+    // Wire up carriageway change — rebuild fringe options for the new type
     if (carriagewaySel) {
       carriagewaySel.onchange = () => {
-        const opt = (data.carriageway_options || []).find((o) => o.key === carriagewaySel.value);
-        if (opt && fringeSel) {
-          Array.from(fringeSel.options).forEach((el) => {
-            el.disabled = !(opt.available_fringes || []).includes(el.value);
-          });
-          if (fringeSel.options[fringeSel.selectedIndex] &&
-              fringeSel.options[fringeSel.selectedIndex].disabled) {
-            const first = Array.from(fringeSel.options).find((el) => !el.disabled);
-            if (first) fringeSel.value = first.value;
-          }
-          if (fringeDescEl) {
-            const fc = (data.fringe_conditions || []).find((f) => f.key === fringeSel.value);
-            fringeDescEl.textContent = fc ? fc.description : "";
-          }
-        }
+        userTouchedConfig = true;
+        rebuildFringeOptions(configData, carriagewaySel.value, fringeSel ? fringeSel.value : null);
         updateDsvPreview();
       };
     }
@@ -212,8 +256,9 @@
     // Wire up fringe change
     if (fringeSel) {
       fringeSel.onchange = () => {
+        userTouchedConfig = true;
         if (fringeDescEl) {
-          const fc = (data.fringe_conditions || []).find((f) => f.key === fringeSel.value);
+          const fc = (configData.fringe_conditions || []).find((f) => f.key === fringeSel.value);
           fringeDescEl.textContent = fc ? fc.description : "";
         }
         updateDsvPreview();
@@ -223,8 +268,9 @@
     // Wire up regime change
     if (regimeSel) {
       regimeSel.onchange = () => {
+        userTouchedConfig = true;
         if (regimeDescEl) {
-          const r = (data.traffic_regimes || []).find((x) => x.key === regimeSel.value);
+          const r = (configData.traffic_regimes || []).find((x) => x.key === regimeSel.value);
           regimeDescEl.textContent = r ? r.description : "";
         }
         updateDsvPreview();
@@ -232,8 +278,8 @@
       regimeSel.onchange();
     }
 
-    // Trigger initial updates
-    if (carriagewaySel) carriagewaySel.onchange();
+    // Initial DSV preview for the defaults chosen above
+    updateDsvPreview();
 
     // Model status
     if (!data.model_loaded) {
@@ -812,8 +858,8 @@
       'SPCI=max(SI*(3600/max(base_dsv,1)), VL+5);',
       'SPCD=max(SD*(3600/max(reduced_cap,1)), VL+3);',
       '',
-      'VXI=(-SPCI*(NV-1):SPCI:0)'';',
-      'VXD=(-SPCD*(NV-1):SPCD:0)'';',
+      'VXI=(-SPCI*(NV-1):SPCI:0)\';',
+      'VXD=(-SPCD*(NV-1):SPCD:0)\';',
       'if length(VXI)>NV, VXI=VXI(1:NV); end',
       'if length(VXD)>NV, VXD=VXD(1:NV); end',
       'NVI=length(VXI); NVD=length(VXD);',
@@ -823,116 +869,116 @@
       'CGI=[0.13 0.74 0.55]; CGD=[0.88 0.28 0.28]; CSL=[0.95 0.52 0.10];',
       'CW=[1 1 1];',
       '',
-      'fig=figure(''Name'',''Road Digital Twin'',''NumberTitle'',''off'',''Color'',CBG,...',
-      '    ''Position'',[40 40 1280 700],''MenuBar'',''none'',''ToolBar'',''none'');',
-      'ax=axes(''Parent'',fig,''Position'',[0.01 0.20 0.97 0.76],...',
-      '    ''XLim'',[0 RL],''YLim'',[0 70],''Color'',CBG,...',
-      '    ''XColor'',CBG,''YColor'',CBG,''XTick'',[],''YTick'',[]);',
-      'hold(ax,''on'');',
+      "fig=figure(''Name'',''Road Digital Twin'',''NumberTitle'',''off'',''Color'',CBG,...",
+      "    ''Position'',[40 40 1280 700],''MenuBar'',''none'',''ToolBar'',''none'');",
+      "ax=axes(''Parent'',fig,''Position'',[0.01 0.20 0.97 0.76],...",
+      "    ''XLim'',[0 RL],''YLim'',[0 70],''Color'',CBG,...",
+      "    ''XColor'',CBG,''YColor'',CBG,''XTick'',[],''YTick'',[]);",
+      "hold(ax,''on'');",
       '',
-      'patch([0 RL RL 0],[TI TI TI+RDH TI+RDH],CRI,''EdgeColor'',''none'',''Parent'',ax);',
-      'patch([0 RL RL 0],[TD TD TD+RDH TD+RDH],CRD,''EdgeColor'',''none'',''Parent'',ax);',
+      "patch([0 RL RL 0],[TI TI TI+RDH TI+RDH],CRI,''EdgeColor'',''none'',''Parent'',ax);",
+      "patch([0 RL RL 0],[TD TD TD+RDH TD+RDH],CRD,''EdgeColor'',''none'',''Parent'',ax);",
       '',
       'for ln=1:num_lanes-1',
       '    ydi=TI+ln*LH; ydd=TD+ln*LH;',
       '    for xs=0:10:RL',
       '        xe=min(xs+5,RL);',
-      '        line([xs xe],[ydi ydi],''Color'',[1 1 1 0.25],''LineWidth'',1,''Parent'',ax);',
-      '        line([xs xe],[ydd ydd],''Color'',[1 1 1 0.20],''LineWidth'',1,''Parent'',ax);',
+      "        line([xs xe],[ydi ydi],''Color'',[1 1 1 0.25],''LineWidth'',1,''Parent'',ax);",
+      "        line([xs xe],[ydd ydd],''Color'',[1 1 1 0.20],''LineWidth'',1,''Parent'',ax);",
       '    end',
       'end',
-      'line([0 RL],[TI TI],''Color'',CW,''LineWidth'',2,''Parent'',ax);',
-      'line([0 RL],[TI+RDH TI+RDH],''Color'',CW,''LineWidth'',2,''Parent'',ax);',
-      'line([0 RL],[TD TD],''Color'',CW,''LineWidth'',2,''Parent'',ax);',
-      'line([0 RL],[TD+RDH TD+RDH],''Color'',CW,''LineWidth'',2,''Parent'',ax);',
+      "line([0 RL],[TI TI],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
+      "line([0 RL],[TI+RDH TI+RDH],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
+      "line([0 RL],[TD TD],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
+      "line([0 RL],[TD+RDH TD+RDH],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
       '',
       'patch([OX OX+BLKW OX+BLKW OX],[TD TD TD+RDH TD+RDH],...',
-      '    [0.8 0.15 0.15],''FaceAlpha'',0.20,''EdgeColor'',[0.9 0.2 0.2],...',
-      '    ''LineWidth'',1.5,''Parent'',ax);',
+      "    [0.8 0.15 0.15],''FaceAlpha'',0.20,''EdgeColor'',[0.9 0.2 0.2],...",
+      "    ''LineWidth'',1.5,''Parent'',ax);",
       '',
       'if has_pothole',
       '    th=linspace(0,2*pi,50);',
       '    fill(OX+2+1.8*cos(th),TD+LH*0.4+1.0*sin(th),...',
-      '        [0.22 0.15 0.15],''EdgeColor'',[0.65 0.18 0.18],''LineWidth'',2,''Parent'',ax);',
+      "        [0.22 0.15 0.15],''EdgeColor'',[0.65 0.18 0.18],''LineWidth'',2,''Parent'',ax);",
       '    for ang=0:60:300',
       '        ar=deg2rad(ang);',
       '        line([OX+2+1.3*cos(ar) OX+2+2.5*cos(ar)],...',
       '             [TD+LH*0.4+1.3*sin(ar) TD+LH*0.4+2.5*sin(ar)],...',
-      '             ''Color'',[0.55 0.18 0.18],''LineWidth'',1,''Parent'',ax);',
+      "             ''Color'',[0.55 0.18 0.18],''LineWidth'',1,''Parent'',ax);",
       '    end',
       'end',
       'if has_vendor',
       '    patch(OX+BLKW*0.55+[0 3 3 0],TD+RDH*0.55+[0 0 2.5 2.5],...',
-      '        [0.95 0.70 0.10],''EdgeColor'',[0.75 0.50 0],''LineWidth'',1.5,''Parent'',ax);',
+      "        [0.95 0.70 0.10],''EdgeColor'',[0.75 0.50 0],''LineWidth'',1.5,''Parent'',ax);",
       'end',
       'if has_parking',
       '    patch(OX+BLKW*0.45+[0 5 5 0],TD+RDH*0.72+[0 0 2.5 2.5],...',
-      '        [0.85 0.20 0.20],''EdgeColor'',[0.70 0.10 0.10],''LineWidth'',1.5,''Parent'',ax);',
+      "        [0.85 0.20 0.20],''EdgeColor'',[0.70 0.10 0.10],''LineWidth'',1.5,''Parent'',ax);",
       'end',
       'if has_barricade',
       '    for bi=0:2',
       '        patch(OX+bi*3+[0 1.5 1.5 0],TD+[0 0 RDH RDH],...',
-      '            [0.95 0.50 0.10],''EdgeColor'',[0.75 0.30 0],''Parent'',ax);',
+      "            [0.95 0.50 0.10],''EdgeColor'',[0.75 0.30 0],''Parent'',ax);",
       '    end',
       'end',
       'if has_garbage',
       '    patch(OX+BLKW*0.7+[0 3 3.5 0.5],TD+RDH*0.5+[0 0 2 2],...',
-      '        [0.42 0.55 0.28],''EdgeColor'',[0.30 0.42 0.18],''Parent'',ax);',
+      "        [0.42 0.55 0.28],''EdgeColor'',[0.30 0.42 0.18],''Parent'',ax);",
       'end',
       '',
-      'text(RL*0.5,TI-3,''IDEAL ROAD - NO DEFECTS'',...',
-      '    ''Color'',CGI,''FontSize'',13,''FontWeight'',''bold'',...',
-      '    ''HorizontalAlignment'',''center'',''Parent'',ax);',
+      "text(RL*0.5,TI-3,''IDEAL ROAD - NO DEFECTS'',...",
+      "    ''Color'',CGI,''FontSize'',13,''FontWeight'',''bold'',...",
+      "    ''HorizontalAlignment'',''center'',''Parent'',ax);",
       `text(RL*0.5,TD-3,'DEFECT ROAD - ${defectLabel.toUpperCase().replace(/'/g,"")}',` + "'...",
-      '    ''Color'',CGD,''FontSize'',13,''FontWeight'',''bold'',...',
-      '    ''HorizontalAlignment'',''center'',''Parent'',ax);',
+      "    ''Color'',CGD,''FontSize'',13,''FontWeight'',''bold'',...",
+      "    ''HorizontalAlignment'',''center'',''Parent'',ax);",
       '',
-      'spd_i=text(3,TI+RDH/2,sprintf(''%d km/h'',round(FREE_SPD)),...',
-      '    ''Color'',CGI,''FontSize'',10,''FontWeight'',''bold'',''Parent'',ax);',
-      'spd_d=text(3,TD+RDH/2,sprintf(''%.1f km/h'',CONG_SPD),...',
-      '    ''Color'',CGD,''FontSize'',10,''FontWeight'',''bold'',''Parent'',ax);',
+      "spd_i=text(3,TI+RDH/2,sprintf(''%d km/h'',round(FREE_SPD)),...",
+      "    ''Color'',CGI,''FontSize'',10,''FontWeight'',''bold'',''Parent'',ax);",
+      "spd_d=text(3,TD+RDH/2,sprintf(''%.1f km/h'',CONG_SPD),...",
+      "    ''Color'',CGD,''FontSize'',10,''FontWeight'',''bold'',''Parent'',ax);",
       '',
       'BX=88; BW=5; BH=RDH*0.85;',
       'patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...',
-      '    [0.10 0.28 0.16],''EdgeColor'',CGI,''LineWidth'',1,''Parent'',ax);',
+      "    [0.10 0.28 0.16],''EdgeColor'',CGI,''LineWidth'',1,''Parent'',ax);",
       'patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...',
-      '    CGI,''EdgeColor'',''none'',''Parent'',ax);',
+      "    CGI,''EdgeColor'',''none'',''Parent'',ax);",
       'patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+BH TD+1+BH],...',
-      '    [0.25 0.08 0.08],''EdgeColor'',CGD,''LineWidth'',1,''Parent'',ax);',
+      "    [0.25 0.08 0.08],''EdgeColor'',CGD,''LineWidth'',1,''Parent'',ax);",
       'DBH=BH*(reduced_cap/base_dsv);',
       'fd=patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+DBH TD+1+DBH],...',
-      '    CGD,''EdgeColor'',''none'',''Parent'',ax);',
+      "    CGD,''EdgeColor'',''none'',''Parent'',ax);",
       '',
       'NL=newline;',
-      'annotation(fig,''rectangle'',[0.01 0.01 0.48 0.17],...',
-      '    ''Color'',CGI,''LineWidth'',1.5,''FaceColor'',[0.04 0.14 0.09]);',
-      'annotation(fig,''rectangle'',[0.51 0.01 0.48 0.17],...',
-      '    ''Color'',CGD,''LineWidth'',1.5,''FaceColor'',[0.16 0.05 0.05]);',
-      'annotation(fig,''textbox'',[0.01 0.01 0.48 0.17],...',
+      "annotation(fig,''rectangle'',[0.01 0.01 0.48 0.17],...",
+      "    ''Color'',CGI,''LineWidth'',1.5,''FaceColor'',[0.04 0.14 0.09]);",
+      "annotation(fig,''rectangle'',[0.51 0.01 0.48 0.17],...",
+      "    ''Color'',CGD,''LineWidth'',1.5,''FaceColor'',[0.16 0.05 0.05]);",
+      "annotation(fig,''textbox'',[0.01 0.01 0.48 0.17],...",
       `    'String',['IDEAL' NL sprintf('DSV: %d PCU/hr | %d veh/hr',round(base_dsv),round(base_veh_hr)) NL sprintf('Free-flow speed: %d km/h | Lanes: %d',round(FREE_SPD),num_lanes)],...`,
-      '    ''Color'',[0.78 0.95 0.86],''FontSize'',10,''FontName'',''Courier New'',...',
-      '    ''EdgeColor'',''none'',''VerticalAlignment'',''middle'',''HorizontalAlignment'',''center'');',
-      'annotation(fig,''textbox'',[0.51 0.01 0.48 0.17],...',
+      "    ''Color'',[0.78 0.95 0.86],''FontSize'',10,''FontName'',''Courier New'',...",
+      "    ''EdgeColor'',''none'',''VerticalAlignment'',''middle'',''HorizontalAlignment'',''center'');",
+      "annotation(fig,''textbox'',[0.51 0.01 0.48 0.17],...",
       `    'String',['DEFECT' NL sprintf('Cap: %d PCU/hr | %d veh/hr (-%.1f%%)',round(reduced_cap),round(reduced_veh_hr),cap_loss_pct) NL sprintf('Speed: %.1f km/h | Width: %.3f | Penalty: %.2f',CONG_SPD,width_factor,pothole_penalty)],...`,
-      '    ''Color'',[0.98 0.78 0.78],''FontSize'',10,''FontName'',''Courier New'',...',
-      '    ''EdgeColor'',''none'',''VerticalAlignment'',''middle'',''HorizontalAlignment'',''center'');',
+      "    ''Color'',[0.98 0.78 0.78],''FontSize'',10,''FontName'',''Courier New'',...",
+      "    ''EdgeColor'',''none'',''VerticalAlignment'',''middle'',''HorizontalAlignment'',''center'');",
       `annotation(fig,'textbox',[0.01 0.94 0.98 0.05],'String',sprintf('Indian Road Digital Twin | Loss: %.1f%%',cap_loss_pct),...`,
-      '    ''Color'',[0.95 0.95 0.95],''FontSize'',11,''FontWeight'',''bold'',...',
-      '    ''EdgeColor'',''none'',''HorizontalAlignment'',''center'',''FaceColor'',''none'');',
+      "    ''Color'',[0.95 0.95 0.95],''FontSize'',11,''FontWeight'',''bold'',...",
+      "    ''EdgeColor'',''none'',''HorizontalAlignment'',''center'',''FaceColor'',''none'');",
       '',
       'vpi=gobjects(NVI,1); vpd=gobjects(NVD,1);',
       'for v=1:NVI',
       '    ln=mod(v-1,num_lanes)+1;',
       '    vpi(v)=patch(VXI(v)+[0 VL VL 0],LYI(ln)+[-VH/2 -VH/2 VH/2 VH/2],...',
-      '        CGI,''EdgeColor'',[1 1 1 0.2],''LineWidth'',0.5,''Parent'',ax);',
+      "        CGI,''EdgeColor'',[1 1 1 0.2],''LineWidth'',0.5,''Parent'',ax);",
       'end',
       'for v=1:NVD',
       '    ln=mod(v-1,num_lanes)+1;',
       '    vpd(v)=patch(VXD(v)+[0 VL VL 0],LYD(ln)+[-VH/2 -VH/2 VH/2 VH/2],...',
-      '        CGD,''EdgeColor'',[1 1 1 0.2],''LineWidth'',0.5,''Parent'',ax);',
+      "        CGD,''EdgeColor'',[1 1 1 0.2],''LineWidth'',0.5,''Parent'',ax);",
       'end',
       '',
-      'disp(''Animation running. Close figure to stop.'');',
+      "disp(''Animation running. Close figure to stop.'');",
       'simt=0;',
       'while isvalid(fig)',
       '    simt=simt+0.05;',
@@ -945,7 +991,7 @@
       '            mn=0;',
       '        end',
       '        c=sum(wi);',
-      '        VXI(wi)=mn-(1:c)''*SPCI;',
+      "        VXI(wi)=mn-(1:c)''*SPCI;",
       '    end',
       '    for v=1:NVD',
       '        x=VXD(v); d=OX-x;',
@@ -970,13 +1016,13 @@
       '            mn=0;',
       '        end',
       '        c=sum(wd);',
-      '        VXD(wd)=mn-(1:c)''*SPCD;',
+      "        VXD(wd)=mn-(1:c)''*SPCD;",
       '        CURD(wd)=SD*0.5;',
       '    end',
       '    avg=0; nc=0;',
       '    for v=1:NVI',
       '        ln=mod(v-1,num_lanes)+1;',
-      '        set(vpi(v),''XData'',VXI(v)+[0 VL VL 0],''YData'',LYI(ln)+[-VH/2 -VH/2 VH/2 VH/2]);',
+      "        set(vpi(v),''XData'',VXI(v)+[0 VL VL 0],''YData'',LYI(ln)+[-VH/2 -VH/2 VH/2 VH/2]);",
       '    end',
       '    for v=1:NVD',
       '        ln=mod(v-1,num_lanes)+1;',
@@ -986,16 +1032,16 @@
       '            a=(0.75-sr)/0.40; col=CGD*(1-a)+CSL*a;',
       '        else, col=CSL;',
       '        end',
-      '        set(vpd(v),''XData'',VXD(v)+[0 VL VL 0],''YData'',LYD(ln)+[-VH/2 -VH/2 VH/2 VH/2],''FaceColor'',col);',
+      "        set(vpd(v),''XData'',VXD(v)+[0 VL VL 0],''YData'',LYD(ln)+[-VH/2 -VH/2 VH/2 VH/2],''FaceColor'',col);",
       '        if x>0 && x<RL, avg=avg+sr*CONG_SPD; nc=nc+1; end',
       '    end',
-      '    if nc>0, set(spd_d,''String'',sprintf(''%.1f km/h'',avg/nc)); end',
+      "    if nc>0, set(spd_d,''String'',sprintf(''%.1f km/h'',avg/nc)); end",
       '    ph=DBH*(0.88+0.12*sin(simt*2.8));',
-      '    set(fd,''YData'',[TD+1 TD+1 TD+1+ph TD+1+ph]);',
+      "    set(fd,''YData'',[TD+1 TD+1 TD+1+ph TD+1+ph]);",
       '    drawnow limitrate;',
       '    pause(0.01);',
       'end',
-      'disp(''Done.'');',
+      "disp(''Done.'');",
       'end',
     ].join('\n');
   }
