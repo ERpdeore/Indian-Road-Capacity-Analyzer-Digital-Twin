@@ -748,21 +748,20 @@ class RoadAnalyzer:
                 for obs in roadrunner_export:
                     f.write(f"{obs['defect_type']},{obs['left_m']},{obs['right_m']},"
                             f"{obs['width_m']},{obs['height_m']},{obs['conf']}\n")
-            try:
-                frame = self.annotated_frame(image_path)
-                ann_path = out_dir / f"{stem}_annotated.jpg"
-                cv2.imwrite(str(ann_path), frame)
-                final_result["annotated_image_filename"] = f"{stem}_annotated.jpg"
-            except Exception:
-                logger.warning("Could not save annotated frame for %s", image_path, exc_info=True)
-                final_result["annotated_image_filename"] = None
+            # Skip annotated frame — avoids running YOLO twice per image
+            # which was doubling the inference time
+            final_result["annotated_image_filename"] = None
             final_result["_json_path"] = str(json_path)
             final_result["_csv_path"]  = str(csv_path)
 
         return final_result
 
     def annotated_frame(self, image_path: str):
-        results = self.model.predict(source=str(image_path), conf=0.25, save=False, verbose=False)
+        # Use lower conf to show more detections in annotation
+        results = self.model.predict(
+            source=str(image_path), conf=0.25, save=False,
+            verbose=False, imgsz=640, device='cpu', half=False
+        )
         return results[0].plot()
 
     # ----------------------------------------------------------
