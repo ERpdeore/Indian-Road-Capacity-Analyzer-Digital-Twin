@@ -12,6 +12,9 @@
   const dropFilelist  = document.getElementById("drop-filelist");
   const videoSampleRow = document.getElementById("video-sample-row");
   const sampleEverySec = document.getElementById("sample-every-sec");
+  const speedDetectRow = document.getElementById("speed-detect-row");
+  const enableSpeedDetectionEl = document.getElementById("enable-speed-detection");
+  const speedLimitKmhEl        = document.getElementById("speed-limit-kmh");
 
   const carriagewaySel  = document.getElementById("carriageway_key");
   const fringeSel       = document.getElementById("fringe_condition");
@@ -73,6 +76,7 @@
     fileInput.accept         = copy.accept;
     fileInput.multiple       = copy.multiple;
     videoSampleRow.style.display = mode === "video" ? "flex" : "none";
+    speedDetectRow.style.display = mode === "video" ? "flex" : "none";
     selectedFiles = [];
     dropFilelist.textContent = "";
     fileInput.value          = "";
@@ -82,6 +86,10 @@
   modeBtns.forEach((btn) =>
     btn.addEventListener("click", () => setMode(btn.dataset.mode))
   );
+
+  enableSpeedDetectionEl.addEventListener("change", () => {
+    speedLimitKmhEl.style.display = enableSpeedDetectionEl.checked ? "inline-block" : "none";
+  });
 
   // ----------------------------------------------------------------
   // File picking / drag-drop
@@ -413,10 +421,17 @@
       } else if (mode === "video") {
         fd.append("file", selectedFiles[0]);
         fd.append("sample_every_sec", sampleEverySec.value);
+        const speedOn = enableSpeedDetectionEl.checked;
+        fd.append("enable_speed_detection", speedOn ? "true" : "false");
+        if (speedOn && speedLimitKmhEl.value) {
+          fd.append("speed_limit_kmh", speedLimitKmhEl.value);
+        }
         showStatus("Uploading video…");
         const startRes = await postJSON("/api/analyze/video", fd);
         showStatus(
-          `Sampling every ${sampleEverySec.value}s and analysing frames… this takes time for longer clips.`
+          speedOn
+            ? `Sampling every ${sampleEverySec.value}s for defects, plus a full-frame-rate speed-detection pass… this takes noticeably longer.`
+            : `Sampling every ${sampleEverySec.value}s and analysing frames… this takes time for longer clips.`
         );
         const result = await pollJob(startRes.job_id);
         hideStatus();
@@ -1299,6 +1314,52 @@
   }
 
   // ----------------------------------------------------------------
+  // Render: Department Reports (traffic / PWD / municipal)
+  // NEW — these existed nowhere in the dashboard before this fix, even
+  // though core.py could already write the underlying CSVs once
+  // pothole_rectification.py / plate_recognition.py / footpath_pedestrian.py
+  // / report_generator.py were wired in.
+  // ----------------------------------------------------------------
+  function departmentReportsHTML(data) {
+    const dept = data.department_reports || {};
+    const links = [];
+    if (dept.pwd_csv) links.push({ label: 'PWD — Pothole Rectification Report', url: dept.pwd_csv });
+    if (dept.traffic_csv) links.push({ label: 'Traffic Dept — Enforcement Recommendations', url: dept.traffic_csv });
+    if (dept.municipal_csv) links.push({ label: 'Municipal Dept — Footpath / Pedestrian Report', url: dept.municipal_csv });
+    if (dept.combined_summary) links.push({ label: 'Combined Summary (JSON)', url: dept.combined_summary });
+
+    const footpath = data.footpath_finding;
+    let footpathBlock = '';
+    if (footpath) {
+      footpathBlock = `
+        <div class="dept-footpath">
+          <strong>${escapeHtml(footpath.finding_type.replace(/_/g, ' '))}</strong>
+          <p>${escapeHtml(footpath.recommendation || '')}</p>
+          ${footpath.irc_reference ? `<div class="dept-ref">${escapeHtml(footpath.irc_reference)}</div>` : ''}
+        </div>`;
+    }
+
+    if (!links.length && !footpathBlock) return '';
+
+    const linkItems = links.map(l =>
+      `<a class="dept-report-link" href="${l.url}" target="_blank" rel="noopener">${escapeHtml(l.label)} ↓</a>`
+    ).join('');
+
+    return `
+      <div class="section-title">Department Reports</div>
+      <div class="dept-reports-panel">
+        ${linkItems ? `<div class="dept-report-links">${linkItems}</div>` : ''}
+        ${footpathBlock}
+      </div>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  // ----------------------------------------------------------------
   // Render: single image
   // ----------------------------------------------------------------
   function renderImageResult(data) {
@@ -1308,7 +1369,8 @@
       matlabButtonHTML(data) +
       roadbarHTML(data.road_config || {}, data.per_defect || {}) +
       `<div class="section-title">Defects Detected - Capacity Loss &amp; Recommended Actions</div>` +
-      defectGridHTML(data.per_defect);
+      defectGridHTML(data.per_defect) +
+      departmentReportsHTML(data);
 
     // Attach MATLAB download button click handler
     attachMatlabButton(data);
@@ -1392,7 +1454,33 @@
         <div class="timeline-meta"><span>0s</span><span>${frames.length ? frames[frames.length-1].timestamp_sec + "s" : "-"}</span></div>
       </div>
       <div class="section-title">Unique Defect Instances (Tracked - Not Double-Counted)</div>
-      <div class="unique-defects-list">${uniqueRows || `<div class="empty-state">No obstructions detected.</div>`}</div>`;
+      <div class="unique-defects-list">${uniqueRows || `<div class="empty-state">No obstructions detected.</div>`}</div>
+      ${speedDetectionHTML(data.speed_detection)}`;
+  }
+
+  // speed_challan.py results — NEW panel, only appears when speed
+  // detection was enabled for this video upload.
+  function speedDetectionHTML(sd) {
+    if (!sd || !sd.enabled) return "";
+    if (sd.error) {
+      return `<div class="section-title">Overspeeding Detection</div>
+        <div class="empty-state">Speed detection failed: ${escapeHtml(sd.error)}</div>`;
+    }
+    const flags = sd.flags || [];
+    const rows = flags.map((f) => `
+      <div class="unique-defect-row">
+        <span class="udr-name">Vehicle #${f.track_id} — ${fmt(f.speed_kmh,1)} km/h</span>
+        <span class="udr-meta">limit ${f.speed_limit_kmh} km/h · over by ${fmt(f.over_limit_by_kmh,1)} km/h
+          ${f.evidence_image_path ? ` · <a href="${f.evidence_image_path}" target="_blank" rel="noopener">evidence photo</a>` : ""}
+        </span>
+      </div>`).join("");
+    const csvLink = sd.traffic_csv
+      ? `<a class="dept-report-link" href="${sd.traffic_csv}" target="_blank" rel="noopener">Traffic Dept — Speed Challan Report ↓</a>`
+      : "";
+    return `
+      <div class="section-title">Overspeeding Detection (${flags.length} flagged)</div>
+      <div class="unique-defects-list">${rows || `<div class="empty-state">No vehicles exceeded the speed limit.</div>`}</div>
+      ${csvLink ? `<div class="dept-reports-panel"><div class="dept-report-links">${csvLink}</div></div>` : ""}`;
   }
 
   function lossToColor(pct) {
