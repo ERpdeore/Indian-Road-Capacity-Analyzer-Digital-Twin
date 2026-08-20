@@ -34,7 +34,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from plate_recognition import read_plate, PlateReading, _save_evidence_crop
+from road_analyzer.plate_recognition import read_plate, PlateReading, _save_evidence_crop
+# BUG FIX: this used to be a bare `from plate_recognition import ...`, an
+# absolute top-level import. Since this file lives inside the
+# `road_analyzer` package and app.py always imports things as
+# `from road_analyzer.xyz import ...`, Python only ever has the
+# `road_analyzer` package on sys.path — never `road_analyzer/` itself as
+# a bare importable folder. The old line raised
+# `ModuleNotFoundError: No module named 'plate_recognition'` the instant
+# anything tried to import speed_challan.py.
 
 
 @dataclass
