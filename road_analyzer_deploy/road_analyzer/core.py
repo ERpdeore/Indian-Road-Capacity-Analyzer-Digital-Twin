@@ -59,46 +59,6 @@ try:
 except ImportError:
     _HAS_PSUTIL = False
 
-# ----------------------------------------------------------------
-# Department-report modules (pothole_rectification.py, plate_recognition.py,
-# footpath_pedestrian.py, speed_challan.py, report_generator.py)
-# ----------------------------------------------------------------
-# These 5 files existed in the repo but were never imported anywhere —
-# that's the actual reason their output never reached the dashboard.
-# Wired in here, each guarded independently so a missing optional
-# dependency (shapely / easyocr) disables only that one feature instead
-# of crashing image analysis entirely.
-try:
-    from road_analyzer.pothole_rectification import build_pwd_report_row
-    _HAS_POTHOLE_RECT = True
-except ImportError as e:
-    _HAS_POTHOLE_RECT = False
-    logger.warning("pothole_rectification unavailable: %s", e)
-
-try:
-    from road_analyzer.report_generator import (
-        write_traffic_dept_report, write_pwd_dept_report,
-        write_municipal_dept_report, write_combined_summary,
-    )
-    _HAS_REPORT_GEN = True
-except ImportError as e:
-    _HAS_REPORT_GEN = False
-    logger.warning("report_generator unavailable: %s", e)
-
-try:
-    from road_analyzer.plate_recognition import flag_illegal_parking, flag_street_vendor
-    _HAS_PLATE_RECOGNITION = True
-except ImportError as e:
-    _HAS_PLATE_RECOGNITION = False
-    logger.warning("plate_recognition unavailable (pip install easyocr): %s", e)
-
-try:
-    from road_analyzer.footpath_pedestrian import analyze_footpath
-    _HAS_FOOTPATH = True
-except ImportError as e:
-    _HAS_FOOTPATH = False
-    logger.warning("footpath_pedestrian unavailable (pip install shapely): %s", e)
-
 
 def _log_memory_usage(label: str) -> None:
     if not _HAS_PSUTIL:
@@ -510,12 +470,20 @@ class RoadAnalyzer:
             self._depth_estimator = PotholeDepthEstimator()
         return self._depth_estimator
 
-    def _run_predict_once(self, image_path: str) -> Tuple[List[dict], int, int]:
+    def _run_predict_once(self, image_bgr) -> Tuple[List[dict], int, int]:
         # imgsz=640 is YOLOv8 default — reduces to 640px before inference
         # half=False keeps float32 (required on CPU, half only works on GPU)
         # device='cpu' explicit — avoids CUDA check overhead
+        #
+        # image_bgr is passed as an in-memory numpy array (not a file path).
+        # Passing a path here makes ultralytics open and decode the image
+        # from disk itself — a *second* full decode on top of the one we
+        # already did in analyse_image(). For a typical 12MP phone photo,
+        # that redundant decode is a meaningful chunk of the per-request
+        # time, especially on a CPU-constrained host. Passing the array we
+        # already have in memory skips that second decode entirely.
         pred      = self.model.predict(
-            str(image_path), conf=0.25, verbose=False,
+            image_bgr, conf=0.25, verbose=False,
             imgsz=640, device='cpu', half=False
         )[0]
         boxes     = pred.boxes
@@ -534,11 +502,11 @@ class RoadAnalyzer:
         kept, vetoed = apply_vehicle_veto(raw_detections)
         return kept, vetoed, raw_count
 
-    def _detect(self, image_path: str) -> Tuple[List[dict], int]:
+    def _detect(self, image_bgr, image_label: str = "") -> Tuple[List[dict], int]:
         self._call_count += 1
-        kept, vetoed, raw_count = self._run_predict_once(image_path)
+        kept, vetoed, raw_count = self._run_predict_once(image_bgr)
         logger.info("detect: call#%d image=%s raw=%d kept=%d vetoed=%d",
-                    self._call_count, Path(image_path).name, raw_count, len(kept), vetoed)
+                    self._call_count, image_label, raw_count, len(kept), vetoed)
         return kept, vetoed
 
     # ----------------------------------------------------------
@@ -552,6 +520,22 @@ class RoadAnalyzer:
         img = cv2.imread(str(image_path))
         if img is None:
             raise ValueError(f"Cannot read image: {image_path}")
+
+        # Downscale oversized photos before running inference. Phone camera
+        # photos are commonly 3000-4000px on the long edge; YOLO internally
+        # works at imgsz=640 regardless, so decoding/copying/resizing a
+        # full-resolution image only adds CPU time without adding any
+        # detection accuracy. Capping the long edge at 1600px cuts that
+        # overhead substantially on CPU-only hosts (e.g. Render free tier)
+        # while still leaving far more detail than the model actually uses.
+        MAX_EDGE = 1600
+        img_h0, img_w0 = img.shape[:2]
+        long_edge = max(img_h0, img_w0)
+        if long_edge > MAX_EDGE:
+            scale = MAX_EDGE / long_edge
+            img = cv2.resize(img, (int(img_w0 * scale), int(img_h0 * scale)),
+                              interpolation=cv2.INTER_AREA)
+
         img_h, img_w = img.shape[:2]
 
         total_width_m   = float(road_config["total_width_m"])
@@ -577,7 +561,7 @@ class RoadAnalyzer:
         avg_pcu              = get_avg_pcu(traffic_regime)
         base_vehicles_per_hr = dsv_to_vehicles_per_hr(base_dsv, traffic_regime)
 
-        detections, vetoed_count = self._detect(image_path)
+        detections, vetoed_count = self._detect(img, Path(image_path).name)
 
         # ---- Pothole depth scoring ----
         # Fast method: estimate severity from bounding box area relative to image.
@@ -779,95 +763,6 @@ class RoadAnalyzer:
             out_dir = Path(output_dir) if output_dir else Path(image_path).parent
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = Path(image_path).stem
-
-            # ---------------------------------------------------------
-            # DEPARTMENT REPORTS — pothole_rectification.py,
-            # plate_recognition.py, footpath_pedestrian.py, report_generator.py
-            # This is the block that was entirely missing before: the
-            # analysis ran, but none of these 4 modules were ever called,
-            # so no department-facing output was ever produced or shown.
-            # ---------------------------------------------------------
-            department_reports: Dict[str, Optional[str]] = {
-                "traffic_csv": None, "pwd_csv": None,
-                "municipal_csv": None, "combined_summary": None,
-            }
-            if _HAS_REPORT_GEN:
-                location = road_config.get("location") or stem
-
-                # -- PWD dept: pothole rectification recommendations --
-                if _HAS_POTHOLE_RECT and "pothole" in per_defect_results:
-                    try:
-                        pwd_row = build_pwd_report_row(per_defect_results["pothole"], location)
-                        pwd_csv = write_pwd_dept_report(str(out_dir), [pwd_row])
-                        department_reports["pwd_csv"] = str(pwd_csv)
-                        per_defect_results["pothole"]["rectification"] = pwd_row
-                    except Exception as e:
-                        logger.warning("pothole_rectification report failed: %s", e)
-
-                # -- Traffic dept: illegal parking / street vendor evidence flags --
-                if _HAS_PLATE_RECOGNITION:
-                    try:
-                        evidence_dir = str(out_dir / "evidence")
-                        parking_flags, vendor_flags = [], []
-                        for d in detections:
-                            bbox = tuple(int(v) for v in d["xyxy"])
-                            if d["cls_name"] == "illegal_parking":
-                                parking_flags.append(
-                                    flag_illegal_parking(img, {"bbox": bbox}, location, evidence_dir))
-                            elif d["cls_name"] == "street_vendor":
-                                vendor_flags.append(
-                                    flag_street_vendor(img, {"bbox": bbox}, location, evidence_dir))
-                        if parking_flags or vendor_flags:
-                            traffic_csv = write_traffic_dept_report(
-                                str(out_dir), parking_flags, vendor_flags, speed_flags=[])
-                            department_reports["traffic_csv"] = str(traffic_csv)
-                    except Exception as e:
-                        logger.warning("plate_recognition / traffic report failed: %s", e)
-
-                # -- Municipal dept: footpath / pedestrian findings --
-                # No per-camera footpath polygon calibration UI exists yet
-                # (see footpath_pedestrian.py's own module docstring), so
-                # footpath_polygon_px is None unless supplied in road_config
-                # — the module itself treats that as "no footpath on file"
-                # and still reports pedestrians walking on the carriageway,
-                # which is the more common and more actionable case anyway.
-                if _HAS_FOOTPATH:
-                    try:
-                        carriageway_polygon_px = road_config.get("carriageway_polygon_px") or [
-                            (0, 0), (img_w, 0), (img_w, img_h), (0, img_h)
-                        ]
-                        footpath_polygon_px = road_config.get("footpath_polygon_px")
-                        other_defects = [
-                            {"bbox": [int(v) for v in d["xyxy"]], "class": d["cls_name"]}
-                            for d in detections
-                            if d["cls_name"] in ("illegal_parking", "street_vendor", "cart",
-                                                  "garbage", "barricade")
-                        ]
-                        finding = analyze_footpath(
-                            img, other_defects, footpath_polygon_px,
-                            carriageway_polygon_px, location)
-                        municipal_csv = write_municipal_dept_report(str(out_dir), [finding])
-                        department_reports["municipal_csv"] = str(municipal_csv)
-                        final_result["footpath_finding"] = {
-                            "finding_type": finding.finding_type,
-                            "pedestrian_count_on_carriageway": finding.pedestrian_count_on_carriageway,
-                            "encroaching_defect_classes": finding.encroaching_defect_classes,
-                            "recommendation": finding.recommendation,
-                            "irc_reference": finding.irc_reference,
-                            "legal_reference": finding.legal_reference,
-                        }
-                    except Exception as e:
-                        logger.warning("footpath_pedestrian report failed: %s", e)
-
-                try:
-                    combined_path = write_combined_summary(
-                        str(out_dir), final_result, department_reports)
-                    department_reports["combined_summary"] = str(combined_path)
-                except Exception as e:
-                    logger.warning("write_combined_summary failed: %s", e)
-
-            final_result["department_reports"] = department_reports
-
             json_path = out_dir / f"{stem}_analysis.json"
             with open(json_path, "w") as f:
                 json.dump(final_result, f, indent=2)
@@ -887,9 +782,12 @@ class RoadAnalyzer:
 
     def annotated_frame(self, image_path: str):
         # Use lower conf to show more detections in annotation
+        img = cv2.imread(str(image_path))
+        if img is None:
+            raise ValueError(f"Cannot read image: {image_path}")
         results = self.model.predict(
-            source=str(image_path), conf=0.25, save=False,
-            verbose=False, imgsz=640, device='cpu', half=False
+            img, conf=0.25, verbose=False,
+            imgsz=640, device='cpu', half=False
         )
         return results[0].plot()
 
@@ -918,8 +816,7 @@ class RoadAnalyzer:
             "per_image": [
                 {"image": r["image"], "capacity_loss_pct": r["capacity_loss_pct"],
                  "defects_found": list(r["per_defect"].keys()),
-                 "annotated_image_filename": r.get("annotated_image_filename"),
-                 "department_reports": r.get("department_reports")}
+                 "annotated_image_filename": r.get("annotated_image_filename")}
                 for r in per_image_results
             ],
         })
@@ -934,29 +831,7 @@ class RoadAnalyzer:
     # ----------------------------------------------------------
     def analyse_video(self, video_path: str, road_config: dict, output_dir: str,
                        sample_every_sec: float = 1.0, track_iou_threshold: float = 0.5,
-                       max_frames: Optional[int] = None,
-                       enable_speed_detection: bool = False,
-                       speed_limit_kmh: Optional[float] = None,
-                       calib_line_a_frac: float = 0.35,
-                       calib_line_b_frac: float = 0.75,
-                       calib_real_distance_m: float = 15.0) -> dict:
-        """
-        enable_speed_detection: runs speed_challan.py's line-crossing
-        tracker over EVERY raw video frame (not the sampled defect-
-        detection frames — speed needs full frame-rate continuity to
-        time a line crossing accurately). This is a second, separate
-        pass over the video and is opt-in because full-frame-rate
-        tracking on CPU is much slower than the sampled defect pass.
-
-        calib_line_a_frac / calib_line_b_frac: the two speed-check lines
-        as a fraction of frame height (0=top, 1=bottom), since no
-        per-camera calibration UI exists yet — see speed_challan.py's
-        own docstring, which documents this as a one-time per-location
-        setup step you can wire real pixel values into once you have a
-        fixed camera location. calib_real_distance_m is the real-world
-        distance between those two lines; 15m is a placeholder default,
-        NOT a measured value — replace with your surveyed distance.
-        """
+                       max_frames: Optional[int] = None) -> dict:
         out_dir    = Path(output_dir)
         frames_dir = out_dir / "frames"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1022,90 +897,6 @@ class RoadAnalyzer:
             ],
         })
         summary_path = out_dir / "video_summary.json"
-
-        # ---------------------------------------------------------
-        # SPEED DETECTION — speed_challan.py, opt-in second pass.
-        # Wired here (not into the per-frame sampled loop above) because
-        # line-crossing timing needs continuous frame-to-frame tracking
-        # at full video frame rate, while the defect-detection loop above
-        # deliberately only samples every `sample_every_sec`.
-        # ---------------------------------------------------------
-        speed_summary = {"enabled": False, "flags": [], "traffic_csv": None}
-        if enable_speed_detection:
-            speed_summary["enabled"] = True
-            try:
-                from road_analyzer.speed_challan import CalibrationLines, SpeedTracker
-                from road_analyzer.plate_recognition import _save_evidence_crop  # noqa: F401 (ensures easyocr present)
-
-                free_flow_speed = get_free_flow_speed(
-                    road_config["carriageway_key"], road_config["fringe_condition"])
-                limit = speed_limit_kmh if speed_limit_kmh else free_flow_speed
-
-                cap2 = cv2.VideoCapture(str(video_path))
-                if not cap2.isOpened():
-                    raise ValueError(f"Cannot reopen video for speed pass: {video_path}")
-                fps2 = cap2.get(cv2.CAP_PROP_FPS) or 25.0
-                frame_h = int(cap2.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-                calib = CalibrationLines(
-                    line_a_y=int(frame_h * calib_line_a_frac),
-                    line_b_y=int(frame_h * calib_line_b_frac),
-                    real_distance_m=calib_real_distance_m,
-                )
-                tracker = SpeedTracker(calib, fps=fps2, speed_limit_kmh=limit)
-
-                evidence_dir = str(out_dir / "speed_evidence")
-                frame_i = 0
-                try:
-                    while True:
-                        ok, frame2 = cap2.read()
-                        if not ok:
-                            break
-                        # Track only the 'vehicle' class via ultralytics' built-in
-                        # ByteTrack integration (ultralytics>=8.3 supports .track()).
-                        results = self.model.track(
-                            frame2, persist=True, verbose=False,
-                            imgsz=640, device='cpu', half=False, conf=0.35,
-                        )
-                        tracked_boxes = []
-                        r0 = results[0] if results else None
-                        if r0 is not None and r0.boxes is not None and r0.boxes.id is not None:
-                            for box, cls_id, track_id in zip(
-                                    r0.boxes.xyxy.cpu().numpy(),
-                                    r0.boxes.cls.cpu().numpy(),
-                                    r0.boxes.id.cpu().numpy()):
-                                if self.model.names[int(cls_id)] == "vehicle":
-                                    x1, y1, x2, y2 = [int(v) for v in box]
-                                    tracked_boxes.append({
-                                        "track_id": int(track_id),
-                                        "bbox": (x1, y1, x2, y2),
-                                    })
-                        tracker.update(frame2, frame_i, tracked_boxes, evidence_dir)
-                        frame_i += 1
-                finally:
-                    cap2.release()
-
-                flagged = tracker.all_flagged()
-                speed_summary["flags"] = [
-                    {"track_id": f.track_id, "speed_kmh": round(f.speed_kmh, 1),
-                     "speed_limit_kmh": f.speed_limit_kmh,
-                     "over_limit_by_kmh": round(f.over_limit_by_kmh, 1),
-                     "evidence_image_path": f.evidence_image_path,
-                     "timestamp": f.timestamp}
-                    for f in flagged
-                ]
-                if flagged and _HAS_REPORT_GEN:
-                    traffic_csv = write_traffic_dept_report(str(out_dir), [], [], flagged)
-                    speed_summary["traffic_csv"] = str(traffic_csv)
-
-            except ImportError as e:
-                logger.warning("speed_challan unavailable (pip install easyocr): %s", e)
-                speed_summary["error"] = str(e)
-            except Exception as e:
-                logger.warning("Speed detection pass failed: %s", e, exc_info=True)
-                speed_summary["error"] = str(e)
-
-        summary["speed_detection"] = speed_summary
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
         summary["_json_path"] = str(summary_path)
