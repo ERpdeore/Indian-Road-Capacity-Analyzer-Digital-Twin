@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -44,18 +45,19 @@ from road_analyzer.core import (
     get_free_flow_speed, CLASS_NAMES,
 )
 
-# Digital Twin bridge — optional, disabled gracefully if MATLAB not installed
-try:
-    from road_analyzer.digital_twin_bridge import (
-        trigger_matlab_simulation,
-        get_twin_status,
-        get_latest_twin_data,
-    )
-    _DT_ENABLED = True
-    logger.info("Digital Twin bridge loaded successfully.")
-except ImportError:
-    _DT_ENABLED = False
-    logger.warning("digital_twin_bridge not found — /api/digital-twin/* endpoints disabled.")
+# Digital Twin — pure-Python Greenshields engine (see digital_twin_engine.py
+# for why this replaced the old MATLAB-subprocess bridge). Always available,
+# since it's plain Python with no external dependency — no more "bridge not
+# found" fallback path needed.
+from road_analyzer.digital_twin_engine import (
+    run_and_store as dt_run_and_store,
+    get_twin_status as dt_get_twin_status,
+    get_latest_twin_data as dt_get_latest_twin_data,
+)
+_DT_ENABLED = True
+logger.info("Digital Twin engine loaded (pure-Python Greenshields model).")
+
+from road_analyzer.department_extensions import generate_department_report_pdf
 
 # ----------------------------------------------------------------
 # Paths
@@ -180,34 +182,6 @@ def _road_config_from_form(
     }
 
 
-def _to_results_url(path_str: Optional[str]) -> Optional[str]:
-    """Convert an absolute filesystem path under RESULTS_DIR into a URL
-    the browser can actually fetch via the /results static mount above.
-    Department report paths coming out of core.py are absolute disk
-    paths (needed for opening the file server-side) — without this
-    conversion the dashboard has no usable link to put in <a href>."""
-    if not path_str:
-        return None
-    try:
-        rel = Path(path_str).resolve().relative_to(RESULTS_DIR.resolve())
-        return f"/results/{rel.as_posix()}"
-    except ValueError:
-        return None
-
-
-def _urlify_department_reports(result: dict) -> None:
-    dept = result.get("department_reports")
-    if isinstance(dept, dict):
-        for k, v in list(dept.items()):
-            dept[k] = _to_results_url(v)
-    speed = result.get("speed_detection")
-    if isinstance(speed, dict) and speed.get("traffic_csv"):
-        speed["traffic_csv"] = _to_results_url(speed["traffic_csv"])
-        for flag in speed.get("flags", []):
-            if flag.get("evidence_image_path"):
-                flag["evidence_image_path"] = _to_results_url(flag["evidence_image_path"])
-
-
 def _new_job(prefix: str) -> tuple[str, Path]:
     job_id  = f"{prefix}_{uuid.uuid4().hex[:10]}"
     job_dir = RESULTS_DIR / job_id
@@ -219,13 +193,6 @@ def _new_job(prefix: str) -> tuple[str, Path]:
 # Static frontend
 # ----------------------------------------------------------------
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-# BUG FIX: department report CSVs (traffic_dept/, pwd_dept/, municipal_dept/,
-# combined_summary.json, evidence crops) written under results/<job_id>/ were
-# never reachable by the browser — nothing mounted RESULTS_DIR. The frontend
-# had file paths to show/download but every link 404'd. StaticFiles rejects
-# path-traversal attempts (../) on its own, same as the /static mount above.
-app.mount("/results", StaticFiles(directory=str(RESULTS_DIR)), name="results")
 
 
 @app.on_event("startup")
@@ -325,15 +292,32 @@ async def analyze_image(
     json_path = result.pop("_json_path", None)
     result.pop("_csv_path", None)
     result["job_id"] = job_id
-    _urlify_department_reports(result)
 
-    # Trigger MATLAB Digital Twin simulation in background
-    if _DT_ENABLED and json_path:
+    # Department-routed PDF report — replaces the old CSV export, which
+    # was written to disk but never exposed through any download route.
+    # Generated synchronously here (a single-image report takes well
+    # under a second with reportlab) and saved into the same job_dir as
+    # the image and JSON, so /api/jobs/{job_id}/department-report.pdf
+    # can serve it straight off disk.
+    try:
+        pdf_path = job_dir / f"{Path(dest).stem}_department_report.pdf"
+        generate_department_report_pdf(result, str(pdf_path), site_label=safe_name)
+        result["department_report_available"] = True
+    except Exception as e:
+        logger.warning("Department PDF report generation failed: %s", e)
+        result["department_report_available"] = False
+
+    # Generate Digital Twin data — pure-Python Greenshields model, runs
+    # synchronously in milliseconds (no MATLAB, no subprocess, no waiting).
+    # We still report "running" then let the frontend's existing poll hit
+    # "done" on its very first check, so the JS twin-panel code (built for
+    # an async MATLAB job) needs zero changes to work with this.
+    if _DT_ENABLED:
         try:
-            trigger_matlab_simulation(str(json_path))
+            dt_run_and_store(result)
             result["digital_twin_status"] = "running"
         except Exception as e:
-            logger.warning("Digital twin trigger failed: %s", e)
+            logger.warning("Digital twin generation failed: %s", e)
             result["digital_twin_status"] = "error"
     else:
         result["digital_twin_status"] = "unavailable"
@@ -350,8 +334,6 @@ def _run_batch_job(job_id: str, job_dir: Path,
         analyzer = get_analyzer()
         summary  = analyzer.analyse_batch(image_paths, road_config, output_dir=str(job_dir))
         summary.pop("_json_path", None)
-        for r in summary.get("per_image", []):
-            _urlify_department_reports(r)
         JOBS[job_id] = {"status": "done", "result": summary}
         logger.info("Batch job %s done — %d images", job_id, len(image_paths))
     except Exception as e:
@@ -396,19 +378,15 @@ async def analyze_batch(
 # VIDEO MODE
 # ----------------------------------------------------------------
 def _run_video_job(job_id: str, job_dir: Path, video_path: str,
-                    road_config: dict, sample_every_sec: float,
-                    enable_speed_detection: bool, speed_limit_kmh: Optional[float]):
+                    road_config: dict, sample_every_sec: float):
     try:
         analyzer = get_analyzer()
         summary  = analyzer.analyse_video(
             video_path, road_config,
             output_dir=str(job_dir),
             sample_every_sec=sample_every_sec,
-            enable_speed_detection=enable_speed_detection,
-            speed_limit_kmh=speed_limit_kmh,
         )
         summary.pop("_json_path", None)
-        _urlify_department_reports(summary)
         JOBS[job_id] = {"status": "done", "result": summary}
         logger.info("Video job %s done", job_id)
     except Exception as e:
@@ -427,8 +405,6 @@ async def analyze_video(
     usable_shoulder_m: float = Form(...),
     sample_every_sec:  float = Form(1.0),
     traffic_regime:    str   = Form("low"),
-    enable_speed_detection: bool = Form(False),
-    speed_limit_kmh:   Optional[float] = Form(None),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
@@ -443,10 +419,9 @@ async def analyze_video(
 
     JOBS[job_id] = {"status": "running"}
     background_tasks.add_task(
-        _run_video_job, job_id, job_dir, str(dest), road_config,
-        sample_every_sec, enable_speed_detection, speed_limit_kmh,
+        _run_video_job, job_id, job_dir, str(dest), road_config, sample_every_sec
     )
-    logger.info("Video job %s started (speed_detection=%s)", job_id, enable_speed_detection)
+    logger.info("Video job %s started", job_id)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -459,6 +434,27 @@ def get_job(job_id: str):
     if job is None:
         raise HTTPException(404, f"Unknown job_id '{job_id}'.")
     return job
+
+
+@app.get("/api/jobs/{job_id}/department-report.pdf")
+def get_department_report(job_id: str):
+    # job_id is normally our own uuid-based identifier (see _new_job), but
+    # since it comes straight from the URL, validate it before building a
+    # filesystem path from it — otherwise a crafted job_id like
+    # "../../etc" could be used to walk outside RESULTS_DIR.
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", job_id):
+        raise HTTPException(400, "Invalid job_id.")
+    job_dir = RESULTS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(404, f"Unknown job_id '{job_id}'.")
+    pdfs = sorted(job_dir.glob("*_department_report.pdf"))
+    if not pdfs:
+        raise HTTPException(404, "No department report was generated for this job.")
+    return FileResponse(
+        str(pdfs[0]),
+        media_type="application/pdf",
+        filename=pdfs[0].name,
+    )
 
 
 # ----------------------------------------------------------------
@@ -480,15 +476,15 @@ def health():
 @app.get("/api/digital-twin/status")
 def digital_twin_status():
     if not _DT_ENABLED:
-        raise HTTPException(503, "Digital Twin (MATLAB) bridge not available on this server.")
-    return get_twin_status()
+        raise HTTPException(503, "Digital Twin engine not available on this server.")
+    return dt_get_twin_status()
 
 
 @app.get("/api/digital-twin/latest")
 def digital_twin_latest():
     if not _DT_ENABLED:
-        raise HTTPException(503, "Digital Twin (MATLAB) bridge not available on this server.")
-    data = get_latest_twin_data()
+        raise HTTPException(503, "Digital Twin engine not available on this server.")
+    data = dt_get_latest_twin_data()
     if data is None:
         raise HTTPException(404, "No digital twin simulation has been run yet.")
     return data
