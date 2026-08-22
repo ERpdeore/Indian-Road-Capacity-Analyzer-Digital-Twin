@@ -832,6 +832,8 @@ canvas { width: 100% !important; }
   cursor: pointer;
   transition: background 0.2s, color 0.2s;
   white-space: nowrap;
+  display: inline-block;
+  text-decoration: none;
 }
 .matlab-dl-btn:hover {
   background: #2d4f7a;
@@ -952,48 +954,4 @@ canvas { width: 100% !important; }
 @media (max-width: 640px) {
   .twin-road-labels { grid-template-columns: 1fr; }
   .twin-stats-row   { grid-template-columns: 1fr; }
-}
-
-/* -------------------------------------------------------------- */
-/* Department Reports panel — NEW, added when the 5 report modules */
-/* (pothole_rectification, plate_recognition, footpath_pedestrian,  */
-/* speed_challan, report_generator) were wired into the dashboard.  */
-/* -------------------------------------------------------------- */
-.dept-reports-panel {
-  background: #10182b;
-  border: 1px solid #1e2a45;
-  border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 18px;
-}
-.dept-report-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.dept-report-link {
-  display: inline-block;
-  background: #16233d;
-  border: 1px solid #2c3f66;
-  color: #7dd3fc;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  text-decoration: none;
-  transition: background 0.15s ease;
-}
-.dept-report-link:hover { background: #1c2f52; }
-.dept-footpath {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #1e2a45;
-  font-size: 13px;
-  color: #cbd5e1;
-}
-.dept-footpath strong { color: #fbbf24; text-transform: capitalize; }
-.dept-ref {
-  margin-top: 4px;
-  font-size: 11px;
-  color: #64748b;
-  font-family: monospace;
 }
