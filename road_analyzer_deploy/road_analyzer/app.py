@@ -334,6 +334,43 @@ def _run_batch_job(job_id: str, job_dir: Path,
         analyzer = get_analyzer()
         summary  = analyzer.analyse_batch(image_paths, road_config, output_dir=str(job_dir))
         summary.pop("_json_path", None)
+        per_image_full = summary.pop("_per_image_full", [])
+
+        # Department PDF + Digital Twin for batch: built from the single
+        # worst-case photo in the batch (highest capacity loss %), since
+        # that result already has the full road_config/irc_basis/per_defect
+        # shape both features need — the same shape a single-image analysis
+        # produces. An appendix table lists every photo's capacity loss so
+        # the report is honest about being one batch, not just one photo.
+        if per_image_full:
+            worst = max(per_image_full, key=lambda r: r.get("capacity_loss_pct", 0))
+            try:
+                pdf_path = job_dir / "batch_department_report.pdf"
+                generate_department_report_pdf(
+                    worst, str(pdf_path),
+                    site_label=f"Batch of {len(per_image_full)} photos "
+                               f"(worst case: {worst.get('image', '-')})",
+                    appendix_title="All photos in this batch",
+                    appendix_headers=["image", "capacity_loss_pct", "defects_found"],
+                    appendix_rows=[
+                        {"image": r.get("image", "-"),
+                         "capacity_loss_pct": f"{r.get('capacity_loss_pct', 0)}%",
+                         "defects_found": ", ".join(r.get("per_defect", {}).keys()) or "none"}
+                        for r in per_image_full
+                    ],
+                )
+                summary["department_report_available"] = True
+            except Exception as e:
+                logger.warning("Batch department PDF generation failed: %s", e)
+                summary["department_report_available"] = False
+
+            if _DT_ENABLED:
+                try:
+                    dt_run_and_store(worst)
+                except Exception as e:
+                    logger.warning("Batch digital twin generation failed: %s", e)
+
+        summary["job_id"] = job_id
         JOBS[job_id] = {"status": "done", "result": summary}
         logger.info("Batch job %s done — %d images", job_id, len(image_paths))
     except Exception as e:
@@ -387,6 +424,41 @@ def _run_video_job(job_id: str, job_dir: Path, video_path: str,
             sample_every_sec=sample_every_sec,
         )
         summary.pop("_json_path", None)
+        frame_results_full = summary.pop("_frame_results_full", [])
+
+        # Department PDF + Digital Twin for video: built from the single
+        # worst-case sampled frame (highest capacity loss %) for the same
+        # reason as batch mode above. The appendix lists every unique
+        # tracked defect instance across the whole video (not just the
+        # worst frame), using the same deduplicated tracking data already
+        # computed by analyse_video — so a pothole seen in 40 frames is
+        # reported once, not 40 times.
+        if frame_results_full:
+            worst = max(frame_results_full, key=lambda r: r.get("capacity_loss_pct", 0))
+            unique_defects = summary.get("unique_defect_instances", [])
+            try:
+                pdf_path = job_dir / "video_department_report.pdf"
+                generate_department_report_pdf(
+                    worst, str(pdf_path),
+                    site_label=f"Video: {summary.get('video', '-')} "
+                               f"(worst frame at {worst.get('timestamp_sec', '-')}s)",
+                    appendix_title="Unique defect instances tracked across the full video",
+                    appendix_headers=["cls_name", "times_seen", "first_seen_sec",
+                                       "last_seen_sec", "max_blocked_m"],
+                    appendix_rows=unique_defects,
+                )
+                summary["department_report_available"] = True
+            except Exception as e:
+                logger.warning("Video department PDF generation failed: %s", e)
+                summary["department_report_available"] = False
+
+            if _DT_ENABLED:
+                try:
+                    dt_run_and_store(worst)
+                except Exception as e:
+                    logger.warning("Video digital twin generation failed: %s", e)
+
+        summary["job_id"] = job_id
         JOBS[job_id] = {"status": "done", "result": summary}
         logger.info("Video job %s done", job_id)
     except Exception as e:
