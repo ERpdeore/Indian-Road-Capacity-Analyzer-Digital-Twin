@@ -1365,6 +1365,7 @@
           <div class="batch-stat"><div class="l">Worst image</div><div class="v" style="font-size:13px;font-family:monospace;">${data.worst_image_or_frame || "-"}</div></div>
         </div>
       </div>
+      ${departmentReportButtonHTML(data)}
       <div class="section-title">Images Ranked by Capacity Loss (Worst First)</div>
       <div class="card">
         <table class="stretch-table">
@@ -1373,6 +1374,14 @@
         </table>
       </div>
       ${errorsHTML}`;
+
+    // The department report / digital twin are both built from the worst
+    // photo in the batch (see app.py's _run_batch_job) — trigger the same
+    // twin panel + polling the single-image flow uses.
+    if (data.job_id) {
+      dtShowPanel();
+      dtStartPolling();
+    }
   }
 
   // ----------------------------------------------------------------
@@ -1405,6 +1414,7 @@
           <div class="batch-stat"><div class="l">Unique defects tracked</div><div class="v">${data.unique_defect_count}</div></div>
         </div>
       </div>
+      ${departmentReportButtonHTML(data)}
       <div class="card timeline-card">
         <div class="card-title">Capacity Loss Over Time</div>
         <div class="card-sub">Each bar = one sampled frame. Height = capacity lost at that moment.</div>
@@ -1413,6 +1423,13 @@
       </div>
       <div class="section-title">Unique Defect Instances (Tracked - Not Double-Counted)</div>
       <div class="unique-defects-list">${uniqueRows || `<div class="empty-state">No obstructions detected.</div>`}</div>`;
+
+    // Same reasoning as renderBatchResult above — twin data was generated
+    // from the worst sampled frame in _run_video_job.
+    if (data.job_id) {
+      dtShowPanel();
+      dtStartPolling();
+    }
   }
 
   function lossToColor(pct) {
