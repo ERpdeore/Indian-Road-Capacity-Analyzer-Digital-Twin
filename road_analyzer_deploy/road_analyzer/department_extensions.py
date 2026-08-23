@@ -122,10 +122,21 @@ def _group_by_department(per_defect: dict) -> dict:
 
 
 def generate_department_report_pdf(result: dict, output_path: str,
-                                    site_label: Optional[str] = None) -> str:
+                                    site_label: Optional[str] = None,
+                                    appendix_title: Optional[str] = None,
+                                    appendix_rows: Optional[list] = None,
+                                    appendix_headers: Optional[list] = None) -> str:
     """
     Build a department-routed PDF report from a single analyse_image()
     result dict and write it to output_path. Returns output_path.
+
+    appendix_title / appendix_headers / appendix_rows are optional and let
+    a caller (batch or video mode) append an extra context table after the
+    department sections — e.g. per-image capacity loss across a batch, or
+    unique tracked defect instances across a video — without changing how
+    the main department tables are built. The main tables always describe
+    a single representative result (the worst-case image/frame); the
+    appendix is what tells the reader that this is one photo out of many.
     """
     styles = _styles()
     story = []
@@ -182,6 +193,7 @@ def generate_department_report_pdf(result: dict, output_path: str,
             "No obstructions were detected in this analysis - no department action required.",
             styles["Normal"],
         ))
+        _append_appendix(story, styles, appendix_title, appendix_headers, appendix_rows)
         _build(story, output_path)
         return output_path
 
@@ -239,8 +251,34 @@ def generate_department_report_pdf(result: dict, output_path: str,
         styles["ReportSubtitle"],
     ))
 
+    _append_appendix(story, styles, appendix_title, appendix_headers, appendix_rows)
     _build(story, output_path)
     return output_path
+
+
+def _append_appendix(story: list, styles, appendix_title: Optional[str],
+                      appendix_headers: Optional[list], appendix_rows: Optional[list]) -> None:
+    """Optional extra table for batch/video context — see docstring above."""
+    if not appendix_rows:
+        return
+    story.append(Spacer(1, 14))
+    story.append(Paragraph(appendix_title or "Additional context", styles["DeptHeading"]))
+    headers = appendix_headers or list(appendix_rows[0].keys())
+    table_rows = [[Paragraph(str(h), styles["CellHeader"]) for h in headers]]
+    for row in appendix_rows:
+        table_rows.append([Paragraph(str(row.get(h, "-")), styles["Cell"]) for h in headers])
+    col_width = (170 * mm) / len(headers)
+    t = Table(table_rows, colWidths=[col_width] * len(headers), repeatRows=1)
+    t.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+    ]))
+    story.append(t)
 
 
 def _build(story: list, output_path: str) -> None:
