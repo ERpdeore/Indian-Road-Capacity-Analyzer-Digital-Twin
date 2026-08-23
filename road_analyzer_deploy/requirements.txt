@@ -13,9 +13,4 @@ opencv-python-headless==4.10.0.84
 pyyaml==6.0.2
 psutil==6.0.0
 timm==1.0.9
-
-# BUG FIX: these were required by footpath_pedestrian.py and
-# plate_recognition.py / speed_challan.py but were never added here,
-# so importing either module raised ModuleNotFoundError.
-shapely==2.0.6
-easyocr==1.7.2
+reportlab==4.2.5
