@@ -824,6 +824,12 @@ class RoadAnalyzer:
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
         summary["_json_path"] = str(summary_path)
+        # Kept private (stripped by app.py before the client ever sees it) —
+        # this is the full per-image data (road_config, irc_basis, per_defect,
+        # capacities) that the trimmed "per_image" list above discards. The
+        # department PDF report and Digital Twin need this full shape, not
+        # the summary-only view.
+        summary["_per_image_full"] = per_image_results
         return summary
 
     # ----------------------------------------------------------
@@ -900,6 +906,11 @@ class RoadAnalyzer:
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
         summary["_json_path"] = str(summary_path)
+        # Same reasoning as analyse_batch above — full per-frame results
+        # (road_config, irc_basis, per_defect, capacities), kept private
+        # so app.py can build the worst-frame department report / twin
+        # data, then stripped before the client sees the response.
+        summary["_frame_results_full"] = frame_results
         return summary
 
     @staticmethod
