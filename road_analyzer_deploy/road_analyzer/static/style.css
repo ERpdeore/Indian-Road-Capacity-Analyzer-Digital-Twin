@@ -16,7 +16,7 @@ body {
     margin: 0 auto;
 }
 
-/* ===== HEADER ===== */
+/* HEADER - DARK BLUE GRADIENT */
 header {
     background: linear-gradient(145deg, #0a2a44, #1a4a6a);
     color: white;
@@ -25,13 +25,11 @@ header {
     margin-bottom: 28px;
     box-shadow: 0 8px 24px rgba(10, 42, 68, 0.25);
 }
-
 header h1 {
     font-size: 2.2rem;
     font-weight: 800;
     letter-spacing: -0.5px;
 }
-
 header .subtitle {
     color: #8ab4f8;
     font-size: 1.05rem;
@@ -39,7 +37,7 @@ header .subtitle {
     margin-top: 6px;
 }
 
-/* ===== TABS ===== */
+/* TABS */
 .tabs {
     display: flex;
     gap: 6px;
@@ -50,7 +48,6 @@ header .subtitle {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     border: 1px solid #e2e8f0;
 }
-
 .tab-btn {
     flex: 1;
     padding: 14px 20px;
@@ -63,34 +60,30 @@ header .subtitle {
     transition: 0.3s;
     color: #4a5a6a;
 }
-
 .tab-btn:hover {
     background: #f0f4f9;
     color: #0a2a44;
 }
-
 .tab-btn.active {
     background: #0a2a44;
     color: white;
     box-shadow: 0 4px 12px rgba(10, 42, 68, 0.3);
 }
-
 .tab-content {
     display: none;
 }
-
 .tab-content.active {
     display: block;
 }
 
-/* ===== MAIN GRID ===== */
+/* GRID */
 .main-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 28px;
 }
 
-/* ===== FORM SECTION ===== */
+/* FORM SECTION */
 .form-section {
     background: white;
     padding: 28px;
@@ -99,6 +92,7 @@ header .subtitle {
     border: 1px solid #e2e8f0;
 }
 
+/* UPLOAD AREA */
 .upload-area {
     border: 2px dashed #cbd5e1;
     border-radius: 12px;
@@ -108,24 +102,20 @@ header .subtitle {
     transition: 0.3s;
     margin-bottom: 24px;
 }
-
 .upload-area:hover {
     border-color: #0a2a44;
     background: #f8fafc;
 }
-
 .upload-icon {
     font-size: 2.8rem;
     margin-bottom: 8px;
 }
-
 .browse-link {
     color: #0a2a44;
     font-weight: 600;
     text-decoration: underline;
     cursor: pointer;
 }
-
 .file-info {
     margin-top: 12px;
     padding: 10px;
@@ -134,16 +124,11 @@ header .subtitle {
     color: #1a5a2a;
     font-weight: 500;
 }
-
 .hidden {
     display: none !important;
 }
 
-/* ===== PARAMETERS ===== */
-.params-section {
-    margin-bottom: 20px;
-}
-
+/* PARAMETERS */
 .params-section h3 {
     font-size: 0.95rem;
     font-weight: 700;
@@ -154,18 +139,15 @@ header .subtitle {
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
-
 .param-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
     margin-bottom: 14px;
 }
-
 .param-group.full-width {
     grid-column: 1 / -1;
 }
-
 .param-group label {
     display: block;
     font-weight: 600;
@@ -173,7 +155,6 @@ header .subtitle {
     color: #2a3a4a;
     margin-bottom: 4px;
 }
-
 .param-group input,
 .param-group select {
     width: 100%;
@@ -184,14 +165,12 @@ header .subtitle {
     background: #fafcff;
     transition: 0.2s;
 }
-
 .param-group input:focus,
 .param-group select:focus {
     border-color: #0a2a44;
-    box-shadow: 0 0 0 3px rgba(10, 42, 68, 0.08);
     outline: none;
+    box-shadow: 0 0 0 3px rgba(10, 42, 68, 0.08);
 }
-
 .param-group small {
     display: block;
     color: #6a7a8a;
@@ -199,7 +178,7 @@ header .subtitle {
     margin-top: 4px;
 }
 
-/* ===== CAMERA TIPS ===== */
+/* CAMERA TIPS */
 .camera-tips {
     background: #f6f9fc;
     padding: 16px 20px;
@@ -207,19 +186,16 @@ header .subtitle {
     margin: 20px 0;
     border-left: 4px solid #0a2a44;
 }
-
 .camera-tips h4 {
     font-size: 0.85rem;
     font-weight: 700;
     color: #0a2a44;
     margin-bottom: 6px;
 }
-
 .camera-tips ul {
     list-style: none;
     padding: 0;
 }
-
 .camera-tips li {
     font-size: 0.85rem;
     color: #3a4a5a;
@@ -227,7 +203,6 @@ header .subtitle {
     padding-left: 20px;
     position: relative;
 }
-
 .camera-tips li::before {
     content: "•";
     color: #0a2a44;
@@ -236,7 +211,7 @@ header .subtitle {
     left: 4px;
 }
 
-/* ===== RUN BUTTON ===== */
+/* RUN BUTTON */
 .run-btn {
     width: 100%;
     padding: 16px;
@@ -250,20 +225,18 @@ header .subtitle {
     transition: 0.3s;
     margin-top: 8px;
 }
-
 .run-btn:hover:not(:disabled) {
     background: #1a4a6a;
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(10, 42, 68, 0.3);
 }
-
 .run-btn:disabled {
     background: #8a9baa;
     cursor: not-allowed;
     transform: none;
 }
 
-/* ===== STATUS BAR ===== */
+/* STATUS BAR */
 .status-bar {
     margin-top: 14px;
     padding: 12px 16px;
@@ -276,13 +249,12 @@ header .subtitle {
     align-items: center;
     gap: 8px;
 }
-
 .status-bar.error {
     background: #fde8e8;
     color: #a33a2a;
 }
 
-/* ===== RESULTS SECTION ===== */
+/* RESULTS SECTION */
 .results-section {
     background: white;
     padding: 28px;
@@ -291,7 +263,7 @@ header .subtitle {
     border: 1px solid #e2e8f0;
 }
 
-/* ===== DSV CARD ===== */
+/* DSV CARD */
 .dsv-card {
     background: linear-gradient(145deg, #f8fbff, #eef4fa);
     border-radius: 12px;
@@ -299,38 +271,33 @@ header .subtitle {
     margin-bottom: 24px;
     border: 1px solid #dce4ed;
 }
-
 .dsv-card h3 {
     font-size: 0.9rem;
     font-weight: 600;
     color: #2a3a4a;
     margin-bottom: 8px;
 }
-
 .dsv-display {
     font-size: 2.6rem;
     font-weight: 800;
     color: #0a2a44;
 }
-
 .dsv-display .unit {
     font-size: 1.2rem;
     font-weight: 600;
     color: #4a6a8a;
     margin-left: 6px;
 }
-
 .dsv-card p {
     color: #4a5a6a;
     font-size: 0.95rem;
     margin-top: 4px;
 }
 
-/* ===== RESULTS CONTAINER ===== */
+/* RESULTS CONTAINER */
 #resultContainer {
     margin-top: 16px;
 }
-
 .placeholder {
     text-align: center;
     padding: 40px 20px;
@@ -339,12 +306,11 @@ header .subtitle {
     border-radius: 12px;
     border: 1px dashed #d0d8e2;
 }
-
 .placeholder p {
     font-size: 1rem;
 }
 
-/* ===== BATCH PLACEHOLDER ===== */
+/* BATCH PLACEHOLDER */
 .batch-placeholder {
     background: white;
     padding: 40px;
@@ -353,12 +319,7 @@ header .subtitle {
     border: 1px solid #e2e8f0;
 }
 
-.batch-placeholder h3 {
-    color: #0a2a44;
-    margin-bottom: 8px;
-}
-
-/* ===== DISCLAIMER ===== */
+/* DISCLAIMER */
 .disclaimer {
     margin-top: 28px;
     background: #fef6f0;
@@ -368,18 +329,16 @@ header .subtitle {
     color: #4a3a2a;
     font-size: 0.9rem;
 }
-
 .disclaimer strong {
     color: #a33a1a;
 }
 
-/* ===== RESPONSIVE ===== */
+/* RESPONSIVE */
 @media (max-width: 1024px) {
     .main-grid {
         grid-template-columns: 1fr;
     }
 }
-
 @media (max-width: 600px) {
     .param-row {
         grid-template-columns: 1fr;
