@@ -12,19 +12,19 @@
         <!-- HEADER -->
         <header>
             <h1>🛣️ Indian Road Capacity Analyzer</h1>
-            <p class="subtitle">Supports Static Images & Dynamic Videos — IRC:106 Compliant</p>
+            <p class="subtitle">Supports Static Images & Dynamic Videos</p>
         </header>
 
-        <!-- TABS (Exactly as you had) -->
+        <!-- TABS -->
         <div class="tabs">
             <button class="tab-btn active" data-tab="single">📸 SINGLE IMAGE</button>
             <button class="tab-btn" data-tab="batch">📁 BATCH (FOLDER)</button>
         </div>
 
-        <!-- SINGLE IMAGE TAB (Your exact layout) -->
+        <!-- SINGLE IMAGE TAB -->
         <div id="tab-single" class="tab-content active">
             <div class="main-grid">
-                <!-- LEFT: Upload & Parameters -->
+                <!-- LEFT PANEL: Form -->
                 <div class="form-section">
                     <div class="upload-area" id="uploadArea">
                         <div class="upload-icon">📤</div>
@@ -36,7 +36,7 @@
 
                     <div class="params-section">
                         <h3>📏 ROAD PARAMETERS – MEASURED ON SITE</h3>
-                        
+
                         <div class="param-row">
                             <div class="param-group full-width">
                                 <label>Total carriageway width (m)</label>
@@ -80,8 +80,8 @@
                             <div class="param-group">
                                 <label>Traffic composition regime (IRC:106 Table 1)</label>
                                 <select id="compositionRegime">
-                                    <option value="low">Low — &lt;15% heavy vehicles (cars, autos, two-wheelers)</option>
-                                    <option value="high" selected>High — &gt;15% heavy vehicles (trucks, buses)</option>
+                                    <option value="low" selected>Low — &lt;15% heavy vehicles (cars, autos, two-wheelers)</option>
+                                    <option value="high">High — &gt;15% heavy vehicles (trucks, buses)</option>
                                 </select>
                                 <small>Less than 15% heavy vehicles — mostly cars, autos, two-wheelers</small>
                             </div>
@@ -102,7 +102,7 @@
                     <div id="statusBar" class="status-bar">✅ Model loaded and ready.</div>
                 </div>
 
-                <!-- RIGHT: Results & DSV -->
+                <!-- RIGHT PANEL: DSV + Results -->
                 <div class="results-section" id="resultsPanel">
                     <div class="dsv-card">
                         <h3>📊 IRC:106 BASE DSV (Design Service Volume)</h3>
