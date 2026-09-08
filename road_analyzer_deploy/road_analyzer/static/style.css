@@ -2,7 +2,7 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    font-family: 'Inter', 'Segoe UI', sans-serif;
+    font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
 body {
@@ -16,7 +16,7 @@ body {
     margin: 0 auto;
 }
 
-/* HEADER */
+/* ===== HEADER ===== */
 header {
     background: linear-gradient(145deg, #0a2a44, #1a4a6a);
     color: white;
@@ -39,7 +39,7 @@ header .subtitle {
     margin-top: 6px;
 }
 
-/* TABS */
+/* ===== TABS ===== */
 .tabs {
     display: flex;
     gap: 6px;
@@ -47,7 +47,7 @@ header .subtitle {
     padding: 6px;
     border-radius: 14px;
     margin-bottom: 28px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     border: 1px solid #e2e8f0;
 }
 
@@ -83,19 +83,19 @@ header .subtitle {
     display: block;
 }
 
-/* MAIN GRID */
+/* ===== MAIN GRID ===== */
 .main-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 28px;
 }
 
-/* FORM SECTION */
+/* ===== FORM SECTION ===== */
 .form-section {
     background: white;
     padding: 28px;
     border-radius: 16px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
     border: 1px solid #e2e8f0;
 }
 
@@ -135,9 +135,11 @@ header .subtitle {
     font-weight: 500;
 }
 
-.hidden { display: none !important; }
+.hidden {
+    display: none !important;
+}
 
-/* PARAMETERS */
+/* ===== PARAMETERS ===== */
 .params-section {
     margin-bottom: 20px;
 }
@@ -197,7 +199,7 @@ header .subtitle {
     margin-top: 4px;
 }
 
-/* CAMERA TIPS */
+/* ===== CAMERA TIPS ===== */
 .camera-tips {
     background: #f6f9fc;
     padding: 16px 20px;
@@ -234,7 +236,7 @@ header .subtitle {
     left: 4px;
 }
 
-/* RUN BUTTON */
+/* ===== RUN BUTTON ===== */
 .run-btn {
     width: 100%;
     padding: 16px;
@@ -261,6 +263,7 @@ header .subtitle {
     transform: none;
 }
 
+/* ===== STATUS BAR ===== */
 .status-bar {
     margin-top: 14px;
     padding: 12px 16px;
@@ -279,15 +282,16 @@ header .subtitle {
     color: #a33a2a;
 }
 
-/* RESULTS SECTION */
+/* ===== RESULTS SECTION ===== */
 .results-section {
     background: white;
     padding: 28px;
     border-radius: 16px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
     border: 1px solid #e2e8f0;
 }
 
+/* ===== DSV CARD ===== */
 .dsv-card {
     background: linear-gradient(145deg, #f8fbff, #eef4fa);
     border-radius: 12px;
@@ -322,6 +326,7 @@ header .subtitle {
     margin-top: 4px;
 }
 
+/* ===== RESULTS CONTAINER ===== */
 #resultContainer {
     margin-top: 16px;
 }
@@ -339,7 +344,7 @@ header .subtitle {
     font-size: 1rem;
 }
 
-/* BATCH PLACEHOLDER */
+/* ===== BATCH PLACEHOLDER ===== */
 .batch-placeholder {
     background: white;
     padding: 40px;
@@ -353,7 +358,7 @@ header .subtitle {
     margin-bottom: 8px;
 }
 
-/* DISCLAIMER */
+/* ===== DISCLAIMER ===== */
 .disclaimer {
     margin-top: 28px;
     background: #fef6f0;
@@ -368,7 +373,7 @@ header .subtitle {
     color: #a33a1a;
 }
 
-/* RESPONSIVE */
+/* ===== RESPONSIVE ===== */
 @media (max-width: 1024px) {
     .main-grid {
         grid-template-columns: 1fr;
