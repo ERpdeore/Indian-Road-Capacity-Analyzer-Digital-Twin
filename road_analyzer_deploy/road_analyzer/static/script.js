@@ -4,36 +4,36 @@ document.addEventListener('DOMContentLoaded', function() {
     // ----- TAB SWITCHING -----
     const tabBtns = document.querySelectorAll('.tab-btn');
     const tabContents = document.querySelectorAll('.tab-content');
-    tabBtns.forEach(btn => {
+    tabBtns.forEach(function(btn) {
         btn.addEventListener('click', function() {
-            tabBtns.forEach(b => b.classList.remove('active'));
-            tabContents.forEach(c => c.classList.remove('active'));
+            tabBtns.forEach(function(b) { b.classList.remove('active'); });
+            tabContents.forEach(function(c) { c.classList.remove('active'); });
             this.classList.add('active');
             document.getElementById('tab-' + this.dataset.tab).classList.add('active');
         });
     });
 
-    // ----- FILE UPLOAD (FIXED) -----
-    const uploadArea = document.getElementById('uploadArea');
-    const fileInput = document.getElementById('fileInput');
-    const fileInfo = document.getElementById('fileInfo');
+    // ----- FILE UPLOAD (WORKING) -----
+    var uploadArea = document.getElementById('uploadArea');
+    var fileInput = document.getElementById('fileInput');
+    var fileInfo = document.getElementById('fileInfo');
 
     console.log("uploadArea:", uploadArea);
     console.log("fileInput:", fileInput);
 
     if (uploadArea && fileInput) {
-        // Click on the upload area triggers the file input
+        // Click on upload area triggers file input
         uploadArea.addEventListener('click', function(e) {
             e.preventDefault();
             console.log("Upload area clicked!");
             fileInput.click();
         });
 
-        // When a file is selected, show its name
+        // When file is selected, show name
         fileInput.addEventListener('change', function() {
             console.log("File selected!");
             if (this.files && this.files.length > 0) {
-                const file = this.files[0];
+                var file = this.files[0];
                 fileInfo.textContent = '📎 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
                 fileInfo.classList.remove('hidden');
             } else {
@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        // Drag and drop support
+        // Drag and drop
         uploadArea.addEventListener('dragover', function(e) {
             e.preventDefault();
             this.style.borderColor = '#0a2a44';
@@ -69,15 +69,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ----- DSV PREVIEW UPDATE -----
     function updateDSVPreview() {
-        const carriageway = document.getElementById('carriageway').value;
-        const fringe = document.getElementById('fringe').value;
-        const dsvMap = {
+        var carriageway = document.getElementById('carriageway').value;
+        var fringe = document.getElementById('fringe').value;
+        var dsvMap = {
             '2L-U': { base: 1750, speed: 50 }, '2L-D': { base: 2000, speed: 55 },
             '4L-U': { base: 3500, speed: 65 }, '4L-D': { base: 4200, speed: 70 },
             '6L-U': { base: 5600, speed: 80 }, '6L-D': { base: 7000, speed: 85 },
             '8L-U': { base: 10500, speed: 90 }, '8L-D': { base: 12600, speed: 100 }
         };
-        let dsv = dsvMap[carriageway] || { base: 2400, speed: 50 };
+        var dsv = dsvMap[carriageway] || { base: 2400, speed: 50 };
         if (fringe === 'low') dsv.base *= 1.0;
         else if (fringe === 'medium') dsv.base *= 0.9;
         else dsv.base *= 0.8;
@@ -91,26 +91,26 @@ document.addEventListener('DOMContentLoaded', function() {
     updateDSVPreview();
 
     // ----- RUN ANALYSIS -----
-    const analyzeBtn = document.getElementById('analyzeBtn');
-    const statusBar = document.getElementById('statusBar');
+    var analyzeBtn = document.getElementById('analyzeBtn');
+    var statusBar = document.getElementById('statusBar');
 
     if (analyzeBtn) {
         analyzeBtn.addEventListener('click', async function() {
-            const file = fileInput.files[0];
+            var file = fileInput.files[0];
             if (!file) {
                 statusBar.textContent = '❌ Please upload an image first.';
                 statusBar.className = 'status-bar error';
                 return;
             }
 
-            const totalWidth = parseFloat(document.getElementById('totalWidth').value);
+            var totalWidth = parseFloat(document.getElementById('totalWidth').value);
             if (isNaN(totalWidth) || totalWidth <= 0) {
                 statusBar.textContent = '❌ Please enter a valid road width.';
                 statusBar.className = 'status-bar error';
                 return;
             }
 
-            const formData = new FormData();
+            var formData = new FormData();
             formData.append('file', file);
             formData.append('total_width_m', totalWidth);
             formData.append('carriageway', document.getElementById('carriageway').value);
@@ -123,12 +123,12 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('resultContainer').innerHTML = '<div class="placeholder"><p>⏳ Processing your image...</p></div>';
 
             try {
-                const response = await fetch('/analyse', { method: 'POST', body: formData });
+                var response = await fetch('/analyse', { method: 'POST', body: formData });
                 if (!response.ok) {
-                    const err = await response.json();
+                    var err = await response.json();
                     throw new Error(err.detail || 'Server error');
                 }
-                const data = await response.json();
+                var data = await response.json();
                 displayResults(data);
                 statusBar.textContent = '✅ Analysis complete.';
                 statusBar.className = 'status-bar';
@@ -144,46 +144,17 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // ----- VIDEO ANALYSIS -----
-    const videoAnalyzeBtn = document.getElementById('videoAnalyzeBtn');
-    const videoStatus = document.getElementById('videoStatus');
-
-    if (videoAnalyzeBtn) {
-        videoAnalyzeBtn.addEventListener('click', function() {
-            const videoInput = document.getElementById('videoInput');
-            const file = videoInput.files[0];
-            if (!file) {
-                videoStatus.textContent = '❌ Please upload a video first.';
-                videoStatus.className = 'status-bar error';
-                return;
-            }
-            videoStatus.textContent = '🎥 Video analysis coming soon!';
-            videoStatus.className = 'status-bar';
-        });
-    }
-
-    // ----- BATCH ANALYSIS -----
-    const batchAnalyzeBtn = document.getElementById('batchAnalyzeBtn');
-    const batchStatus = document.getElementById('batchStatus');
-
-    if (batchAnalyzeBtn) {
-        batchAnalyzeBtn.addEventListener('click', function() {
-            batchStatus.textContent = '📁 Batch processing coming soon!';
-            batchStatus.className = 'status-bar';
-        });
-    }
-
     // ----- DISPLAY RESULTS -----
     function displayResults(data) {
-        const result = data.result;
-        const container = document.getElementById('resultContainer');
+        var result = data.result;
+        var container = document.getElementById('resultContainer');
 
         if (!result) {
             container.innerHTML = '<div class="placeholder"><p>❌ No results returned.</p></div>';
             return;
         }
 
-        let html = `
+        var html = `
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
                 <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
                     <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Baseline DSV</span>
