@@ -1,20 +1,10 @@
-"""
-Department logic – generates recommendations for engineering review.
-All actions are prefixed with "Recommended for engineering review" to
-avoid implying enforcement authority.
-"""
-
 def generate_recommendations(detections, reduced_capacity, base_capacity):
-    """
-    Generate recommendations based on detected objects and capacity loss.
-    """
     recommendations = []
     if base_capacity <= 0:
         return recommendations
 
     capacity_loss_percent = (1 - (reduced_capacity / base_capacity)) * 100
 
-    # General capacity loss guidance
     if capacity_loss_percent > 30:
         recommendations.append({
             "severity": "Critical",
@@ -40,7 +30,6 @@ def generate_recommendations(detections, reduced_capacity, base_capacity):
             "category": "capacity"
         })
 
-    # Object‑specific rules
     for det in detections:
         cls = det["class"]
         if cls == "pothole":
