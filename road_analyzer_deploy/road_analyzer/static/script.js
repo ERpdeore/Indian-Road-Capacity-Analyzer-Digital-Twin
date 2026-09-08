@@ -1,7 +1,7 @@
 document.addEventListener('DOMContentLoaded', function() {
     console.log("✅ Script loaded!");
 
-    // ---------- TAB SWITCHING ----------
+    // ----- TAB SWITCHING -----
     const tabBtns = document.querySelectorAll('.tab-btn');
     const tabContents = document.querySelectorAll('.tab-content');
     tabBtns.forEach(btn => {
@@ -13,24 +13,20 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // ---------- FILE UPLOAD (FIXED) ----------
+    // ----- SINGLE IMAGE UPLOAD -----
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
     const fileInfo = document.getElementById('fileInfo');
 
     if (uploadArea && fileInput) {
-        // Click on the upload area triggers the hidden file input
         uploadArea.addEventListener('click', function(e) {
             e.preventDefault();
-            console.log("📁 Upload area clicked!");
             fileInput.click();
         });
 
-        // When a file is selected, show its name
         fileInput.addEventListener('change', function() {
             if (this.files && this.files.length > 0) {
                 const file = this.files[0];
-                console.log("📎 File selected:", file.name);
                 fileInfo.textContent = '📎 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
                 fileInfo.classList.remove('hidden');
             } else {
@@ -38,7 +34,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        // Drag and drop support
+        // Drag and drop
         uploadArea.addEventListener('dragover', function(e) {
             e.preventDefault();
             this.style.borderColor = '#0a2a44';
@@ -58,11 +54,31 @@ document.addEventListener('DOMContentLoaded', function() {
                 fileInput.dispatchEvent(new Event('change'));
             }
         });
-    } else {
-        console.error("❌ Upload elements not found!");
     }
 
-    // ---------- DSV PREVIEW UPDATE ----------
+    // ----- VIDEO UPLOAD -----
+    const videoUploadArea = document.getElementById('videoUploadArea');
+    const videoInput = document.getElementById('videoInput');
+    const videoInfo = document.getElementById('videoInfo');
+
+    if (videoUploadArea && videoInput) {
+        videoUploadArea.addEventListener('click', function(e) {
+            e.preventDefault();
+            videoInput.click();
+        });
+
+        videoInput.addEventListener('change', function() {
+            if (this.files && this.files.length > 0) {
+                const file = this.files[0];
+                videoInfo.textContent = '🎬 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
+                videoInfo.classList.remove('hidden');
+            } else {
+                videoInfo.classList.add('hidden');
+            }
+        });
+    }
+
+    // ----- DSV PREVIEW UPDATE -----
     function updateDSVPreview() {
         const carriageway = document.getElementById('carriageway').value;
         const fringe = document.getElementById('fringe').value;
@@ -81,13 +97,11 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('speedDisplay').textContent = dsv.speed;
     }
 
-    const carriagewaySelect = document.getElementById('carriageway');
-    const fringeSelect = document.getElementById('fringe');
-    if (carriagewaySelect) carriagewaySelect.addEventListener('change', updateDSVPreview);
-    if (fringeSelect) fringeSelect.addEventListener('change', updateDSVPreview);
+    document.getElementById('carriageway').addEventListener('change', updateDSVPreview);
+    document.getElementById('fringe').addEventListener('change', updateDSVPreview);
     updateDSVPreview();
 
-    // ---------- RUN ANALYSIS ----------
+    // ----- RUN ANALYSIS -----
     const analyzeBtn = document.getElementById('analyzeBtn');
     const statusBar = document.getElementById('statusBar');
 
@@ -95,7 +109,7 @@ document.addEventListener('DOMContentLoaded', function() {
         analyzeBtn.addEventListener('click', async function() {
             const file = fileInput.files[0];
             if (!file) {
-                statusBar.textContent = '❌ Please upload an image or video first.';
+                statusBar.textContent = '❌ Please upload an image first.';
                 statusBar.className = 'status-bar error';
                 return;
             }
@@ -139,11 +153,37 @@ document.addEventListener('DOMContentLoaded', function() {
                 analyzeBtn.textContent = '🚀 RUN ANALYSIS';
             }
         });
-    } else {
-        console.error("❌ Analyze button not found!");
     }
 
-    // ---------- DISPLAY RESULTS ----------
+    // ----- VIDEO ANALYSIS -----
+    const videoAnalyzeBtn = document.getElementById('videoAnalyzeBtn');
+    const videoStatus = document.getElementById('videoStatus');
+
+    if (videoAnalyzeBtn) {
+        videoAnalyzeBtn.addEventListener('click', function() {
+            const file = videoInput.files[0];
+            if (!file) {
+                videoStatus.textContent = '❌ Please upload a video first.';
+                videoStatus.className = 'status-bar error';
+                return;
+            }
+            videoStatus.textContent = '🎥 Video analysis coming soon!';
+            videoStatus.className = 'status-bar';
+        });
+    }
+
+    // ----- BATCH ANALYSIS -----
+    const batchAnalyzeBtn = document.getElementById('batchAnalyzeBtn');
+    const batchStatus = document.getElementById('batchStatus');
+
+    if (batchAnalyzeBtn) {
+        batchAnalyzeBtn.addEventListener('click', function() {
+            batchStatus.textContent = '📁 Batch processing coming soon!';
+            batchStatus.className = 'status-bar';
+        });
+    }
+
+    // ----- DISPLAY RESULTS -----
     function displayResults(data) {
         const result = data.result;
         const container = document.getElementById('resultContainer');
