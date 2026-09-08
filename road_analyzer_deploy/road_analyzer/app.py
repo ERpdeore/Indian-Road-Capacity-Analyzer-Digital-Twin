@@ -3,7 +3,6 @@ import sys
 import uuid
 import shutil
 import logging
-import inspect
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,34 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import cv2
 from pathlib import Path
 
-# ===================================================================
-# SUPER SMART IMPORT FIX - Finds files NO MATTER WHERE THEY ARE
-# ===================================================================
-# Get the folder where app.py is running
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
+# ----- Ensure current directory is in Python path -----
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Add BOTH folders to Python's search path
-sys.path.insert(0, current_dir)
-sys.path.insert(0, parent_dir)
-
-# Also add the current working directory (just in case)
-sys.path.insert(0, os.getcwd())
-
-# Now try to import - if it fails, we print where we are looking
-try:
-    from core import RoadAnalyzer
-    from department_extensions import generate_recommendations
-    print("✅ Imports successful!")
-except ModuleNotFoundError as e:
-    print(f"❌ Import failed: {e}")
-    print(f"Current directory: {current_dir}")
-    print(f"Parent directory: {parent_dir}")
-    print(f"Working directory: {os.getcwd()}")
-    print("Files in current dir:", os.listdir(current_dir) if os.path.exists(current_dir) else "N/A")
-    print("Files in parent dir:", os.listdir(parent_dir) if os.path.exists(parent_dir) else "N/A")
-    raise e
-# ===================================================================
+# ----- Imports (absolute, no dots) -----
+from core import RoadAnalyzer
+from department_extensions import generate_recommendations
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,7 +40,7 @@ app.add_middleware(
 if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Initialize the heavy analyzer once (MiDaS OFF by default to save CPU)
+# Initialize once
 analyzer = RoadAnalyzer(model_path="yolov8n.pt", enable_depth=False)
 jobs = {}
 
@@ -73,9 +50,7 @@ async def root():
         return FileResponse("static/index.html")
     return {"message": "API is running."}
 
-# --------------------------------------------------------------
-# IMAGE ANALYSIS (Instant)
-# --------------------------------------------------------------
+# ---------- Image Analysis ----------
 @app.post("/analyse")
 async def analyse(
     file: UploadFile = File(...),
@@ -114,8 +89,8 @@ async def analyse(
         }
 
         recommendations = generate_recommendations(
-            raw_result["detections"], 
-            raw_result["reduced_dsv_pcu_hr"], 
+            raw_result["detections"],
+            raw_result["reduced_dsv_pcu_hr"],
             raw_result["base_dsv_pcu_hr"]
         )
 
@@ -137,11 +112,8 @@ async def analyse(
         if temp_path.exists():
             os.remove(temp_path)
 
-# --------------------------------------------------------------
-# VIDEO ANALYSIS (Asynchronous - No Timeouts!)
-# --------------------------------------------------------------
+# ---------- Video Analysis (Background) ----------
 def process_video_background(job_id: str, video_path: Path, total_width_m: float, carriageway: str, fringe: str):
-    """Background task to process video frames."""
     try:
         logger.info(f"Starting video processing for job {job_id}")
         cap = cv2.VideoCapture(str(video_path))
@@ -155,11 +127,8 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
 
         sample_interval = max(1, int(fps))
         frame_indices = list(range(0, total_frames, sample_interval))
-        
         if len(frame_indices) > 30:
             frame_indices = frame_indices[:30]
-        
-        logger.info(f"Job {job_id}: Sampling {len(frame_indices)} frames from {total_frames} total.")
 
         results = []
         for i, idx in enumerate(frame_indices):
@@ -167,7 +136,6 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
             ret, frame = cap.read()
             if not ret:
                 continue
-            
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             raw_result = analyzer.analyse_image(
                 image=frame_rgb,
@@ -175,7 +143,6 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
                 carriageway=carriageway,
                 fringe=fringe
             )
-            
             results.append({
                 "timestamp_sec": round(idx / fps, 1) if fps > 0 else i,
                 "capacity_loss_percent": round(raw_result["capacity_loss_percent"], 2),
@@ -183,7 +150,6 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
                 "blocked_width_m": round(raw_result["blocked_width_m"], 3),
                 "pothole_severities": raw_result["pothole_severities"],
             })
-            
             if i % 5 == 0:
                 logger.info(f"Job {job_id}: Processed frame {i+1}/{len(frame_indices)}")
 
@@ -221,7 +187,7 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
             ],
             "disclaimer": "Video analysis is dynamic. Results represent the worst observed condition."
         }
-        
+
         jobs[job_id] = dynamic_response
         logger.info(f"Job {job_id}: Video processing complete.")
 
@@ -246,7 +212,7 @@ async def analyse_video(
     try:
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
+
         cap = cv2.VideoCapture(str(temp_path))
         if not cap.isOpened():
             os.remove(temp_path)
@@ -254,7 +220,7 @@ async def analyse_video(
         cap.release()
 
         jobs[job_id] = {"status": "processing", "message": "Video is being analysed in the background."}
-        
+
         background_tasks.add_task(
             process_video_background,
             job_id,
@@ -263,7 +229,7 @@ async def analyse_video(
             carriageway,
             fringe
         )
-        
+
         return {
             "job_id": job_id,
             "status": "processing",
@@ -281,11 +247,9 @@ async def analyse_video(
 async def get_job(job_id: str):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
     job = jobs[job_id]
     if job.get("status") == "processing":
         return {"job_id": job_id, "status": "processing"}
-    
     return job
 
 if __name__ == "__main__":
