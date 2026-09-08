@@ -9,82 +9,30 @@
 </head>
 <body>
     <div class="container">
+        <!-- ===== HEADER ===== -->
         <header>
-            <h1>🛣️ Indian Road Capacity Analyzer</h1>
-            <p class="subtitle">Supports Static Images & Dynamic Videos</p>
+            <h1>🛣️ INDIAN ROAD CAPACITY ANALYZER</h1>
+            <p class="subtitle">Supports Static Images &amp; Dynamic Videos</p>
         </header>
 
-        <!-- TABS -->
+        <!-- ===== TABS ===== -->
         <div class="tabs">
             <button class="tab-btn active" data-tab="single">📸 SINGLE IMAGE</button>
             <button class="tab-btn" data-tab="batch">📁 BATCH (FOLDER)</button>
+            <button class="tab-btn" data-tab="video">🎥 VIDEO</button>
         </div>
 
-        <!-- SINGLE IMAGE TAB -->
+        <!-- ===== SINGLE IMAGE TAB ===== -->
         <div id="tab-single" class="tab-content active">
             <div class="main-grid">
                 <!-- LEFT PANEL -->
                 <div class="form-section">
                     <div class="upload-area" id="uploadArea">
-                        <div class="upload-icon">📤</div>
-                        <p>Drop your image here or <span class="browse-link">browse</span></p>
-                        <input type="file" id="fileInput" accept="image/*,video/*" hidden>
-                        <small>Supports JPG, PNG, WEBP, MP4 (Max 20MB)</small>
+                        <div class="upload-icon">🖼️</div>
+                        <p>Drop a road image here, or <span class="browse-link">click to browse</span></p>
+                        <input type="file" id="fileInput" accept="image/*" hidden>
+                        <small><strong>JPG / PNG</strong> — near-perpendicular shot of the carriageway works best</small>
                         <div id="fileInfo" class="file-info hidden"></div>
-                    </div>
-
-                    <div class="params-section">
-                        <h3>📏 ROAD PARAMETERS – MEASURED ON SITE</h3>
-
-                        <div class="param-row">
-                            <div class="param-group full-width">
-                                <label>Total carriageway width (m)</label>
-                                <input type="number" id="totalWidth" step="0.1" value="7.0">
-                                <small>Measure at 3 points and average</small>
-                            </div>
-                        </div>
-
-                        <div class="param-row">
-                            <div class="param-group">
-                                <label>Usable shoulder width (m)</label>
-                                <input type="number" id="shoulderWidth" step="0.1" value="0.0">
-                                <small>Enter 0 if no paved shoulder</small>
-                            </div>
-                            <div class="param-group">
-                                <label>Carriageway type (IRC:106 Table 2)</label>
-                                <select id="carriageway">
-                                    <option value="2L-U">2-Lane Undivided</option>
-                                    <option value="2L-D">2-Lane Divided</option>
-                                    <option value="4L-U">4-Lane Undivided</option>
-                                    <option value="4L-D" selected>4-Lane Divided</option>
-                                    <option value="6L-U">6-Lane Undivided</option>
-                                    <option value="6L-D">6-Lane Divided</option>
-                                    <option value="8L-U">8-Lane Undivided</option>
-                                    <option value="8L-D">8-Lane Divided</option>
-                                </select>
-                                <small>Count markings + 1, or width ÷ 3.5</small>
-                            </div>
-                        </div>
-
-                        <div class="param-row">
-                            <div class="param-group">
-                                <label>Fringe / frontage condition (IRC:106 Table 2)</label>
-                                <select id="fringe">
-                                    <option value="low">Low — Rural / No frontage access</option>
-                                    <option value="medium" selected>Medium — Suburban / Some access</option>
-                                    <option value="high">High — Urban / CBD / Heavy frontage</option>
-                                </select>
-                                <small>No frontage access, no standing vehicles, very little cross traffic</small>
-                            </div>
-                            <div class="param-group">
-                                <label>Traffic composition regime (IRC:106 Table 1)</label>
-                                <select id="compositionRegime">
-                                    <option value="low" selected>Low — &lt;15% heavy vehicles</option>
-                                    <option value="high">High — &gt;15% heavy vehicles</option>
-                                </select>
-                                <small>Less than 15% heavy vehicles — mostly cars, autos, two-wheelers</small>
-                            </div>
-                        </div>
                     </div>
 
                     <div class="camera-tips">
@@ -102,7 +50,7 @@
                 </div>
 
                 <!-- RIGHT PANEL -->
-                <div class="results-section" id="resultsPanel">
+                <div class="results-section">
                     <div class="dsv-card">
                         <h3>📊 IRC:106 BASE DSV (Design Service Volume)</h3>
                         <div class="dsv-display">
@@ -120,19 +68,82 @@
             </div>
         </div>
 
-        <!-- BATCH TAB -->
+        <!-- ===== BATCH TAB ===== -->
         <div id="tab-batch" class="tab-content">
-            <div class="batch-placeholder">
-                <h3>📁 Batch Processing</h3>
-                <p>Upload a folder of images to analyze multiple roads at once.</p>
-                <div class="upload-area" style="cursor:default;">
-                    <div class="upload-icon">📂</div>
-                    <p>Select Folder</p>
-                    <small>Coming soon in the next update</small>
+            <div class="form-section">
+                <h3>📁 BATCH (FOLDER)</h3>
+                <div class="params-section" style="margin-top:16px;">
+                    <h3>📏 ROAD PARAMETERS – MEASURED ON SITE</h3>
+                    <div class="param-row">
+                        <div class="param-group full-width">
+                            <label>Total carriageway width (m)</label>
+                            <input type="number" id="totalWidthBatch" step="0.1" value="7.0">
+                            <small>Measure at 3 points and average</small>
+                        </div>
+                    </div>
+                    <div class="param-row">
+                        <div class="param-group">
+                            <label>Usable shoulder width (m)</label>
+                            <input type="number" id="shoulderWidthBatch" step="0.1" value="0.0">
+                            <small>Enter 0 if no paved shoulder</small>
+                        </div>
+                        <div class="param-group">
+                            <label>Carriageway type (IRC:106 Table 2)</label>
+                            <select id="carriagewayBatch">
+                                <option value="2L-U">2-Lane Undivided</option>
+                                <option value="2L-D">2-Lane Divided</option>
+                                <option value="4L-U">4-Lane Undivided</option>
+                                <option value="4L-D" selected>4-Lane Divided</option>
+                                <option value="6L-U">6-Lane Undivided</option>
+                                <option value="6L-D">6-Lane Divided</option>
+                                <option value="8L-U">8-Lane Undivided</option>
+                                <option value="8L-D">8-Lane Divided</option>
+                            </select>
+                            <small>Count markings + 1, or width ÷ 3.5</small>
+                        </div>
+                    </div>
+                    <div class="param-row">
+                        <div class="param-group">
+                            <label>Fringe / frontage condition (IRC:106 Table 2)</label>
+                            <select id="fringeBatch">
+                                <option value="low">Low — Rural / No frontage access</option>
+                                <option value="medium" selected>Medium — Suburban / Some access</option>
+                                <option value="high">High — Urban / CBD / Heavy frontage</option>
+                            </select>
+                            <small>No frontage access, no standing vehicles, very little cross traffic</small>
+                        </div>
+                        <div class="param-group">
+                            <label>Traffic composition regime (IRC:106 Table 1)</label>
+                            <select id="compositionRegimeBatch">
+                                <option value="low" selected>Low — &lt;15% heavy vehicles</option>
+                                <option value="high">High — &gt;15% heavy vehicles</option>
+                            </select>
+                            <small>Less than 15% heavy vehicles — mostly cars, autos, two-wheelers</small>
+                        </div>
+                    </div>
                 </div>
+                <button id="batchAnalyzeBtn" class="run-btn" style="margin-top:20px;">📁 RUN BATCH ANALYSIS</button>
+                <div id="batchStatus" class="status-bar" style="margin-top:14px;">✅ Ready for batch processing.</div>
             </div>
         </div>
 
+        <!-- ===== VIDEO TAB ===== -->
+        <div id="tab-video" class="tab-content">
+            <div class="form-section">
+                <h3>🎥 VIDEO</h3>
+                <div class="upload-area" id="videoUploadArea" style="margin-top:16px;">
+                    <div class="upload-icon">🎬</div>
+                    <p>Drop a video here, or <span class="browse-link">click to browse</span></p>
+                    <input type="file" id="videoInput" accept="video/*" hidden>
+                    <small><strong>MP4 / AVI</strong> — Record a short clip of traffic flow</small>
+                    <div id="videoInfo" class="file-info hidden"></div>
+                </div>
+                <button id="videoAnalyzeBtn" class="run-btn" style="margin-top:20px;">▶️ RUN VIDEO ANALYSIS</button>
+                <div id="videoStatus" class="status-bar" style="margin-top:14px;">✅ Ready for video analysis.</div>
+            </div>
+        </div>
+
+        <!-- ===== DISCLAIMER ===== -->
         <div class="disclaimer">
             ⚠️ <strong>IMPORTANT DISCLAIMER:</strong> Results are estimates based on computer vision and IRC standards. Requires field verification for real-world decisions.
         </div>
