@@ -2,7 +2,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // ---- TAB SWITCHING ----
     const tabBtns = document.querySelectorAll('.tab-btn');
     const tabContents = document.querySelectorAll('.tab-content');
-
     tabBtns.forEach(btn => {
         btn.addEventListener('click', function() {
             tabBtns.forEach(b => b.classList.remove('active'));
@@ -71,6 +70,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let dsv = dsvMap[carriageway];
         if (!dsv) dsv = { base: 2400, speed: 50 };
 
+        // Apply fringe multiplier (low = 1.0, medium = 0.9, high = 0.8)
         if (fringe === 'low') dsv.base *= 1.0;
         else if (fringe === 'medium') dsv.base *= 0.9;
         else dsv.base *= 0.8;
@@ -174,7 +174,7 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
             <div style="margin-top:16px; padding:16px; background:#f9fbfd; border-radius:10px; border:1px solid #e0e8f2;">
                 <h4 style="margin-bottom:8px; color:#0a2a44;">🕳️ Pothole Severities</h4>
-                <p>${result.pothole_severities.length > 0 ? result.pothole_severities.map(function(s) { return 'Pothole: <strong>' + s.toUpperCase() + '</strong>'; }).join(' | ') : '✅ No potholes detected.'}</p>
+                <p>${result.pothole_severities.length > 0 ? result.pothole_severities.map(s => 'Pothole: <strong>' + s.toUpperCase() + '</strong>').join(' | ') : '✅ No potholes detected.'}</p>
             </div>
             <div style="margin-top:16px; padding:16px; background:#eef4fa; border-radius:10px; border:1px solid #dce4ed;">
                 <h4 style="margin-bottom:8px; color:#0a2a44;">🚦 Traffic Simulation</h4>
@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
             html += `<div style="margin-top:16px; padding:16px; background:#fef6f0; border-radius:10px; border-left:4px solid #a33a1a;">
                 <h4 style="color:#0a2a44;">📋 Recommendations</h4>
                 <ul style="list-style:none; padding:0;">`;
-            data.recommendations.forEach(function(r) {
+            data.recommendations.forEach(r => {
                 html += `<li style="padding:4px 0;">• <strong>[${r.severity}]</strong> ${r.action}</li>`;
             });
             html += `</ul></div>`;
