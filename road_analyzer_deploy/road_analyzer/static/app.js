@@ -1,50 +1,132 @@
-document.addEventListener('DOMContentLoaded', function () {
-    const form = document.getElementById('analysisForm');
+document.addEventListener('DOMContentLoaded', function() {
+    // ---- TAB SWITCHING ----
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            tabBtns.forEach(b => b.classList.remove('active'));
+            tabContents.forEach(c => c.classList.remove('active'));
+            this.classList.add('active');
+            document.getElementById('tab-' + this.dataset.tab).classList.add('active');
+        });
+    });
+
+    // ---- FILE UPLOAD ----
     const fileInput = document.getElementById('fileInput');
-    const analyzeBtn = document.getElementById('analyzeBtn');
-    const loadingIndicator = document.getElementById('loadingIndicator');
-    const resultsPanel = document.getElementById('resultsPanel');
-    const statusMessage = document.getElementById('statusMessage');
-    const progressFill = document.getElementById('progressFill');
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInfo = document.getElementById('fileInfo');
 
-    form.addEventListener('submit', async function (e) {
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', function() {
+        if (this.files.length > 0) {
+            const file = this.files[0];
+            fileInfo.textContent = `📎 ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+            fileInfo.classList.remove('hidden');
+        } else {
+            fileInfo.classList.add('hidden');
+        }
+    });
+
+    // ---- DRAG AND DROP ----
+    uploadArea.addEventListener('dragover', function(e) {
         e.preventDefault();
+        this.style.borderColor = '#0a2a44';
+        this.style.background = '#f0f7ff';
+    });
 
+    uploadArea.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        this.style.borderColor = '#cbd5e1';
+        this.style.background = 'transparent';
+    });
+
+    uploadArea.addEventListener('drop', function(e) {
+        e.preventDefault();
+        this.style.borderColor = '#cbd5e1';
+        this.style.background = 'transparent';
+        if (e.dataTransfer.files.length > 0) {
+            fileInput.files = e.dataTransfer.files;
+            fileInput.dispatchEvent(new Event('change'));
+        }
+    });
+
+    // ---- DSV PREVIEW UPDATE ----
+    function updateDSVPreview() {
+        const carriageway = document.getElementById('carriageway').value;
+        const fringe = document.getElementById('fringe').value;
+        
+        // Simple mapping for preview (exact values are computed on backend)
+        const dsvMap = {
+            '2L-U': { base: 1750, speed: 50 },
+            '2L-D': { base: 2000, speed: 55 },
+            '4L-U': { base: 3500, speed: 65 },
+            '4L-D': { base: 4200, speed: 70 },
+            '6L-U': { base: 5600, speed: 80 },
+            '6L-D': { base: 7000, speed: 85 },
+            '8L-U': { base: 10500, speed: 90 },
+            '8L-D': { base: 12600, speed: 100 }
+        };
+
+        let dsv = dsvMap[carriageway];
+        if (!dsv) dsv = { base: 2400, speed: 50 };
+        
+        // Adjust for fringe
+        if (fringe === 'low') dsv.base *= 1.0;
+        else if (fringe === 'medium') dsv.base *= 0.9;
+        else dsv.base *= 0.8;
+
+        document.getElementById('baseDsvDisplay').textContent = Math.round(dsv.base).toLocaleString();
+        document.getElementById('vehDisplay').textContent = Math.round(dsv.base).toLocaleString();
+        document.getElementById('speedDisplay').textContent = dsv.speed;
+    }
+
+    document.getElementById('carriageway').addEventListener('change', updateDSVPreview);
+    document.getElementById('fringe').addEventListener('change', updateDSVPreview);
+    updateDSVPreview();
+
+    // ---- SUBMIT ANALYSIS ----
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const statusBar = document.getElementById('statusBar');
+
+    analyzeBtn.addEventListener('click', async function() {
         const file = fileInput.files[0];
         if (!file) {
-            alert('Please upload a file.');
+            statusBar.textContent = '❌ Please upload an image or video first.';
+            statusBar.className = 'status-bar error';
             return;
         }
 
         const totalWidth = parseFloat(document.getElementById('totalWidth').value);
         if (isNaN(totalWidth) || totalWidth <= 0) {
-            alert('Please enter a valid road width.');
+            statusBar.textContent = '❌ Please enter a valid road width (greater than 0).';
+            statusBar.className = 'status-bar error';
             return;
         }
 
         const carriageway = document.getElementById('carriageway').value;
         const fringe = document.getElementById('fringe').value;
 
+        // Prepare form data
         const formData = new FormData();
         formData.append('file', file);
         formData.append('total_width_m', totalWidth);
         formData.append('carriageway', carriageway);
         formData.append('fringe', fringe);
 
-        // Determine if it's a video based on MIME type
-        const isVideo = file.type.startsWith('video/');
-
         // UI Loading State
         analyzeBtn.disabled = true;
-        analyzeBtn.textContent = '⏳ Submitting...';
-        loadingIndicator.classList.remove('hidden');
-        resultsPanel.classList.add('hidden');
-        progressFill.style.width = '0%';
-        statusMessage.textContent = isVideo ? 'Video uploaded. Server is processing...' : 'Processing image...';
+        analyzeBtn.textContent = '⏳ Processing...';
+        statusBar.textContent = '⏳ Analysing road condition...';
+        statusBar.className = 'status-bar';
+        document.getElementById('resultContainer').innerHTML = '<div class="placeholder"><p>⏳ Processing your image... Please wait.</p></div>';
 
         try {
-            const endpoint = isVideo ? '/analyse_video' : '/analyse';
-            const response = await fetch(endpoint, { method: 'POST', body: formData });
+            const response = await fetch('/analyse', {
+                method: 'POST',
+                body: formData
+            });
 
             if (!response.ok) {
                 const err = await response.json();
@@ -52,109 +134,67 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             const data = await response.json();
-
-            if (isVideo) {
-                // --- VIDEO: Polling Logic ---
-                const jobId = data.job_id;
-                statusMessage.textContent = 'Video processing started. Polling for results...';
-                progressFill.style.width = '10%';
-
-                let done = false;
-                let attempts = 0;
-                const maxAttempts = 60; // 2 minutes max
-
-                while (!done && attempts < maxAttempts) {
-                    attempts++;
-                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-
-                    const pollRes = await fetch(`/job/${jobId}`);
-                    const pollData = await pollRes.json();
-
-                    if (pollData.status === 'completed') {
-                        displayVideoResults(pollData);
-                        done = true;
-                        progressFill.style.width = '100%';
-                    } else if (pollData.status === 'failed') {
-                        throw new Error(pollData.error || 'Video processing failed.');
-                    } else {
-                        // Still processing
-                        const progress = Math.min(20 + attempts * 1.5, 90);
-                        progressFill.style.width = progress + '%';
-                        statusMessage.textContent = `Processing frame ${attempts}...`;
-                    }
-                }
-
-                if (!done) {
-                    throw new Error('Video processing timed out after 2 minutes.');
-                }
-
-            } else {
-                // --- IMAGE: Instant Results ---
-                displayImageResults(data);
-                progressFill.style.width = '100%';
-            }
+            displayResults(data);
+            statusBar.textContent = '✅ Analysis complete.';
+            statusBar.className = 'status-bar';
 
         } catch (error) {
-            alert(`Error: ${error.message}`);
-            console.error(error);
-            loadingIndicator.classList.add('hidden');
+            statusBar.textContent = `❌ Error: ${error.message}`;
+            statusBar.className = 'status-bar error';
+            document.getElementById('resultContainer').innerHTML = `<div class="placeholder"><p style="color: #a33a1a;">❌ ${error.message}</p></div>`;
         } finally {
             analyzeBtn.disabled = false;
-            analyzeBtn.textContent = '🚀 Analyze';
-            loadingIndicator.classList.add('hidden');
+            analyzeBtn.textContent = '🚀 RUN ANALYSIS';
         }
     });
 
-    // --- DISPLAY FUNCTIONS ---
-
-    function displayImageResults(data) {
+    // ---- DISPLAY RESULTS ----
+    function displayResults(data) {
         const result = data.result;
-        const container = document.getElementById('dynamicResultContainer');
-        container.innerHTML = `
-            <div class="result-grid">
-                <div class="result-item"><span class="label">Baseline DSV</span><span class="value">${result.base_dsv_pcu_hr}</span><span class="unit">PCU/hr</span></div>
-                <div class="result-item"><span class="label">Reduced DSV</span><span class="value highlight">${result.reduced_dsv_pcu_hr}</span><span class="unit">PCU/hr</span></div>
-                <div class="result-item"><span class="label">Capacity Loss</span><span class="value">${result.capacity_loss_percent}%</span><span class="unit">%</span></div>
-                <div class="result-item"><span class="label">Blocked Width</span><span class="value">${result.blocked_width_m}</span><span class="unit">m</span></div>
-                <div class="result-item"><span class="label">Usable Width</span><span class="value">${result.usable_width_m}</span><span class="unit">m</span></div>
-                <div class="result-item"><span class="label">Width Factor</span><span class="value">${result.width_factor}</span><span class="unit">-</span></div>
-            </div>
-            <div id="potholeSection"><h3>🕳️ Potholes</h3><div id="potholeList">${result.pothole_severities.length > 0 ? result.pothole_severities.map((s,i) => `Pothole ${i+1}: ${s.toUpperCase()}`).join(', ') : 'None detected'}</div></div>
-            <div id="simulationSection"><h3>🚦 Traffic Sim</h3><p>Speed: ${result.simulation.average_speed_kmh.toFixed(1)} km/h</p></div>
-        `;
-        document.getElementById('resultsPanel').classList.remove('hidden');
-        resultsPanel.scrollIntoView({ behavior: 'smooth' });
-    }
+        const container = document.getElementById('resultContainer');
 
-    function displayVideoResults(data) {
-        const summary = data.summary;
-        const timeline = data.timeline || [];
-        const container = document.getElementById('dynamicResultContainer');
-        
-        // Build a simple timeline display
-        let timelineHtml = '<ul style="max-height:200px;overflow-y:auto;font-size:0.9rem;background:#f8f9fa;padding:10px;border-radius:6px;">';
-        timeline.slice(0, 20).forEach((frame, idx) => {
-            timelineHtml += `<li>t=${frame.timestamp_sec}s: Loss ${frame.capacity_loss_percent}%, Blocked ${frame.blocked_width_m}m</li>`;
-        });
-        if (timeline.length > 20) timelineHtml += `<li>... and ${timeline.length - 20} more frames</li>`;
-        timelineHtml += '</ul>';
-
-        container.innerHTML = `
-            <div class="result-grid">
-                <div class="result-item"><span class="label">Avg. Loss</span><span class="value">${summary.average_capacity_loss_percent}%</span><span class="unit">over ${data.frames_analysed} frames</span></div>
-                <div class="result-item"><span class="label">Peak Loss</span><span class="value highlight">${summary.max_capacity_loss_percent}%</span><span class="unit">at worst frame</span></div>
-                <div class="result-item"><span class="label">Min Loss</span><span class="value">${summary.min_capacity_loss_percent}%</span><span class="unit">best moment</span></div>
-                <div class="result-item"><span class="label">Peak Blocked</span><span class="value">${summary.peak_blocked_width_m}</span><span class="unit">metres</span></div>
-                <div class="result-item"><span class="label">Peak Reduced DSV</span><span class="value">${summary.peak_reduced_dsv_pcu_hr}</span><span class="unit">PCU/hr</span></div>
-                <div class="result-item"><span class="label">Duration</span><span class="value">${data.total_duration_sec}</span><span class="unit">seconds</span></div>
+        let html = `
+            <div class="result-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
+                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+                    <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Baseline DSV</span>
+                    <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${result.base_dsv_pcu_hr}</div>
+                    <span style="font-size:0.8rem; color:#5a6a7a;">PCU/hr</span>
+                </div>
+                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+                    <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Reduced DSV</span>
+                    <div style="font-size:2rem; font-weight:700; color:#c44536;">${result.reduced_dsv_pcu_hr}</div>
+                    <span style="font-size:0.8rem; color:#5a6a7a;">PCU/hr</span>
+                </div>
+                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+                    <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Capacity Loss</span>
+                    <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${result.capacity_loss_percent}%</div>
+                    <span style="font-size:0.8rem; color:#5a6a7a;">% reduction</span>
+                </div>
+                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+                    <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Blocked Width</span>
+                    <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${result.blocked_width_m}</div>
+                    <span style="font-size:0.8rem; color:#5a6a7a;">metres</span>
+                </div>
             </div>
-            <h3>⏱️ Dynamic Timeline (1 sample/sec)</h3>
-            ${timelineHtml}
-            <h3>📋 Recommendations</h3>
-            <ul>${data.recommendations.map(r => `<li>[${r.severity}] ${r.action}</li>`).join('')}</ul>
+            <div style="margin-top:16px; padding:16px; background:#f9fbfd; border-radius:10px; border:1px solid #e0e8f2;">
+                <h4 style="margin-bottom:8px; color:#0a2a44;">🕳️ Pothole Severities</h4>
+                <p>${result.pothole_severities.length > 0 ? result.pothole_severities.map((s,i) => `Pothole ${i+1}: <strong>${s.toUpperCase()}</strong>`).join(' | ') : '✅ No potholes detected.'}</p>
+            </div>
+            <div style="margin-top:16px; padding:16px; background:#eef4fa; border-radius:10px; border:1px solid #dce4ed;">
+                <h4 style="margin-bottom:8px; color:#0a2a44;">🚦 Traffic Simulation</h4>
+                <p>Speed: <strong>${result.simulation.average_speed_kmh.toFixed(1)}</strong> km/h | Density: <strong>${result.simulation.density_pcu_km.toFixed(1)}</strong> PCU/km | Flow: <strong>${result.simulation.flow_pcu_hr}</strong> PCU/hr</p>
+            </div>
         `;
-        document.getElementById('disclaimerText').textContent = data.disclaimer;
-        document.getElementById('resultsPanel').classList.remove('hidden');
-        resultsPanel.scrollIntoView({ behavior: 'smooth' });
+
+        if (data.recommendations && data.recommendations.length > 0) {
+            html += `<div style="margin-top:16px; padding:16px; background:#fef6f0; border-radius:10px; border-left:4px solid #a33a1a;">
+                <h4 style="color:#0a2a44;">📋 Recommendations</h4>
+                <ul style="list-style:none; padding:0;">
+                    ${data.recommendations.map(r => `<li style="padding:4px 0;">• <strong>[${r.severity}]</strong> ${r.action}</li>`).join('')}
+                </ul>
+            </div>`;
+        }
+
+        container.innerHTML = html;
     }
 });
