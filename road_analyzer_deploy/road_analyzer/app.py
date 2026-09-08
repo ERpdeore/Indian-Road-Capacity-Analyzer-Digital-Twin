@@ -1,16 +1,24 @@
 import os
+import sys
 import uuid
 import shutil
 import logging
-import time
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
-import numpy as np
 from pathlib import Path
-from core import RoadAnalyzer
+
+# ---- SMART IMPORT (works with or without __init__.py) ----
+try:
+    from core import RoadAnalyzer
+except ImportError:
+    try:
+        from .core import RoadAnalyzer
+    except ImportError:
+        sys.path.append(os.path.dirname(__file__))
+        from core import RoadAnalyzer
 from department_extensions import generate_recommendations
 
 logging.basicConfig(level=logging.INFO)
