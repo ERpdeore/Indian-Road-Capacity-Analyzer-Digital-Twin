@@ -3,34 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Indian Road Capacity Analyzer | Digital Model</title>
+    <title>Road Capacity Analyzer | Image + Video</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
             <h1>🛣️ Indian Road Capacity Analyzer</h1>
-            <p class="subtitle">Digital Model — Prototype for Engineering Review</p>
+            <p class="subtitle">Supports Static Images & Dynamic Videos</p>
         </header>
 
         <!-- Input Panel -->
         <section class="card input-card">
-            <h2>📊 Input Parameters</h2>
+            <h2>📊 Upload Media</h2>
             <form id="analysisForm" enctype="multipart/form-data">
                 <div class="form-group">
-                    <label for="imageInput">Upload Road Image</label>
-                    <input type="file" id="imageInput" accept="image/*" required>
-                    <small>Supports JPG, PNG, WEBP</small>
+                    <label for="fileInput">Upload Image (JPG/PNG) OR Video (MP4)</label>
+                    <input type="file" id="fileInput" accept="image/*,video/*" required>
+                    <small>Videos are processed asynchronously (1 frame per second).</small>
                 </div>
 
                 <div class="form-row">
                     <div class="form-group">
                         <label for="totalWidth">Total Road Width (metres)</label>
                         <input type="number" id="totalWidth" step="0.5" value="7.0" required>
-                        <small>Measure from curb to curb</small>
                     </div>
                     <div class="form-group">
-                        <label for="carriageway">Carriageway Type</label>
+                        <label for="carriageway">Carriageway</label>
                         <select id="carriageway">
                             <option value="4L-D">4 Lane Divided</option>
                             <option value="6L-D" selected>6 Lane Divided</option>
@@ -40,85 +39,33 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="fringe">Fringe Development</label>
+                        <label for="fringe">Fringe</label>
                         <select id="fringe">
-                            <option value="low">Low (Rural/Outskirts)</option>
-                            <option value="medium" selected>Medium (Suburban)</option>
-                            <option value="high">High (Urban/CBD)</option>
+                            <option value="low">Low</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="high">High</option>
                         </select>
                     </div>
                 </div>
 
-                <button type="submit" id="analyzeBtn">🚀 Analyze Road Capacity</button>
+                <button type="submit" id="analyzeBtn">🚀 Analyze</button>
             </form>
-            <div id="loadingIndicator" class="hidden">⏳ Processing... This may take a few seconds.</div>
+            
+            <div id="loadingIndicator" class="hidden">
+                <p>⏳ Processing... <span id="statusMessage">This may take a moment.</span></p>
+                <div class="progress-bar"><div id="progressFill" style="width: 0%;"></div></div>
+            </div>
         </section>
 
         <!-- Results Panel -->
         <section id="resultsPanel" class="card hidden">
-            <h2>📐 Engineering Analysis Results</h2>
-
-            <!-- Capacity Summary -->
-            <div class="result-grid">
-                <div class="result-item">
-                    <span class="label">Baseline DSV (IRC:106)</span>
-                    <span id="baseDsv" class="value">--</span>
-                    <span class="unit">PCU/hr</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Reduced DSV (Adjusted)</span>
-                    <span id="reducedDsv" class="value highlight">--</span>
-                    <span class="unit">PCU/hr</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Capacity Loss</span>
-                    <span id="capacityLoss" class="value">--</span>
-                    <span class="unit">%</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Blocked Width</span>
-                    <span id="blockedWidth" class="value">--</span>
-                    <span class="unit">metres</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Usable Width</span>
-                    <span id="usableWidth" class="value">--</span>
-                    <span class="unit">metres</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Width Factor</span>
-                    <span id="widthFactor" class="value">--</span>
-                    <span class="unit">(dimensionless)</span>
-                </div>
+            <h2>📐 Analysis Results</h2>
+            <div id="dynamicResultContainer">
+                <!-- Results will be injected here by JS -->
             </div>
-
-            <!-- Potholes -->
-            <div id="potholeSection">
-                <h3>🕳️ Pothole Severity Classification</h3>
-                <div id="potholeList">No potholes detected in this image.</div>
-            </div>
-
-            <!-- Greenshields Simulation -->
-            <div id="simulationSection">
-                <h3>🚦 Traffic Simulation (Greenshields Model)</h3>
-                <div class="sim-grid">
-                    <div class="sim-item"><span>Speed:</span> <span id="simSpeed">--</span> km/h</div>
-                    <div class="sim-item"><span>Density:</span> <span id="simDensity">--</span> PCU/km</div>
-                    <div class="sim-item"><span>Flow:</span> <span id="simFlow">--</span> PCU/hr</div>
-                </div>
-                <p class="assumption-warning">⚠️ Jam Density (170 PCU/km/lane) is a modelling assumption. See Assumption Register.</p>
-            </div>
-
-            <!-- Recommendations -->
-            <div id="recommendationSection">
-                <h3>📋 Recommendations for Engineering Review</h3>
-                <ul id="recommendationList"></ul>
-            </div>
-
-            <!-- Disclaimer -->
             <div class="disclaimer-box">
                 <strong>⚠️ IMPORTANT DISCLAIMER:</strong>
-                <p id="disclaimerText">This is an estimate based on computer vision and modelling assumptions. It is not a substitute for engineering judgment or field survey.</p>
+                <p id="disclaimerText">Results are estimates based on computer vision and assumptions. Requires field verification.</p>
             </div>
         </section>
     </div>
