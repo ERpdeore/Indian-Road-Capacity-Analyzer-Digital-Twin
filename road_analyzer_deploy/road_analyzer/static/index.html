@@ -1,11 +1,225 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Indian Road Capacity Analyzer</title>
-    <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <style>
+        /* ----- RESET & BASE ----- */
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background: #f0f4f9; padding: 24px; color: #1a2a3a; }
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        /* ----- HEADER (DARK BLUE GRADIENT) ----- */
+        header {
+            background: linear-gradient(145deg, #0a2a44, #1a4a6a);
+            color: white;
+            padding: 28px 40px;
+            border-radius: 16px;
+            margin-bottom: 28px;
+            box-shadow: 0 8px 24px rgba(10, 42, 68, 0.25);
+        }
+        header h1 { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.5px; }
+        header .subtitle { color: #8ab4f8; font-size: 1.05rem; font-weight: 400; margin-top: 6px; }
+
+        /* ----- TABS ----- */
+        .tabs {
+            display: flex;
+            gap: 6px;
+            background: white;
+            padding: 6px;
+            border-radius: 14px;
+            margin-bottom: 28px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border: 1px solid #e2e8f0;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 14px 20px;
+            border: none;
+            background: transparent;
+            font-weight: 600;
+            font-size: 1rem;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: 0.3s;
+            color: #4a5a6a;
+        }
+        .tab-btn:hover { background: #f0f4f9; color: #0a2a44; }
+        .tab-btn.active { background: #0a2a44; color: white; box-shadow: 0 4px 12px rgba(10,42,68,0.3); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ----- MAIN GRID ----- */
+        .main-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+
+        /* ----- FORM SECTION (WHITE CARD) ----- */
+        .form-section {
+            background: white;
+            padding: 28px;
+            border-radius: 16px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+            border: 1px solid #e2e8f0;
+        }
+        .upload-area {
+            border: 2px dashed #cbd5e1;
+            border-radius: 12px;
+            padding: 32px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: 0.3s;
+            margin-bottom: 24px;
+        }
+        .upload-area:hover { border-color: #0a2a44; background: #f8fafc; }
+        .upload-icon { font-size: 2.8rem; margin-bottom: 8px; }
+        .browse-link { color: #0a2a44; font-weight: 600; text-decoration: underline; cursor: pointer; }
+        .file-info { margin-top: 12px; padding: 10px; background: #e6f4ea; border-radius: 8px; color: #1a5a2a; font-weight: 500; }
+        .hidden { display: none !important; }
+
+        .params-section h3 {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #0a2a44;
+            margin-bottom: 16px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eef2f7;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .param-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 14px; }
+        .param-group.full-width { grid-column: 1 / -1; }
+        .param-group label { display: block; font-weight: 600; font-size: 0.85rem; color: #2a3a4a; margin-bottom: 4px; }
+        .param-group input,
+        .param-group select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #d0d8e2;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            background: #fafcff;
+            transition: 0.2s;
+        }
+        .param-group input:focus,
+        .param-group select:focus {
+            border-color: #0a2a44;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(10,42,68,0.08);
+        }
+        .param-group small { display: block; color: #6a7a8a; font-size: 0.75rem; margin-top: 4px; }
+
+        /* ----- CAMERA TIPS ----- */
+        .camera-tips {
+            background: #f6f9fc;
+            padding: 16px 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border-left: 4px solid #0a2a44;
+        }
+        .camera-tips h4 { font-size: 0.85rem; font-weight: 700; color: #0a2a44; margin-bottom: 6px; }
+        .camera-tips ul { list-style: none; padding: 0; }
+        .camera-tips li { font-size: 0.85rem; color: #3a4a5a; padding: 2px 0; padding-left: 20px; position: relative; }
+        .camera-tips li::before { content: "•"; color: #0a2a44; font-weight: 700; position: absolute; left: 4px; }
+
+        /* ----- RUN BUTTON (DARK BLUE) ----- */
+        .run-btn {
+            width: 100%;
+            padding: 16px;
+            background: #0a2a44;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: 0.3s;
+            margin-top: 8px;
+        }
+        .run-btn:hover:not(:disabled) {
+            background: #1a4a6a;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(10,42,68,0.3);
+        }
+        .run-btn:disabled { background: #8a9baa; cursor: not-allowed; transform: none; }
+
+        /* ----- STATUS BAR (GREEN) ----- */
+        .status-bar {
+            margin-top: 14px;
+            padding: 12px 16px;
+            background: #e6f4ea;
+            border-radius: 8px;
+            color: #1a5a2a;
+            font-weight: 500;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-bar.error { background: #fde8e8; color: #a33a2a; }
+
+        /* ----- RESULTS SECTION (WHITE CARD) ----- */
+        .results-section {
+            background: white;
+            padding: 28px;
+            border-radius: 16px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+            border: 1px solid #e2e8f0;
+        }
+
+        /* ----- DSV CARD (LIGHT BLUE GRADIENT) ----- */
+        .dsv-card {
+            background: linear-gradient(145deg, #f8fbff, #eef4fa);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+            border: 1px solid #dce4ed;
+        }
+        .dsv-card h3 { font-size: 0.9rem; font-weight: 600; color: #2a3a4a; margin-bottom: 8px; }
+        .dsv-display { font-size: 2.6rem; font-weight: 800; color: #0a2a44; }
+        .dsv-display .unit { font-size: 1.2rem; font-weight: 600; color: #4a6a8a; margin-left: 6px; }
+        .dsv-card p { color: #4a5a6a; font-size: 0.95rem; margin-top: 4px; }
+
+        /* ----- RESULTS CONTAINER ----- */
+        #resultContainer { margin-top: 16px; }
+        .placeholder {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6a7a8a;
+            background: #f8fafc;
+            border-radius: 12px;
+            border: 1px dashed #d0d8e2;
+        }
+        .placeholder p { font-size: 1rem; }
+
+        /* ----- BATCH PLACEHOLDER ----- */
+        .batch-placeholder {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            text-align: center;
+            border: 1px solid #e2e8f0;
+        }
+
+        /* ----- DISCLAIMER ----- */
+        .disclaimer {
+            margin-top: 28px;
+            background: #fef6f0;
+            border: 1px solid #fadbc8;
+            border-radius: 12px;
+            padding: 16px 24px;
+            color: #4a3a2a;
+            font-size: 0.9rem;
+        }
+        .disclaimer strong { color: #a33a1a; }
+
+        /* ----- RESPONSIVE ----- */
+        @media (max-width: 1024px) { .main-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 600px) {
+            .param-row { grid-template-columns: 1fr; }
+            header h1 { font-size: 1.6rem; }
+            .dsv-display { font-size: 2rem; }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -24,12 +238,12 @@
         <!-- SINGLE IMAGE TAB -->
         <div id="tab-single" class="tab-content active">
             <div class="main-grid">
-                <!-- LEFT PANEL: Form -->
+                <!-- LEFT PANEL -->
                 <div class="form-section">
                     <div class="upload-area" id="uploadArea">
                         <div class="upload-icon">📤</div>
                         <p>Drop your image here or <span class="browse-link">browse</span></p>
-                        <input type="file" id="fileInput" accept="image/*,video/*" hidden>
+                        <input type="file" id="fileInput" accept="image/*,video/*" hidden />
                         <small>Supports JPG, PNG, WEBP, MP4 (Max 20MB)</small>
                         <div id="fileInfo" class="file-info hidden"></div>
                     </div>
@@ -40,7 +254,7 @@
                         <div class="param-row">
                             <div class="param-group full-width">
                                 <label>Total carriageway width (m)</label>
-                                <input type="number" id="totalWidth" step="0.1" value="7.0">
+                                <input type="number" id="totalWidth" step="0.1" value="7.0" />
                                 <small>Measure at 3 points and average</small>
                             </div>
                         </div>
@@ -48,7 +262,7 @@
                         <div class="param-row">
                             <div class="param-group">
                                 <label>Usable shoulder width (m)</label>
-                                <input type="number" id="shoulderWidth" step="0.1" value="0.0">
+                                <input type="number" id="shoulderWidth" step="0.1" value="0.0" />
                                 <small>Enter 0 if no paved shoulder</small>
                             </div>
                             <div class="param-group">
@@ -102,7 +316,7 @@
                     <div id="statusBar" class="status-bar">✅ Model loaded and ready.</div>
                 </div>
 
-                <!-- RIGHT PANEL: DSV + Results -->
+                <!-- RIGHT PANEL -->
                 <div class="results-section" id="resultsPanel">
                     <div class="dsv-card">
                         <h3>📊 IRC:106 BASE DSV (Design Service Volume)</h3>
@@ -126,7 +340,7 @@
             <div class="batch-placeholder">
                 <h3>📁 Batch Processing</h3>
                 <p>Upload a folder of images to analyze multiple roads at once.</p>
-                <div class="upload-area">
+                <div class="upload-area" style="cursor:default;">
                     <div class="upload-icon">📂</div>
                     <p>Select Folder</p>
                     <small>Coming soon in the next update</small>
