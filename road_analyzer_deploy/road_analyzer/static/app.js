@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', function() {
     fileInput.addEventListener('change', function() {
         if (this.files.length > 0) {
             const file = this.files[0];
-            fileInfo.textContent = `📎 ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+            fileInfo.textContent = '📎 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
             fileInfo.classList.remove('hidden');
         } else {
             fileInfo.classList.add('hidden');
@@ -56,8 +56,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateDSVPreview() {
         const carriageway = document.getElementById('carriageway').value;
         const fringe = document.getElementById('fringe').value;
-        
-        // Simple mapping for preview (exact values are computed on backend)
+
         const dsvMap = {
             '2L-U': { base: 1750, speed: 50 },
             '2L-D': { base: 2000, speed: 55 },
@@ -71,8 +70,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         let dsv = dsvMap[carriageway];
         if (!dsv) dsv = { base: 2400, speed: 50 };
-        
-        // Adjust for fringe
+
         if (fringe === 'low') dsv.base *= 1.0;
         else if (fringe === 'medium') dsv.base *= 0.9;
         else dsv.base *= 0.8;
@@ -108,14 +106,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const carriageway = document.getElementById('carriageway').value;
         const fringe = document.getElementById('fringe').value;
 
-        // Prepare form data
         const formData = new FormData();
         formData.append('file', file);
         formData.append('total_width_m', totalWidth);
         formData.append('carriageway', carriageway);
         formData.append('fringe', fringe);
 
-        // UI Loading State
         analyzeBtn.disabled = true;
         analyzeBtn.textContent = '⏳ Processing...';
         statusBar.textContent = '⏳ Analysing road condition...';
@@ -139,9 +135,9 @@ document.addEventListener('DOMContentLoaded', function() {
             statusBar.className = 'status-bar';
 
         } catch (error) {
-            statusBar.textContent = `❌ Error: ${error.message}`;
+            statusBar.textContent = '❌ Error: ' + error.message;
             statusBar.className = 'status-bar error';
-            document.getElementById('resultContainer').innerHTML = `<div class="placeholder"><p style="color: #a33a1a;">❌ ${error.message}</p></div>`;
+            document.getElementById('resultContainer').innerHTML = '<div class="placeholder"><p style="color: #a33a1a;">❌ ' + error.message + '</p></div>';
         } finally {
             analyzeBtn.disabled = false;
             analyzeBtn.textContent = '🚀 RUN ANALYSIS';
@@ -154,23 +150,23 @@ document.addEventListener('DOMContentLoaded', function() {
         const container = document.getElementById('resultContainer');
 
         let html = `
-            <div class="result-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
-                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
+                <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
                     <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Baseline DSV</span>
                     <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${result.base_dsv_pcu_hr}</div>
                     <span style="font-size:0.8rem; color:#5a6a7a;">PCU/hr</span>
                 </div>
-                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+                <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
                     <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Reduced DSV</span>
                     <div style="font-size:2rem; font-weight:700; color:#c44536;">${result.reduced_dsv_pcu_hr}</div>
                     <span style="font-size:0.8rem; color:#5a6a7a;">PCU/hr</span>
                 </div>
-                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+                <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
                     <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Capacity Loss</span>
                     <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${result.capacity_loss_percent}%</div>
                     <span style="font-size:0.8rem; color:#5a6a7a;">% reduction</span>
                 </div>
-                <div class="result-card" style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
+                <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
                     <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Blocked Width</span>
                     <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${result.blocked_width_m}</div>
                     <span style="font-size:0.8rem; color:#5a6a7a;">metres</span>
@@ -178,7 +174,7 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
             <div style="margin-top:16px; padding:16px; background:#f9fbfd; border-radius:10px; border:1px solid #e0e8f2;">
                 <h4 style="margin-bottom:8px; color:#0a2a44;">🕳️ Pothole Severities</h4>
-                <p>${result.pothole_severities.length > 0 ? result.pothole_severities.map((s,i) => `Pothole ${i+1}: <strong>${s.toUpperCase()}</strong>`).join(' | ') : '✅ No potholes detected.'}</p>
+                <p>${result.pothole_severities.length > 0 ? result.pothole_severities.map(function(s) { return 'Pothole: <strong>' + s.toUpperCase() + '</strong>'; }).join(' | ') : '✅ No potholes detected.'}</p>
             </div>
             <div style="margin-top:16px; padding:16px; background:#eef4fa; border-radius:10px; border:1px solid #dce4ed;">
                 <h4 style="margin-bottom:8px; color:#0a2a44;">🚦 Traffic Simulation</h4>
@@ -189,10 +185,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (data.recommendations && data.recommendations.length > 0) {
             html += `<div style="margin-top:16px; padding:16px; background:#fef6f0; border-radius:10px; border-left:4px solid #a33a1a;">
                 <h4 style="color:#0a2a44;">📋 Recommendations</h4>
-                <ul style="list-style:none; padding:0;">
-                    ${data.recommendations.map(r => `<li style="padding:4px 0;">• <strong>[${r.severity}]</strong> ${r.action}</li>`).join('')}
-                </ul>
-            </div>`;
+                <ul style="list-style:none; padding:0;">`;
+            data.recommendations.forEach(function(r) {
+                html += `<li style="padding:4px 0;">• <strong>[${r.severity}]</strong> ${r.action}</li>`;
+            });
+            html += `</ul></div>`;
         }
 
         container.innerHTML = html;
