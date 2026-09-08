@@ -3,6 +3,7 @@ import sys
 import uuid
 import shutil
 import logging
+import inspect
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,16 +11,34 @@ from fastapi.middleware.cors import CORSMiddleware
 import cv2
 from pathlib import Path
 
-# ---- SMART IMPORT (works with or without __init__.py) ----
+# ===================================================================
+# SUPER SMART IMPORT FIX - Finds files NO MATTER WHERE THEY ARE
+# ===================================================================
+# Get the folder where app.py is running
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+
+# Add BOTH folders to Python's search path
+sys.path.insert(0, current_dir)
+sys.path.insert(0, parent_dir)
+
+# Also add the current working directory (just in case)
+sys.path.insert(0, os.getcwd())
+
+# Now try to import - if it fails, we print where we are looking
 try:
     from core import RoadAnalyzer
-except ImportError:
-    try:
-        from .core import RoadAnalyzer
-    except ImportError:
-        sys.path.append(os.path.dirname(__file__))
-        from core import RoadAnalyzer
-from department_extensions import generate_recommendations
+    from department_extensions import generate_recommendations
+    print("✅ Imports successful!")
+except ModuleNotFoundError as e:
+    print(f"❌ Import failed: {e}")
+    print(f"Current directory: {current_dir}")
+    print(f"Parent directory: {parent_dir}")
+    print(f"Working directory: {os.getcwd()}")
+    print("Files in current dir:", os.listdir(current_dir) if os.path.exists(current_dir) else "N/A")
+    print("Files in parent dir:", os.listdir(parent_dir) if os.path.exists(parent_dir) else "N/A")
+    raise e
+# ===================================================================
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -134,11 +153,9 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration_sec = total_frames / fps if fps > 0 else 0
 
-        # --- DYNAMIC SAMPLING: 1 frame per second (Max 30 frames) ---
-        sample_interval = max(1, int(fps))  # 1 second intervals
+        sample_interval = max(1, int(fps))
         frame_indices = list(range(0, total_frames, sample_interval))
         
-        # Limit to 30 frames to avoid memory explosion
         if len(frame_indices) > 30:
             frame_indices = frame_indices[:30]
         
@@ -151,10 +168,7 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
             if not ret:
                 continue
             
-            # Convert to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Run the EXACT SAME analysis as the image pipeline
             raw_result = analyzer.analyse_image(
                 image=frame_rgb,
                 total_width_m=total_width_m,
@@ -162,7 +176,6 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
                 fringe=fringe
             )
             
-            # Store relevant dynamic metrics
             results.append({
                 "timestamp_sec": round(idx / fps, 1) if fps > 0 else i,
                 "capacity_loss_percent": round(raw_result["capacity_loss_percent"], 2),
@@ -171,30 +184,21 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
                 "pothole_severities": raw_result["pothole_severities"],
             })
             
-            # Log progress every 5 frames
             if i % 5 == 0:
                 logger.info(f"Job {job_id}: Processed frame {i+1}/{len(frame_indices)}")
 
         cap.release()
 
-        # --- Aggregate Dynamic Statistics ---
         if not results:
             jobs[job_id] = {"status": "failed", "error": "No frames could be processed"}
             return
 
-        # Calculate dynamic stats
         capacity_losses = [r["capacity_loss_percent"] for r in results]
         avg_loss = sum(capacity_losses) / len(capacity_losses)
         max_loss = max(capacity_losses)
         min_loss = min(capacity_losses)
-        
-        # Find the worst frame
         worst_frame = max(results, key=lambda x: x["capacity_loss_percent"])
 
-        # Generate recommendations from the worst frame (conservative approach)
-        # We need to re-run the full detection to get recommendations for the worst frame
-        # Since we only stored summary data, we just give a general dynamic recommendation
-        
         dynamic_response = {
             "status": "completed",
             "job_id": job_id,
@@ -208,7 +212,7 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
                 "peak_reduced_dsv_pcu_hr": worst_frame["reduced_dsv_pcu_hr"],
                 "peak_blocked_width_m": worst_frame["blocked_width_m"],
             },
-            "timeline": results,  # Send the full timeline to the frontend
+            "timeline": results,
             "recommendations": [
                 {
                     "severity": "High" if max_loss > 15 else "Medium" if max_loss > 5 else "Low",
@@ -225,7 +229,6 @@ def process_video_background(job_id: str, video_path: Path, total_width_m: float
         logger.error(f"Video processing failed for {job_id}: {str(e)}", exc_info=True)
         jobs[job_id] = {"status": "failed", "error": str(e)}
     finally:
-        # Clean up the large video file
         if video_path.exists():
             os.remove(video_path)
 
@@ -237,26 +240,21 @@ async def analyse_video(
     carriageway: str = Form("4L-D"),
     fringe: str = Form("medium")
 ):
-    """Submit a video for dynamic analysis. Returns job_id immediately."""
     job_id = str(uuid.uuid4())
     temp_path = UPLOAD_DIR / f"{job_id}.mp4"
 
     try:
-        # Save the uploaded video
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Quick validation
         cap = cv2.VideoCapture(str(temp_path))
         if not cap.isOpened():
             os.remove(temp_path)
             raise HTTPException(status_code=400, detail="Invalid video file")
         cap.release()
 
-        # Store initial pending status
         jobs[job_id] = {"status": "processing", "message": "Video is being analysed in the background."}
         
-        # Add the background task
         background_tasks.add_task(
             process_video_background,
             job_id,
@@ -270,7 +268,7 @@ async def analyse_video(
             "job_id": job_id,
             "status": "processing",
             "message": "Video accepted. Poll /job/{job_id} for results.",
-            "estimated_time_sec": 10  # Rough estimate
+            "estimated_time_sec": 10
         }
 
     except Exception as e:
@@ -279,16 +277,12 @@ async def analyse_video(
             os.remove(temp_path)
         raise HTTPException(status_code=500, detail=str(e))
 
-# --------------------------------------------------------------
-# POLLING ENDPOINT (For both Image and Video)
-# --------------------------------------------------------------
 @app.get("/job/{job_id}")
 async def get_job(job_id: str):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = jobs[job_id]
-    # If it's a video that's still processing, just return the status
     if job.get("status") == "processing":
         return {"job_id": job_id, "status": "processing"}
     
@@ -296,4 +290,5 @@ async def get_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
