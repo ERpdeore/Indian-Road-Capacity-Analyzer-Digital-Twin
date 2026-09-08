@@ -1,346 +1,457 @@
 // ============================================================
-// COMPLETE SCRIPT.JS WITH NULL CHECKS
+// Indian Road Capacity Analyzer — dashboard logic
+// Talks to the real FastAPI backend: POST /analyse, POST /analyse_video,
+// GET /job/{job_id}. There is no batch endpoint on the server, so the
+// batch tab simply calls /analyse once per selected file.
 // ============================================================
 
-document.addEventListener('DOMContentLoaded', function() {
-    console.log("✅ Script loaded!");
+document.addEventListener('DOMContentLoaded', function () {
 
-    // ----- GET ALL ELEMENTS (with null checks) -----
-    var uploadArea = document.getElementById('uploadArea');
-    var fileInput = document.getElementById('fileInput');
-    var fileInfo = document.getElementById('fileInfo');
-    var carriageway = document.getElementById('carriageway');
-    var fringe = document.getElementById('fringe');
-    var analyzeBtn = document.getElementById('analyzeBtn');
-    var statusBar = document.getElementById('statusBar');
-    var resultContainer = document.getElementById('resultContainer');
+    // ----- Real IRC:106-1990 Table 2 DSV values (must match core.py) -----
+    var IRC106_DSV = {
+        '2L-U': { low: 1400, medium: 1750, high: 2100 },
+        '2L-D': { low: 1600, medium: 2000, high: 2400 },
+        '4L-U': { low: 2800, medium: 3500, high: 4200 },
+        '4L-D': { low: 3500, medium: 4200, high: 4900 },
+        '6L-U': { low: 4200, medium: 5600, high: 7000 },
+        '6L-D': { low: 5600, medium: 7000, high: 8400 },
+        '8L-D': { low: 8400, medium: 10500, high: 12600 }
+    };
 
-    // ----- LOG ELEMENTS FOR DEBUGGING -----
-    console.log("uploadArea:", uploadArea);
-    console.log("fileInput:", fileInput);
-    console.log("carriageway:", carriageway);
-    console.log("fringe:", fringe);
-    console.log("analyzeBtn:", analyzeBtn);
+    function freeFlowSpeed(carriageway) {
+        if (carriageway.indexOf('8L') === 0) return 120;
+        if (carriageway.indexOf('6L') === 0) return 100;
+        if (carriageway.indexOf('4L') === 0) return 80;
+        return 60;
+    }
 
-    // ----- TAB SWITCHING (with null check) -----
+    function setStatus(el, msg, isError) {
+        if (!el) return;
+        el.textContent = msg;
+        el.className = 'status-bar' + (isError ? ' error' : '');
+    }
+
+    function fmt(n) {
+        if (n === undefined || n === null || isNaN(n)) return '—';
+        return Number(n).toLocaleString(undefined, { maximumFractionDigits: 1 });
+    }
+
+    // ============================================================
+    // TABS
+    // ============================================================
     var tabBtns = document.querySelectorAll('.tab-btn');
     var tabContents = document.querySelectorAll('.tab-content');
-
-    if (tabBtns.length > 0 && tabContents.length > 0) {
-        tabBtns.forEach(function(btn) {
-            btn.addEventListener('click', function() {
-                tabBtns.forEach(function(b) { b.classList.remove('active'); });
-                tabContents.forEach(function(c) { c.classList.remove('active'); });
-                this.classList.add('active');
-                var targetTab = document.getElementById('tab-' + this.dataset.tab);
-                if (targetTab) {
-                    targetTab.classList.add('active');
-                }
-            });
+    tabBtns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            tabBtns.forEach(function (b) { b.classList.remove('active'); });
+            tabContents.forEach(function (c) { c.classList.remove('active'); });
+            btn.classList.add('active');
+            var target = document.getElementById('tab-' + btn.dataset.tab);
+            if (target) target.classList.add('active');
         });
-    } else {
-        console.warn('⚠️ Tabs not found. Skipping tab setup.');
+    });
+
+    // ============================================================
+    // GENERIC DROPZONE WIRING (click + drag/drop -> file input)
+    // ============================================================
+    function wireDropzone(areaId, inputId, infoId, onFiles) {
+        var area = document.getElementById(areaId);
+        var input = document.getElementById(inputId);
+        var info = document.getElementById(infoId);
+        if (!area || !input) return;
+
+        area.addEventListener('click', function (e) {
+            e.preventDefault();
+            input.click();
+        });
+
+        input.addEventListener('change', function () {
+            if (this.files && this.files.length > 0) {
+                onFiles(this.files, info);
+            } else if (info) {
+                info.classList.add('hidden');
+            }
+        });
+
+        area.addEventListener('dragover', function (e) {
+            e.preventDefault();
+            area.style.borderColor = '#b97e1f';
+            area.style.background = '#141925';
+        });
+        area.addEventListener('dragleave', function (e) {
+            e.preventDefault();
+            area.style.borderColor = '';
+            area.style.background = '';
+        });
+        area.addEventListener('drop', function (e) {
+            e.preventDefault();
+            area.style.borderColor = '';
+            area.style.background = '';
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                input.files = e.dataTransfer.files;
+                input.dispatchEvent(new Event('change'));
+            }
+        });
     }
 
-    // ----- FILE UPLOAD (only if elements exist) -----
-    if (uploadArea && fileInput && fileInfo) {
-        // Click on upload area opens file picker
-        uploadArea.addEventListener('click', function(e) {
-            e.preventDefault();
-            console.log("📁 Upload area clicked!");
-            fileInput.click();
-        });
-
-        // When file is selected, show its name
-        fileInput.addEventListener('change', function() {
-            console.log("📎 File input changed!");
-            try {
-                if (this.files && this.files.length > 0) {
-                    var file = this.files[0];
-                    if (file.size > 20 * 1024 * 1024) {
-                        alert('❌ File too large. Maximum size is 20MB.');
-                        this.value = '';
-                        fileInfo.classList.add('hidden');
-                        return;
-                    }
-                    fileInfo.textContent = '📎 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
-                    fileInfo.classList.remove('hidden');
-                    console.log("✅ File selected:", file.name);
-                } else {
-                    fileInfo.classList.add('hidden');
-                }
-            } catch (err) {
-                console.error('❌ Error handling file selection:', err);
-            }
-        });
-
-        // Drag and drop support
-        uploadArea.addEventListener('dragover', function(e) {
-            e.preventDefault();
-            this.style.borderColor = '#0a2a44';
-            this.style.background = '#f0f7ff';
-        });
-
-        uploadArea.addEventListener('dragleave', function(e) {
-            e.preventDefault();
-            this.style.borderColor = '#cbd5e1';
-            this.style.background = 'transparent';
-        });
-
-        uploadArea.addEventListener('drop', function(e) {
-            e.preventDefault();
-            this.style.borderColor = '#cbd5e1';
-            this.style.background = 'transparent';
-            try {
-                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                    var file = e.dataTransfer.files[0];
-                    if (file.size > 20 * 1024 * 1024) {
-                        alert('❌ File too large. Maximum size is 20MB.');
-                        return;
-                    }
-                    fileInput.files = e.dataTransfer.files;
-                    var event = new Event('change');
-                    fileInput.dispatchEvent(event);
-                    console.log("✅ File dropped:", file.name);
-                }
-            } catch (err) {
-                console.error('❌ Error handling drop:', err);
-            }
-        });
-
-        console.log("✅ Upload events attached successfully!");
-    } else {
-        console.error('❌ Upload elements not found!');
-    }
-
-    // ----- DSV PREVIEW UPDATE (with null checks) -----
-    function updateDSVPreview() {
-        try {
-            // Only run if elements exist
-            if (!carriageway || !fringe) {
-                console.warn('⚠️ Carriageway or fringe elements missing. Skipping DSV update.');
-                return;
-            }
-
-            var carriagewayVal = carriageway.value;
-            var fringeVal = fringe.value;
-
-            var dsvMap = {
-                '2L-U': { base: 1750, speed: 50 }, '2L-D': { base: 2000, speed: 55 },
-                '4L-U': { base: 3500, speed: 65 }, '4L-D': { base: 4200, speed: 70 },
-                '6L-U': { base: 5600, speed: 80 }, '6L-D': { base: 7000, speed: 85 },
-                '8L-U': { base: 10500, speed: 90 }, '8L-D': { base: 12600, speed: 100 }
-            };
-
-            var dsv = dsvMap[carriagewayVal] || { base: 2400, speed: 50 };
-            if (fringeVal === 'low') dsv.base *= 1.0;
-            else if (fringeVal === 'medium') dsv.base *= 0.9;
-            else dsv.base *= 0.8;
-
-            var baseDisplay = document.getElementById('baseDsvDisplay');
-            var vehDisplay = document.getElementById('vehDisplay');
-            var speedDisplay = document.getElementById('speedDisplay');
-
-            if (baseDisplay) baseDisplay.textContent = Math.round(dsv.base).toLocaleString();
-            if (vehDisplay) vehDisplay.textContent = Math.round(dsv.base).toLocaleString();
-            if (speedDisplay) speedDisplay.textContent = dsv.speed;
-
-        } catch (err) {
-            console.error('❌ Error updating DSV preview:', err);
+    function describeFiles(files) {
+        if (files.length === 1) {
+            var f = files[0];
+            return f.name + ' (' + (f.size / 1024 / 1024).toFixed(2) + ' MB)';
         }
+        var totalMb = 0;
+        for (var i = 0; i < files.length; i++) totalMb += files[i].size;
+        return files.length + ' files selected (' + (totalMb / 1024 / 1024).toFixed(2) + ' MB total)';
     }
 
-    // Only attach listeners if elements exist
+    wireDropzone('uploadArea', 'fileInput', 'fileInfo', function (files, info) {
+        var file = files[0];
+        if (file.size > 20 * 1024 * 1024) {
+            alert('File too large. Maximum size is 20MB.');
+            return;
+        }
+        if (info) {
+            info.textContent = describeFiles(files);
+            info.classList.remove('hidden');
+        }
+    });
+
+    wireDropzone('batchUploadArea', 'batchFileInput', 'batchFileInfo', function (files, info) {
+        if (info) {
+            info.textContent = describeFiles(files);
+            info.classList.remove('hidden');
+        }
+    });
+
+    wireDropzone('videoUploadArea', 'videoInput', 'videoInfo', function (files, info) {
+        if (info) {
+            info.textContent = describeFiles(files);
+            info.classList.remove('hidden');
+        }
+    });
+
+    // ============================================================
+    // DSV PREVIEW (single image tab)
+    // ============================================================
+    var carriageway = document.getElementById('carriageway');
+    var fringe = document.getElementById('fringe');
+
+    function updateDSVPreview() {
+        if (!carriageway || !fringe) return;
+        var table = IRC106_DSV[carriageway.value] || IRC106_DSV['4L-D'];
+        var dsv = table[fringe.value] !== undefined ? table[fringe.value] : table.medium;
+        var speed = freeFlowSpeed(carriageway.value);
+
+        var baseDisplay = document.getElementById('baseDsvDisplay');
+        var vehDisplay = document.getElementById('vehDisplay');
+        var speedDisplay = document.getElementById('speedDisplay');
+        if (baseDisplay) baseDisplay.textContent = dsv.toLocaleString();
+        if (vehDisplay) vehDisplay.textContent = dsv.toLocaleString();
+        if (speedDisplay) speedDisplay.textContent = speed;
+    }
+
     if (carriageway) carriageway.addEventListener('change', updateDSVPreview);
     if (fringe) fringe.addEventListener('change', updateDSVPreview);
     updateDSVPreview();
 
-    // ----- RUN ANALYSIS (only if button exists) -----
-    if (analyzeBtn && statusBar && resultContainer && fileInput) {
-        analyzeBtn.addEventListener('click', async function() {
-            console.log("🚀 RUN ANALYSIS clicked!");
+    // ============================================================
+    // SEVERITY / RECOMMENDATION RENDER HELPERS
+    // ============================================================
+    function severityTally(severities) {
+        var counts = { shallow: 0, moderate: 0, deep: 0 };
+        (severities || []).forEach(function (s) {
+            if (counts[s] !== undefined) counts[s]++;
+        });
+        return counts;
+    }
 
+    function severityBadgeHtml(label, count, colorClass) {
+        if (!count) return '';
+        return '<div class="defect-row"><span>' + label + '</span>' +
+            '<span class="defect-badge ' + (colorClass || '') + '">' + count + '</span></div>';
+    }
+
+    function recommendationsHtml(recs) {
+        if (!recs || recs.length === 0) return '';
+        var rows = recs.map(function (r) {
+            return '<div class="defect-row"><span>' + (r.action || '') + '</span>' +
+                '<span class="defect-badge">' + (r.severity || '') + '</span></div>';
+        }).join('');
+        return '<div class="detail-panel"><h4>Recommended Actions</h4>' + rows + '</div>';
+    }
+
+    function metricCard(label, value, unit, extraClass) {
+        return '<div class="metric-card">' +
+            '<span class="metric-label">' + label + '</span>' +
+            '<div class="metric-value ' + (extraClass || '') + '">' + value + '</div>' +
+            '<span class="metric-unit">' + unit + '</span></div>';
+    }
+
+    // ============================================================
+    // SINGLE IMAGE — RUN ANALYSIS
+    // ============================================================
+    var analyzeBtn = document.getElementById('analyzeBtn');
+    var statusBar = document.getElementById('statusBar');
+    var resultContainer = document.getElementById('resultContainer');
+    var fileInput = document.getElementById('fileInput');
+
+    async function runSingleAnalysis(file, totalWidth, carriagewayVal, fringeVal) {
+        var formData = new FormData();
+        formData.append('file', file);
+        formData.append('total_width_m', totalWidth);
+        formData.append('carriageway', carriagewayVal);
+        formData.append('fringe', fringeVal);
+
+        var response = await fetch('/analyse', { method: 'POST', body: formData });
+        if (!response.ok) {
+            var errText = await response.text();
+            var errJson;
+            try { errJson = JSON.parse(errText); } catch (e) { errJson = { detail: errText || 'Server error' }; }
+            throw new Error(errJson.detail || 'Server error');
+        }
+        return response.json();
+    }
+
+    function displayResults(data) {
+        var result = data.result;
+        if (!resultContainer) return;
+
+        if (!result) {
+            resultContainer.innerHTML = '<div class="placeholder"><p>No results returned from server.</p></div>';
+            return;
+        }
+
+        var baseDsv = result.base_dsv_pcu_hr || 0;
+        var reducedDsv = result.reduced_dsv_pcu_hr || 0;
+        var lossPercent = result.capacity_loss_percent || 0;
+        var blockedWidth = result.blocked_width_m || 0;
+        var severities = result.pothole_severities || [];
+        var sim = result.simulation || {};
+        var counts = severityTally(severities);
+
+        var html = '<div class="metric-grid">' +
+            metricCard('Baseline DSV', fmt(baseDsv), 'PCU/hr') +
+            metricCard('Reduced DSV', fmt(reducedDsv), 'PCU/hr', 'warn') +
+            metricCard('Capacity Loss', fmt(lossPercent) + '%', 'of baseline capacity', lossPercent > 15 ? 'warn' : 'ok') +
+            metricCard('Blocked Width', fmt(blockedWidth), 'metres') +
+            '</div>';
+
+        if (severities.length > 0) {
+            html += '<div class="detail-panel"><h4>Pothole Severity Breakdown</h4>' +
+                severityBadgeHtml('Shallow', counts.shallow) +
+                severityBadgeHtml('Moderate', counts.moderate) +
+                severityBadgeHtml('Deep', counts.deep) +
+                '</div>';
+        }
+
+        if (sim && Object.keys(sim).length > 0) {
+            html += '<div class="detail-panel"><h4>Digital Twin Simulation</h4>';
+            if (sim.average_speed_kmh !== undefined) html += '<div class="defect-row"><span>Average speed</span><span class="defect-badge">' + fmt(sim.average_speed_kmh) + ' km/h</span></div>';
+            if (sim.density_pcu_km !== undefined) html += '<div class="defect-row"><span>Density</span><span class="defect-badge">' + fmt(sim.density_pcu_km) + ' PCU/km</span></div>';
+            if (sim.flow_pcu_hr !== undefined) html += '<div class="defect-row"><span>Flow</span><span class="defect-badge">' + fmt(sim.flow_pcu_hr) + ' PCU/hr</span></div>';
+            html += '</div>';
+        }
+
+        html += recommendationsHtml(data.recommendations);
+
+        resultContainer.innerHTML = html;
+    }
+
+    if (analyzeBtn && statusBar && resultContainer && fileInput) {
+        analyzeBtn.addEventListener('click', async function () {
             try {
                 var file = fileInput.files[0];
                 if (!file) {
-                    statusBar.textContent = '❌ Please upload an image first.';
-                    statusBar.className = 'status-bar error';
+                    setStatus(statusBar, 'Please upload an image first.', true);
                     return;
                 }
-
                 if (file.size > 20 * 1024 * 1024) {
-                    statusBar.textContent = '❌ File too large. Max 20MB.';
-                    statusBar.className = 'status-bar error';
+                    setStatus(statusBar, 'File too large. Max 20MB.', true);
                     return;
                 }
-
                 var totalWidthInput = document.getElementById('totalWidth');
-                if (!totalWidthInput) {
-                    statusBar.textContent = '❌ Road width input not found.';
-                    statusBar.className = 'status-bar error';
-                    return;
-                }
-
-                var totalWidth = parseFloat(totalWidthInput.value);
+                var totalWidth = parseFloat(totalWidthInput ? totalWidthInput.value : NaN);
                 if (isNaN(totalWidth) || totalWidth <= 0) {
-                    statusBar.textContent = '❌ Please enter a valid road width.';
-                    statusBar.className = 'status-bar error';
+                    setStatus(statusBar, 'Please enter a valid road width.', true);
                     return;
                 }
 
                 var carriagewayVal = carriageway ? carriageway.value : '4L-D';
                 var fringeVal = fringe ? fringe.value : 'medium';
 
-                var formData = new FormData();
-                formData.append('file', file);
-                formData.append('total_width_m', totalWidth);
-                formData.append('carriageway', carriagewayVal);
-                formData.append('fringe', fringeVal);
-
                 analyzeBtn.disabled = true;
-                analyzeBtn.textContent = '⏳ Processing...';
-                statusBar.textContent = '⏳ Analysing road condition...';
-                statusBar.className = 'status-bar';
-                resultContainer.innerHTML = '<div class="placeholder"><p>⏳ Processing your image...</p></div>';
+                analyzeBtn.textContent = 'PROCESSING…';
+                setStatus(statusBar, 'Analysing road condition…', false);
+                resultContainer.innerHTML = '<div class="placeholder"><p>Processing your image…</p></div>';
 
-                var response = await fetch('/analyse', { method: 'POST', body: formData });
-
-                if (!response.ok) {
-                    var errorText = await response.text();
-                    var errorJson;
-                    try {
-                        errorJson = JSON.parse(errorText);
-                    } catch (e) {
-                        errorJson = { detail: errorText || 'Server error' };
-                    }
-                    throw new Error(errorJson.detail || 'Server error');
-                }
-
-                var data = await response.json();
-                console.log("✅ Analysis complete:", data);
+                var data = await runSingleAnalysis(file, totalWidth, carriagewayVal, fringeVal);
                 displayResults(data);
-                statusBar.textContent = '✅ Analysis complete.';
-                statusBar.className = 'status-bar';
+                setStatus(statusBar, 'Analysis complete.', false);
 
             } catch (error) {
-                console.error("❌ Error in analysis:", error);
-                statusBar.textContent = '❌ Error: ' + (error.message || 'Unknown error');
-                statusBar.className = 'status-bar error';
-                resultContainer.innerHTML = '<div class="placeholder"><p style="color:#a33a1a;">❌ ' + (error.message || 'Unknown error') + '</p></div>';
+                setStatus(statusBar, 'Error: ' + (error.message || 'Unknown error'), true);
+                resultContainer.innerHTML = '<div class="placeholder"><p style="color:#e2574c;">' + (error.message || 'Unknown error') + '</p></div>';
             } finally {
                 analyzeBtn.disabled = false;
-                analyzeBtn.textContent = '🚀 RUN ANALYSIS';
+                analyzeBtn.textContent = 'RUN ANALYSIS';
             }
         });
-    } else {
-        console.error('❌ Critical elements missing for RUN ANALYSIS!');
     }
 
-    // ----- VIDEO ANALYSIS -----
-    var videoUploadArea = document.getElementById('videoUploadArea');
-    var videoInput = document.getElementById('videoInput');
-    var videoInfo = document.getElementById('videoInfo');
+    // ============================================================
+    // BATCH — no dedicated endpoint on the server, so we call
+    // /analyse once per file and aggregate the results client-side.
+    // ============================================================
+    var batchAnalyzeBtn = document.getElementById('batchAnalyzeBtn');
+    var batchStatus = document.getElementById('batchStatus');
+    var batchFileInput = document.getElementById('batchFileInput');
+    var batchResultContainer = document.getElementById('batchResultContainer');
+
+    if (batchAnalyzeBtn && batchStatus) {
+        batchAnalyzeBtn.addEventListener('click', async function () {
+            var files = batchFileInput ? batchFileInput.files : null;
+            if (!files || files.length === 0) {
+                setStatus(batchStatus, 'Please select one or more images first.', true);
+                return;
+            }
+
+            var totalWidthInput = document.getElementById('totalWidthBatch');
+            var totalWidth = parseFloat(totalWidthInput ? totalWidthInput.value : NaN);
+            if (isNaN(totalWidth) || totalWidth <= 0) {
+                setStatus(batchStatus, 'Please enter a valid road width.', true);
+                return;
+            }
+            var carriagewayVal = document.getElementById('carriagewayBatch').value;
+            var fringeVal = document.getElementById('fringeBatch').value;
+
+            batchAnalyzeBtn.disabled = true;
+            var rows = [];
+
+            for (var i = 0; i < files.length; i++) {
+                setStatus(batchStatus, 'Analysing ' + (i + 1) + ' of ' + files.length + ': ' + files[i].name + '…', false);
+                try {
+                    var data = await runSingleAnalysis(files[i], totalWidth, carriagewayVal, fringeVal);
+                    rows.push({ name: files[i].name, loss: data.result.capacity_loss_percent || 0 });
+                } catch (err) {
+                    rows.push({ name: files[i].name, loss: null, error: err.message });
+                }
+            }
+
+            rows.sort(function (a, b) { return (b.loss || 0) - (a.loss || 0); });
+            var validLosses = rows.filter(function (r) { return r.loss !== null; }).map(function (r) { return r.loss; });
+            var avg = validLosses.length ? (validLosses.reduce(function (a, b) { return a + b; }, 0) / validLosses.length) : 0;
+            var worst = validLosses.length ? Math.max.apply(null, validLosses) : 0;
+
+            var html = '<div class="metric-grid">' +
+                metricCard('Images Analysed', rows.length, 'files') +
+                metricCard('Average Capacity Loss', fmt(avg) + '%', 'across batch') +
+                metricCard('Worst Case Loss', fmt(worst) + '%', 'single image', 'warn') +
+                '</div><div class="detail-panel"><h4>Ranked Results</h4>' +
+                rows.map(function (r) {
+                    if (r.error) {
+                        return '<div class="batch-row"><span class="name">' + r.name + '</span><span style="color:#e2574c;">' + r.error + '</span></div>';
+                    }
+                    return '<div class="batch-row"><span class="name">' + r.name + '</span><span class="loss">' + fmt(r.loss) + '% loss</span></div>';
+                }).join('') + '</div>';
+
+            if (batchResultContainer) batchResultContainer.innerHTML = html;
+            setStatus(batchStatus, 'Batch analysis complete.', false);
+            batchAnalyzeBtn.disabled = false;
+        });
+    }
+
+    // ============================================================
+    // VIDEO — submit to /analyse_video then poll /job/{job_id}
+    // ============================================================
     var videoAnalyzeBtn = document.getElementById('videoAnalyzeBtn');
     var videoStatus = document.getElementById('videoStatus');
+    var videoInput = document.getElementById('videoInput');
+    var videoResultContainer = document.getElementById('videoResultContainer');
 
-    if (videoUploadArea && videoInput) {
-        videoUploadArea.addEventListener('click', function(e) {
-            e.preventDefault();
-            videoInput.click();
-        });
-
-        videoInput.addEventListener('change', function() {
-            try {
-                if (this.files && this.files.length > 0) {
-                    var file = this.files[0];
-                    if (videoInfo) {
-                        videoInfo.textContent = '🎬 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
-                        videoInfo.classList.remove('hidden');
+    function pollJob(jobId) {
+        return new Promise(function (resolve, reject) {
+            var attempts = 0;
+            var interval = setInterval(async function () {
+                attempts++;
+                try {
+                    var res = await fetch('/job/' + jobId);
+                    if (!res.ok) throw new Error('Job not found');
+                    var job = await res.json();
+                    if (job.status === 'processing') {
+                        if (attempts > 60) { clearInterval(interval); reject(new Error('Timed out waiting for video analysis.')); }
+                        return;
                     }
+                    clearInterval(interval);
+                    if (job.status === 'failed') {
+                        reject(new Error(job.error || 'Video analysis failed.'));
+                    } else {
+                        resolve(job);
+                    }
+                } catch (err) {
+                    clearInterval(interval);
+                    reject(err);
                 }
-            } catch (err) {
-                console.error('❌ Video upload error:', err);
-            }
+            }, 2000);
         });
+    }
+
+    function displayVideoResults(job) {
+        if (!videoResultContainer) return;
+        var s = job.summary || {};
+        var html = '<div class="metric-grid">' +
+            metricCard('Frames Analysed', job.frames_analysed || 0, 'of ' + fmt(job.total_duration_sec) + ' s clip') +
+            metricCard('Average Capacity Loss', fmt(s.average_capacity_loss_percent) + '%', 'across clip') +
+            metricCard('Peak Capacity Loss', fmt(s.max_capacity_loss_percent) + '%', 'worst frame', 'warn') +
+            metricCard('Peak Blocked Width', fmt(s.peak_blocked_width_m), 'metres') +
+            '</div>';
+        html += recommendationsHtml(job.recommendations);
+        videoResultContainer.innerHTML = html;
     }
 
     if (videoAnalyzeBtn && videoStatus) {
-        videoAnalyzeBtn.addEventListener('click', function() {
+        videoAnalyzeBtn.addEventListener('click', async function () {
+            var file = videoInput ? videoInput.files[0] : null;
+            if (!file) {
+                setStatus(videoStatus, 'Please upload a video first.', true);
+                return;
+            }
+            var totalWidthInput = document.getElementById('totalWidth');
+            var totalWidth = parseFloat(totalWidthInput ? totalWidthInput.value : 7.0) || 7.0;
+            var carriagewayVal = carriageway ? carriageway.value : '4L-D';
+            var fringeVal = fringe ? fringe.value : 'medium';
+
+            var formData = new FormData();
+            formData.append('file', file);
+            formData.append('total_width_m', totalWidth);
+            formData.append('carriageway', carriagewayVal);
+            formData.append('fringe', fringeVal);
+
+            videoAnalyzeBtn.disabled = true;
+            videoAnalyzeBtn.textContent = 'PROCESSING…';
+            setStatus(videoStatus, 'Uploading video…', false);
+            if (videoResultContainer) videoResultContainer.innerHTML = '<div class="placeholder"><p>Uploading and queuing video analysis…</p></div>';
+
             try {
-                var file = videoInput ? videoInput.files[0] : null;
-                if (!file) {
-                    videoStatus.textContent = '❌ Please upload a video first.';
-                    videoStatus.className = 'status-bar error';
-                    return;
+                var submitRes = await fetch('/analyse_video', { method: 'POST', body: formData });
+                if (!submitRes.ok) {
+                    var errText = await submitRes.text();
+                    throw new Error(errText || 'Server error');
                 }
-                videoStatus.textContent = '🎥 Video analysis coming soon!';
-                videoStatus.className = 'status-bar';
+                var submitData = await submitRes.json();
+                setStatus(videoStatus, 'Analysing frames in the background…', false);
+                if (videoResultContainer) videoResultContainer.innerHTML = '<div class="placeholder"><p>Analysing frames — this can take a little while…</p></div>';
+
+                var job = await pollJob(submitData.job_id);
+                displayVideoResults(job);
+                setStatus(videoStatus, 'Video analysis complete.', false);
             } catch (err) {
-                console.error('❌ Video analysis error:', err);
+                setStatus(videoStatus, 'Error: ' + (err.message || 'Unknown error'), true);
+                if (videoResultContainer) videoResultContainer.innerHTML = '<div class="placeholder"><p style="color:#e2574c;">' + (err.message || 'Unknown error') + '</p></div>';
+            } finally {
+                videoAnalyzeBtn.disabled = false;
+                videoAnalyzeBtn.textContent = 'RUN VIDEO ANALYSIS';
             }
         });
     }
 
-    // ----- BATCH ANALYSIS -----
-    var batchAnalyzeBtn = document.getElementById('batchAnalyzeBtn');
-    var batchStatus = document.getElementById('batchStatus');
-
-    if (batchAnalyzeBtn && batchStatus) {
-        batchAnalyzeBtn.addEventListener('click', function() {
-            try {
-                batchStatus.textContent = '📁 Batch processing coming soon!';
-                batchStatus.className = 'status-bar';
-            } catch (err) {
-                console.error('❌ Batch analysis error:', err);
-            }
-        });
-    }
-
-    // ----- DISPLAY RESULTS -----
-    function displayResults(data) {
-        try {
-            var result = data.result;
-            var container = document.getElementById('resultContainer');
-
-            if (!container) {
-                console.error('❌ resultContainer not found!');
-                return;
-            }
-
-            if (!result) {
-                container.innerHTML = '<div class="placeholder"><p>❌ No results returned from server.</p></div>';
-                return;
-            }
-
-            var baseDsv = result.base_dsv_pcu_hr || 0;
-            var reducedDsv = result.reduced_dsv_pcu_hr || 0;
-            var lossPercent = result.capacity_loss_percent || 0;
-            var blockedWidth = result.blocked_width_m || 0;
-            var severities = result.pothole_severities || [];
-            var sim = result.simulation || {};
-
-            var html = `
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px;">
-                    <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
-                        <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Baseline DSV</span>
-                        <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${baseDsv}</div>
-                        <span style="font-size:0.8rem; color:#5a6a7a;">PCU/hr</span>
-                    </div>
-                    <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
-                        <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Reduced DSV</span>
-                        <div style="font-size:2rem; font-weight:700; color:#c44536;">${reducedDsv}</div>
-                        <span style="font-size:0.8rem; color:#5a6a7a;">PCU/hr</span>
-                    </div>
-                    <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
-                        <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Capacity Loss</span>
-                        <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${lossPercent}%</div>
-                        <span style="font-size:0.8rem; color:#5a6a7a;">%</span>
-                    </div>
-                    <div style="background:#f8faff; padding:16px; border-radius:10px; border:1px solid #e0e8f2;">
-                        <span style="font-size:0.8rem; color:#5a6a7a; text-transform:uppercase;">Blocked Width</span>
-                        <div style="font-size:2rem; font-weight:700; color:#0a2a44;">${blockedWidth}</div>
-                        <span style="font-size:0.8rem; color:#5a6a7a;">metres</span>
-                    </div>
-                </div>
-                <div style="margin-top:16px; padding:16px; background:#f9fbfd; border-radius:10px; border:1px solid #e0e8f2;">
-                    <h4 style="margin-bottom:8px; color:#0a2a44;">🕳️ Poth
+});
