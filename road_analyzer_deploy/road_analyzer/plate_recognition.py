@@ -196,8 +196,22 @@ def flag_street_vendor(frame: np.ndarray, detection: dict, location: str,
 def _save_evidence_crop(frame: np.ndarray, bbox: tuple, evidence_dir: str, prefix: str) -> str:
     import os
     os.makedirs(evidence_dir, exist_ok=True)
+    h, w = frame.shape[:2]
     x1, y1, x2, y2 = bbox
-    crop = frame[max(0, y1):y2, max(0, x1):x2]
+    # Clamp ALL four sides — the previous version only clamped the
+    # top-left corner (max(0, ...)), so any box whose x2/y2 ran past the
+    # frame edge (common once CROP_PADDING_PX is added upstream, or on
+    # a detection near the frame boundary) sliced past the array bound.
+    # numpy doesn't error on that, it just silently returns a truncated
+    # or empty crop, so a bad plate/vendor evidence image saved with no
+    # warning anywhere.
+    x1 = max(0, min(x1, w))
+    y1 = max(0, min(y1, h))
+    x2 = max(0, min(x2, w))
+    y2 = max(0, min(y2, h))
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        raise ValueError(f"Empty evidence crop for bbox={bbox} on frame {w}x{h}")
     fname = f"{prefix}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S%f')}.jpg"
     fpath = os.path.join(evidence_dir, fname)
     cv2.imwrite(fpath, crop)
