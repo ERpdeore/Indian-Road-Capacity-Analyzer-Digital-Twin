@@ -4,7 +4,7 @@ import uuid
 import shutil
 import logging
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
@@ -13,7 +13,7 @@ from pathlib import Path
 # ----- Ensure current directory is in Python path -----
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# ----- Imports (absolute, no dots) -----
+# ----- Imports (absolute) -----
 from core import RoadAnalyzer
 from department_extensions import generate_recommendations
 
@@ -25,7 +25,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(
     title="Indian Road Capacity Analyzer — Digital Model",
-    description="Supports both Image and Video analysis. Video is processed asynchronously.",
+    description="Supports both Image and Video analysis.",
     version="2.0",
 )
 
@@ -37,18 +37,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if Path("static").exists():
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+# ======================================================================
+# ULTIMATE STATIC FOLDER FINDER (Searches up and down the directory tree)
+# ======================================================================
+def find_static_folder():
+    """Searches for a folder named 'static' that contains 'index.html'."""
+    # Start from the current file's directory
+    start_dir = Path(__file__).parent.absolute()
+    
+    # Walk up the directory tree (up to 5 levels up)
+    for _ in range(5):
+        candidate = start_dir / "static"
+        if candidate.exists() and (candidate / "index.html").exists():
+            logger.info(f"✅ Found static folder at: {candidate}")
+            return candidate
+        # Also check if static is inside a subdirectory
+        for sub in start_dir.iterdir():
+            if sub.is_dir():
+                candidate_sub = sub / "static"
+                if candidate_sub.exists() and (candidate_sub / "index.html").exists():
+                    logger.info(f"✅ Found static folder at: {candidate_sub}")
+                    return candidate_sub
+        start_dir = start_dir.parent  # Go one level up
 
-# Initialize once
-analyzer = RoadAnalyzer(model_path="yolov8n.pt", enable_depth=False)
-jobs = {}
+    # If not found, do a full walk (slow but exhaustive)
+    for root, dirs, files in os.walk("."):
+        if "static" in dirs:
+            candidate = Path(root) / "static"
+            if (candidate / "index.html").exists():
+                logger.info(f"✅ Found static folder via walk: {candidate}")
+                return candidate
 
+    logger.warning("❌ Static folder NOT found! Frontend will not load.")
+    return None
+
+STATIC_PATH = find_static_folder()
+
+# Mount static folder if found
+if STATIC_PATH:
+    app.mount("/static", StaticFiles(directory=str(STATIC_PATH)), name="static")
+    logger.info(f"✅ Static folder mounted from: {STATIC_PATH}")
+else:
+    # Create a dummy static folder with a fallback HTML page
+    fallback_dir = Path("/tmp/static_fallback")
+    fallback_dir.mkdir(exist_ok=True, parents=True)
+    index_fallback = fallback_dir / "index.html"
+    with open(index_fallback, "w") as f:
+        f.write("""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Fallback</title></head>
+        <body>
+            <h1>⚠️ Frontend files not found</h1>
+            <p>Please ensure your GitHub repository contains a <code>static</code> folder with <code>index.html</code>.</p>
+            <p>Current directory: <pre>{}</pre></p>
+        </body>
+        </html>
+        """.format(os.getcwd()))
+    STATIC_PATH = fallback_dir
+    app.mount("/static", StaticFiles(directory=str(fallback_dir)), name="static")
+    logger.warning("⚠️ Using fallback static folder.")
+
+# ======================================================================
+# ROOT ENDPOINT (Always serves index.html)
+# ======================================================================
 @app.get("/")
 async def root():
-    if Path("static/index.html").exists():
-        return FileResponse("static/index.html")
-    return {"message": "API is running."}
+    index_path = STATIC_PATH / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path))
+    # If still not found, serve a simple HTML response
+    return HTMLResponse(content="""
+    <html>
+        <head><title>Road Analyzer</title></head>
+        <body>
+            <h1>🛣️ Road Capacity Analyzer</h1>
+            <p>Static files not found. Please check your repository.</p>
+        </body>
+    </html>
+    """)
+
+# ======================================================================
+# Initialize the analyzer (MiDaS OFF)
+# ======================================================================
+analyzer = RoadAnalyzer(model_path="yolov8n.pt", enable_depth=False)
+jobs = {}
 
 # ---------- Image Analysis ----------
 @app.post("/analyse")
@@ -112,7 +185,7 @@ async def analyse(
         if temp_path.exists():
             os.remove(temp_path)
 
-# ---------- Video Analysis (Background) ----------
+# ---------- Video Analysis ----------
 def process_video_background(job_id: str, video_path: Path, total_width_m: float, carriageway: str, fringe: str):
     try:
         logger.info(f"Starting video processing for job {job_id}")
