@@ -1,46 +1,50 @@
 document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('analysisForm');
+    const fileInput = document.getElementById('fileInput');
     const analyzeBtn = document.getElementById('analyzeBtn');
     const loadingIndicator = document.getElementById('loadingIndicator');
     const resultsPanel = document.getElementById('resultsPanel');
+    const statusMessage = document.getElementById('statusMessage');
+    const progressFill = document.getElementById('progressFill');
 
     form.addEventListener('submit', async function (e) {
         e.preventDefault();
 
-        // Gather inputs
-        const fileInput = document.getElementById('imageInput');
+        const file = fileInput.files[0];
+        if (!file) {
+            alert('Please upload a file.');
+            return;
+        }
+
         const totalWidth = parseFloat(document.getElementById('totalWidth').value);
+        if (isNaN(totalWidth) || totalWidth <= 0) {
+            alert('Please enter a valid road width.');
+            return;
+        }
+
         const carriageway = document.getElementById('carriageway').value;
         const fringe = document.getElementById('fringe').value;
 
-        // Basic validation
-        if (!fileInput.files || fileInput.files.length === 0) {
-            alert('Please upload a road image.');
-            return;
-        }
-        if (isNaN(totalWidth) || totalWidth <= 0) {
-            alert('Please enter a valid road width (greater than 0).');
-            return;
-        }
-
-        // Build FormData
         const formData = new FormData();
-        formData.append('file', fileInput.files[0]);
+        formData.append('file', file);
         formData.append('total_width_m', totalWidth);
         formData.append('carriageway', carriageway);
         formData.append('fringe', fringe);
 
-        // UI loading state
+        // Determine if it's a video based on MIME type
+        const isVideo = file.type.startsWith('video/');
+
+        // UI Loading State
         analyzeBtn.disabled = true;
-        analyzeBtn.textContent = '⏳ Processing...';
+        analyzeBtn.textContent = '⏳ Submitting...';
         loadingIndicator.classList.remove('hidden');
         resultsPanel.classList.add('hidden');
+        progressFill.style.width = '0%';
+        statusMessage.textContent = isVideo ? 'Video uploaded. Server is processing...' : 'Processing image...';
 
         try {
-            const response = await fetch('/analyse', {
-                method: 'POST',
-                body: formData
-            });
+            const endpoint = isVideo ? '/analyse_video' : '/analyse';
+            const response = await fetch(endpoint, { method: 'POST', body: formData });
 
             if (!response.ok) {
                 const err = await response.json();
@@ -48,77 +52,109 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             const data = await response.json();
-            displayResults(data);
+
+            if (isVideo) {
+                // --- VIDEO: Polling Logic ---
+                const jobId = data.job_id;
+                statusMessage.textContent = 'Video processing started. Polling for results...';
+                progressFill.style.width = '10%';
+
+                let done = false;
+                let attempts = 0;
+                const maxAttempts = 60; // 2 minutes max
+
+                while (!done && attempts < maxAttempts) {
+                    attempts++;
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+
+                    const pollRes = await fetch(`/job/${jobId}`);
+                    const pollData = await pollRes.json();
+
+                    if (pollData.status === 'completed') {
+                        displayVideoResults(pollData);
+                        done = true;
+                        progressFill.style.width = '100%';
+                    } else if (pollData.status === 'failed') {
+                        throw new Error(pollData.error || 'Video processing failed.');
+                    } else {
+                        // Still processing
+                        const progress = Math.min(20 + attempts * 1.5, 90);
+                        progressFill.style.width = progress + '%';
+                        statusMessage.textContent = `Processing frame ${attempts}...`;
+                    }
+                }
+
+                if (!done) {
+                    throw new Error('Video processing timed out after 2 minutes.');
+                }
+
+            } else {
+                // --- IMAGE: Instant Results ---
+                displayImageResults(data);
+                progressFill.style.width = '100%';
+            }
 
         } catch (error) {
             alert(`Error: ${error.message}`);
             console.error(error);
+            loadingIndicator.classList.add('hidden');
         } finally {
             analyzeBtn.disabled = false;
-            analyzeBtn.textContent = '🚀 Analyze Road Capacity';
+            analyzeBtn.textContent = '🚀 Analyze';
             loadingIndicator.classList.add('hidden');
         }
     });
 
-    function displayResults(data) {
+    // --- DISPLAY FUNCTIONS ---
+
+    function displayImageResults(data) {
         const result = data.result;
-        const recommendations = data.recommendations || [];
-        const disclaimer = data.disclaimer || 'This is an estimate...';
+        const container = document.getElementById('dynamicResultContainer');
+        container.innerHTML = `
+            <div class="result-grid">
+                <div class="result-item"><span class="label">Baseline DSV</span><span class="value">${result.base_dsv_pcu_hr}</span><span class="unit">PCU/hr</span></div>
+                <div class="result-item"><span class="label">Reduced DSV</span><span class="value highlight">${result.reduced_dsv_pcu_hr}</span><span class="unit">PCU/hr</span></div>
+                <div class="result-item"><span class="label">Capacity Loss</span><span class="value">${result.capacity_loss_percent}%</span><span class="unit">%</span></div>
+                <div class="result-item"><span class="label">Blocked Width</span><span class="value">${result.blocked_width_m}</span><span class="unit">m</span></div>
+                <div class="result-item"><span class="label">Usable Width</span><span class="value">${result.usable_width_m}</span><span class="unit">m</span></div>
+                <div class="result-item"><span class="label">Width Factor</span><span class="value">${result.width_factor}</span><span class="unit">-</span></div>
+            </div>
+            <div id="potholeSection"><h3>🕳️ Potholes</h3><div id="potholeList">${result.pothole_severities.length > 0 ? result.pothole_severities.map((s,i) => `Pothole ${i+1}: ${s.toUpperCase()}`).join(', ') : 'None detected'}</div></div>
+            <div id="simulationSection"><h3>🚦 Traffic Sim</h3><p>Speed: ${result.simulation.average_speed_kmh.toFixed(1)} km/h</p></div>
+        `;
+        document.getElementById('resultsPanel').classList.remove('hidden');
+        resultsPanel.scrollIntoView({ behavior: 'smooth' });
+    }
 
-        // 1. Capacity Summary
-        document.getElementById('baseDsv').textContent = result.base_dsv_pcu_hr;
-        document.getElementById('reducedDsv').textContent = result.reduced_dsv_pcu_hr;
-        document.getElementById('capacityLoss').textContent = result.capacity_loss_percent.toFixed(1);
-        document.getElementById('blockedWidth').textContent = result.blocked_width_m.toFixed(2);
-        document.getElementById('usableWidth').textContent = result.usable_width_m.toFixed(2);
-        document.getElementById('widthFactor').textContent = result.width_factor.toFixed(3);
+    function displayVideoResults(data) {
+        const summary = data.summary;
+        const timeline = data.timeline || [];
+        const container = document.getElementById('dynamicResultContainer');
+        
+        // Build a simple timeline display
+        let timelineHtml = '<ul style="max-height:200px;overflow-y:auto;font-size:0.9rem;background:#f8f9fa;padding:10px;border-radius:6px;">';
+        timeline.slice(0, 20).forEach((frame, idx) => {
+            timelineHtml += `<li>t=${frame.timestamp_sec}s: Loss ${frame.capacity_loss_percent}%, Blocked ${frame.blocked_width_m}m</li>`;
+        });
+        if (timeline.length > 20) timelineHtml += `<li>... and ${timeline.length - 20} more frames</li>`;
+        timelineHtml += '</ul>';
 
-        // 2. Pothole Severities
-        const potholeList = document.getElementById('potholeList');
-        if (result.pothole_severities && result.pothole_severities.length > 0) {
-            let html = '<ul style="list-style: none; padding: 0;">';
-            result.pothole_severities.forEach((sev, idx) => {
-                const emoji = sev === 'shallow' ? '🟢' : (sev === 'moderate' ? '🟡' : '🔴');
-                html += `<li style="padding: 6px 0; border-bottom: 1px solid #eee;">
-                            ${emoji} Pothole #${idx+1}: <strong>${sev.toUpperCase()}</strong>
-                            (Classified per IRC:SP:83-2018 proxy)
-                        </li>`;
-            });
-            html += '</ul>';
-            potholeList.innerHTML = html;
-        } else {
-            potholeList.innerHTML = '✅ No potholes detected in this image.';
-        }
-
-        // 3. Simulation
-        const sim = result.simulation.steady_state || {};
-        document.getElementById('simSpeed').textContent = (sim.speed_kmh || 0).toFixed(1);
-        document.getElementById('simDensity').textContent = (sim.density_pcu_km || 0).toFixed(1);
-        document.getElementById('simFlow').textContent = (sim.flow_pcu_hr || 0);
-
-        // 4. Recommendations – sort by severity
-        const severityOrder = { 'Critical': 1, 'High': 2, 'Medium': 3, 'Low': 4 };
-        recommendations.sort((a, b) => (severityOrder[a.severity] || 5) - (severityOrder[b.severity] || 5));
-
-        const recList = document.getElementById('recommendationList');
-        recList.innerHTML = '';
-        if (recommendations.length === 0) {
-            recList.innerHTML = '<li>✅ No immediate engineering actions recommended.</li>';
-        } else {
-            const colorMap = { 'Critical': '#c44536', 'High': '#d97a2b', 'Medium': '#f0a030', 'Low': '#3a7a5a' };
-            recommendations.forEach(rec => {
-                const li = document.createElement('li');
-                li.style.borderLeftColor = colorMap[rec.severity] || '#0a2a44';
-                li.innerHTML = `<strong>[${rec.severity}]</strong> ${rec.action}`;
-                recList.appendChild(li);
-            });
-        }
-
-        // 5. Disclaimer
-        document.getElementById('disclaimerText').textContent = disclaimer;
-
-        // Show results
-        resultsPanel.classList.remove('hidden');
+        container.innerHTML = `
+            <div class="result-grid">
+                <div class="result-item"><span class="label">Avg. Loss</span><span class="value">${summary.average_capacity_loss_percent}%</span><span class="unit">over ${data.frames_analysed} frames</span></div>
+                <div class="result-item"><span class="label">Peak Loss</span><span class="value highlight">${summary.max_capacity_loss_percent}%</span><span class="unit">at worst frame</span></div>
+                <div class="result-item"><span class="label">Min Loss</span><span class="value">${summary.min_capacity_loss_percent}%</span><span class="unit">best moment</span></div>
+                <div class="result-item"><span class="label">Peak Blocked</span><span class="value">${summary.peak_blocked_width_m}</span><span class="unit">metres</span></div>
+                <div class="result-item"><span class="label">Peak Reduced DSV</span><span class="value">${summary.peak_reduced_dsv_pcu_hr}</span><span class="unit">PCU/hr</span></div>
+                <div class="result-item"><span class="label">Duration</span><span class="value">${data.total_duration_sec}</span><span class="unit">seconds</span></div>
+            </div>
+            <h3>⏱️ Dynamic Timeline (1 sample/sec)</h3>
+            ${timelineHtml}
+            <h3>📋 Recommendations</h3>
+            <ul>${data.recommendations.map(r => `<li>[${r.severity}] ${r.action}</li>`).join('')}</ul>
+        `;
+        document.getElementById('disclaimerText').textContent = data.disclaimer;
+        document.getElementById('resultsPanel').classList.remove('hidden');
         resultsPanel.scrollIntoView({ behavior: 'smooth' });
     }
 });
