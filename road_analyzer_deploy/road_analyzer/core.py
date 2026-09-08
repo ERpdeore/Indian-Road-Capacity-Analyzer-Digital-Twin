@@ -3,21 +3,33 @@ import math
 import numpy as np
 from ultralytics import YOLO
 
-# Absolute imports (no dots)
+# ===== FIX: Absolute imports (no dots) =====
 from pothole_rectification import PotholeRectifier
 from digital_twin_engine import DigitalTwinEngine
 
 logger = logging.getLogger(__name__)
 
-# ==================== IRC:106-1990 TABLES ====================
+# ============================================================
+# IRC:106-1990 TABLES (FIXED: Added 2-Lane support)
+# ============================================================
 IRC106_DSV = {
+    # ----- 2-Lane roads (ADDED - FIXES BACKEND CRASH) -----
+    ("2L-U", "low"): 1400, ("2L-U", "medium"): 1750, ("2L-U", "high"): 2100,
+    ("2L-D", "low"): 1600, ("2L-D", "medium"): 2000, ("2L-D", "high"): 2400,
+
+    # ----- 4-Lane roads -----
     ("4L-D", "low"): 3500, ("4L-D", "medium"): 4200, ("4L-D", "high"): 4900,
     ("4L-U", "low"): 2800, ("4L-U", "medium"): 3500, ("4L-U", "high"): 4200,
+
+    # ----- 6-Lane roads -----
     ("6L-D", "low"): 5600, ("6L-D", "medium"): 7000, ("6L-D", "high"): 8400,
     ("6L-U", "low"): 4200, ("6L-U", "medium"): 5600, ("6L-U", "high"): 7000,
+
+    # ----- 8-Lane roads -----
     ("8L-D", "low"): 8400, ("8L-D", "medium"): 10500, ("8L-D", "high"): 12600,
 }
 
+# PCU factors from IRC:106-1990 Table 1
 PCU_FACTORS = {
     "two_wheeler_low": 0.50, "two_wheeler_high": 0.75,
     "car_jeep_van_low": 1.00, "car_jeep_van_high": 1.00,
@@ -31,12 +43,9 @@ DEFAULT_TRAFFIC_COMPOSITION = {
     "auto_rickshaw": 0.10, "lcv": 0.10, "truck_bus": 0.10,
 }
 
-POTHOLE_SEVERITY_THRESHOLDS = {
-    "depth_mm": {"shallow": 25, "moderate": 50},
-    "area_m2": {"shallow": 0.1, "moderate": 0.5}
-}
-
-# ==================== SIMULATOR ====================
+# ============================================================
+# SIMULATOR (Fallback)
+# ============================================================
 class PythonSimulator:
     def run(self, reduced_dsv, free_flow_speed, lane_width_m, total_lanes, pothole_severities):
         engine = DigitalTwinEngine()
@@ -54,7 +63,9 @@ class PythonSimulator:
             "status": "completed"
         }
 
-# ==================== MAIN ANALYSER ====================
+# ============================================================
+# MAIN ANALYSER
+# ============================================================
 class RoadAnalyzer:
     def __init__(self, model_path="yolov8n.pt", enable_depth=False):
         self.model = YOLO(model_path)
@@ -133,6 +144,7 @@ class RoadAnalyzer:
         base_dsv = IRC106_DSV.get((carriageway, fringe))
         if base_dsv is None:
             raise ValueError(f"Unsupported carriageway/fringe: {carriageway}/{fringe}")
+
         reduced_dsv = base_dsv * width_factor
         reduced_dsv = min(reduced_dsv, base_dsv)
 
