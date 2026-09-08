@@ -13,18 +13,25 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // ----- SINGLE IMAGE UPLOAD -----
+    // ----- FILE UPLOAD (FIXED) -----
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
     const fileInfo = document.getElementById('fileInfo');
 
+    console.log("uploadArea:", uploadArea);
+    console.log("fileInput:", fileInput);
+
     if (uploadArea && fileInput) {
+        // Click on the upload area triggers the file input
         uploadArea.addEventListener('click', function(e) {
             e.preventDefault();
+            console.log("Upload area clicked!");
             fileInput.click();
         });
 
+        // When a file is selected, show its name
         fileInput.addEventListener('change', function() {
+            console.log("File selected!");
             if (this.files && this.files.length > 0) {
                 const file = this.files[0];
                 fileInfo.textContent = '📎 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
@@ -34,17 +41,19 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        // Drag and drop
+        // Drag and drop support
         uploadArea.addEventListener('dragover', function(e) {
             e.preventDefault();
             this.style.borderColor = '#0a2a44';
             this.style.background = '#f0f7ff';
         });
+
         uploadArea.addEventListener('dragleave', function(e) {
             e.preventDefault();
             this.style.borderColor = '#cbd5e1';
             this.style.background = 'transparent';
         });
+
         uploadArea.addEventListener('drop', function(e) {
             e.preventDefault();
             this.style.borderColor = '#cbd5e1';
@@ -54,28 +63,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 fileInput.dispatchEvent(new Event('change'));
             }
         });
-    }
-
-    // ----- VIDEO UPLOAD -----
-    const videoUploadArea = document.getElementById('videoUploadArea');
-    const videoInput = document.getElementById('videoInput');
-    const videoInfo = document.getElementById('videoInfo');
-
-    if (videoUploadArea && videoInput) {
-        videoUploadArea.addEventListener('click', function(e) {
-            e.preventDefault();
-            videoInput.click();
-        });
-
-        videoInput.addEventListener('change', function() {
-            if (this.files && this.files.length > 0) {
-                const file = this.files[0];
-                videoInfo.textContent = '🎬 ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(2) + ' MB)';
-                videoInfo.classList.remove('hidden');
-            } else {
-                videoInfo.classList.add('hidden');
-            }
-        });
+    } else {
+        console.error("❌ Upload elements not found!");
     }
 
     // ----- DSV PREVIEW UPDATE -----
@@ -161,6 +150,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (videoAnalyzeBtn) {
         videoAnalyzeBtn.addEventListener('click', function() {
+            const videoInput = document.getElementById('videoInput');
             const file = videoInput.files[0];
             if (!file) {
                 videoStatus.textContent = '❌ Please upload a video first.';
