@@ -1,219 +1,263 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Indian Road Capacity Analyzer</title>
-    <link rel="stylesheet" href="/static/style.css?v=3">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Indian Road Capacity Analyzer — IRC:106-1990</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div class="brand">
-                <span class="brand-mark"></span>
-                <span class="brand-name">INDIAN ROAD CAPACITY ANALYZER</span>
-            </div>
-            <div class="brand-meta">IRC:106-1990 &middot; AI Defect Detection</div>
-        </header>
 
-        <div class="tabs">
-            <button class="tab-btn active" data-tab="single"><span class="tab-icon">&#9634;</span> SINGLE IMAGE</button>
-            <button class="tab-btn" data-tab="batch"><span class="tab-icon">&#9638;</span> BATCH (FOLDER)</button>
-            <button class="tab-btn" data-tab="video"><span class="tab-icon">&#9654;</span> VIDEO</button>
-        </div>
-
-        <!-- ===== SINGLE IMAGE TAB ===== -->
-        <div id="tab-single" class="tab-content active">
-            <div class="main-grid">
-                <div class="form-section">
-                    <!-- UPLOAD AREA -->
-                    <div class="upload-area" id="uploadArea">
-                        <div class="upload-icon">&#8613;</div>
-                        <p class="upload-title">Drop a road image here, or <span class="browse-link">click to browse</span></p>
-                        <input type="file" id="fileInput" accept="image/*">
-                        <p class="upload-sub">JPG / PNG &middot; near-perpendicular shot of the carriageway works best</p>
-                        <div id="fileInfo" class="file-info hidden"></div>
-                    </div>
-
-                    <!-- ===== ROAD PARAMETERS ===== -->
-                    <div class="params-section">
-                        <h3>ROAD PARAMETERS &ndash; MEASURED ON SITE</h3>
-
-                        <div class="param-row two-col">
-                            <div class="param-group">
-                                <label>Total carriageway width (m)</label>
-                                <input type="number" id="totalWidth" step="0.1" value="7.0">
-                                <small>Measure at 3 points and average</small>
-                            </div>
-                            <div class="param-group">
-                                <label>Number of lanes</label>
-                                <input type="number" id="numLanes" step="1" value="2">
-                                <small>Count markings + 1, or width &divide; 3.5</small>
-                            </div>
-                        </div>
-
-                        <div class="param-row two-col">
-                            <div class="param-group">
-                                <label>Usable shoulder width (m)</label>
-                                <input type="number" id="shoulderWidth" step="0.1" value="0.6">
-                                <small>Enter 0 if no paved shoulder</small>
-                            </div>
-                            <div class="param-group">
-                                <label>Carriageway type (IRC:106 Table 2)</label>
-                                <select id="carriageway">
-                                    <option value="2L-U">2-Lane Undivided (One-Way)</option>
-                                    <option value="2L-D">2-Lane Divided</option>
-                                    <option value="4L-U">4-Lane Undivided</option>
-                                    <option value="4L-D" selected>4-Lane Divided</option>
-                                    <option value="6L-U">6-Lane Undivided</option>
-                                    <option value="6L-D">6-Lane Divided</option>
-                                    <option value="8L-D">8-Lane Divided</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="param-row">
-                            <div class="param-group full-width">
-                                <label>Fringe / frontage condition (IRC:106 Table 2)</label>
-                                <select id="fringe">
-                                    <option value="low">Low &mdash; Rural / No frontage access</option>
-                                    <option value="medium" selected>Arterial (Medium)</option>
-                                    <option value="high">High &mdash; Urban / CBD / Heavy frontage</option>
-                                </select>
-                                <small>No frontage access, no standing vehicles, very little cross traffic</small>
-                            </div>
-                        </div>
-
-                        <div class="param-row">
-                            <div class="param-group full-width">
-                                <label>Traffic composition regime (IRC:106 Table 1)</label>
-                                <select id="compositionRegime">
-                                    <option value="low" selected>Low &mdash; &lt;15% heavy vehicles (cars, autos, two-wheelers)</option>
-                                    <option value="high">High &mdash; &gt;15% heavy vehicles</option>
-                                </select>
-                                <small>Less than 15% heavy vehicles &mdash; mostly cars, autos, two-wheelers</small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="camera-tips">
-                        <h4>&#9635; For best detection accuracy</h4>
-                        <ul>
-                            <li>Stand perpendicular to the road &mdash; not at an angle</li>
-                            <li>Capture the full carriageway width in frame</li>
-                            <li>Shoot from footpath at chest height (~1.2&ndash;1.5 m)</li>
-                            <li>Good daylight, avoid harsh shadows across road</li>
-                        </ul>
-                    </div>
-
-                    <button id="analyzeBtn" class="run-btn">RUN ANALYSIS</button>
-                    <div id="statusBar" class="status-bar">Model loaded and ready.</div>
-                </div>
-
-                <div class="results-section">
-                    <div class="dsv-card">
-                        <h3>IRC:106 BASE DSV (Design Service Volume)</h3>
-                        <div class="dsv-display">
-                            <span id="baseDsvDisplay">2,400</span> <span class="unit">PCU / hr</span>
-                        </div>
-                        <p>&asymp; <span id="vehDisplay">2,400</span> vehicles/hr &middot; Free-flow speed: <span id="speedDisplay">50</span> km/h (IRC design speed)</p>
-                    </div>
-
-                    <div id="resultContainer">
-                        <div class="placeholder">
-                            <p>Upload an image and click &ldquo;RUN ANALYSIS&rdquo; to see capacity results.</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ===== BATCH TAB ===== -->
-        <div id="tab-batch" class="tab-content">
-            <div class="form-section">
-                <h3 class="section-title">BATCH (FOLDER)</h3>
-                <div class="upload-area" id="batchUploadArea">
-                    <div class="upload-icon">&#8613;</div>
-                    <p class="upload-title">Drop multiple road images here, or <span class="browse-link">click to browse</span></p>
-                    <input type="file" id="batchFileInput" accept="image/*" multiple>
-                    <p class="upload-sub">JPG / PNG &middot; select every image in the folder</p>
-                    <div id="batchFileInfo" class="file-info hidden"></div>
-                </div>
-                <div class="params-section" style="margin-top:20px;">
-                    <h3>ROAD PARAMETERS &ndash; MEASURED ON SITE</h3>
-                    <div class="param-row two-col">
-                        <div class="param-group">
-                            <label>Total carriageway width (m)</label>
-                            <input type="number" id="totalWidthBatch" step="0.1" value="7.0">
-                            <small>Measure at 3 points and average</small>
-                        </div>
-                        <div class="param-group">
-                            <label>Carriageway type (IRC:106 Table 2)</label>
-                            <select id="carriagewayBatch">
-                                <option value="2L-U">2-Lane Undivided</option>
-                                <option value="2L-D">2-Lane Divided</option>
-                                <option value="4L-U">4-Lane Undivided</option>
-                                <option value="4L-D" selected>4-Lane Divided</option>
-                                <option value="6L-U">6-Lane Undivided</option>
-                                <option value="6L-D">6-Lane Divided</option>
-                                <option value="8L-D">8-Lane Divided</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="param-row two-col">
-                        <div class="param-group">
-                            <label>Usable shoulder width (m)</label>
-                            <input type="number" id="shoulderWidthBatch" step="0.1" value="0.6">
-                            <small>Enter 0 if no paved shoulder</small>
-                        </div>
-                        <div class="param-group">
-                            <label>Fringe / frontage condition</label>
-                            <select id="fringeBatch">
-                                <option value="low">Low &mdash; Rural / No frontage access</option>
-                                <option value="medium" selected>Arterial</option>
-                                <option value="high">High &mdash; Urban / CBD / Heavy frontage</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="param-row">
-                        <div class="param-group full-width">
-                            <label>Traffic composition regime (IRC:106 Table 1)</label>
-                            <select id="compositionRegimeBatch">
-                                <option value="low" selected>Low &mdash; &lt;15% heavy vehicles</option>
-                                <option value="high">High &mdash; &gt;15% heavy vehicles</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-                <button id="batchAnalyzeBtn" class="run-btn" style="margin-top:20px;">RUN BATCH ANALYSIS</button>
-                <div id="batchStatus" class="status-bar" style="margin-top:14px;">Ready for batch processing.</div>
-                <div id="batchResultContainer"></div>
-            </div>
-        </div>
-
-        <!-- ===== VIDEO TAB ===== -->
-        <div id="tab-video" class="tab-content">
-            <div class="form-section">
-                <h3 class="section-title">VIDEO</h3>
-                <div class="upload-area" id="videoUploadArea" style="margin-top:16px;">
-                    <div class="upload-icon">&#9654;</div>
-                    <p class="upload-title">Drop a video here, or <span class="browse-link">click to browse</span></p>
-                    <input type="file" id="videoInput" accept="video/*">
-                    <p class="upload-sub">MP4 / AVI &middot; record a short clip of traffic flow</p>
-                    <div id="videoInfo" class="file-info hidden"></div>
-                </div>
-                <button id="videoAnalyzeBtn" class="run-btn" style="margin-top:20px;">RUN VIDEO ANALYSIS</button>
-                <div id="videoStatus" class="status-bar" style="margin-top:14px;">Ready for video analysis.</div>
-                <div id="videoResultContainer"></div>
-            </div>
-        </div>
-
-        <div class="disclaimer">
-            <strong>IMPORTANT DISCLAIMER:</strong> Results are estimates based on computer vision and IRC standards. Requires field verification for real-world decisions.
-        </div>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">Indian Road Capacity Analyzer</div>
     </div>
+    <div class="topbar-sub mono">IRC:106-1990 &middot; AI Defect Detection &middot; Digital Twin</div>
+  </div>
 
-    <script src="/static/script.js"></script>
+  <div class="wrap">
+
+    <!-- ============ INPUT PANEL ============ -->
+    <section class="card input-panel" id="input-panel">
+
+      <div class="mode-switch" id="mode-switch" role="tablist">
+        <button class="mode-btn active" data-mode="image" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9633;</span>
+          <span>Single image</span>
+        </button>
+        <button class="mode-btn" data-mode="batch" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9638;</span>
+          <span>Batch (folder)</span>
+        </button>
+        <button class="mode-btn" data-mode="video" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9654;</span>
+          <span>Video</span>
+        </button>
+      </div>
+
+      <div class="panel-body">
+
+        <!-- LEFT: drop zone -->
+        <div class="dropzone-col">
+          <label class="drop" id="drop" for="file-input">
+            <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M20 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <div class="drop-title" id="drop-title">Drop a road image here, or click to browse</div>
+            <div class="drop-hint" id="drop-hint">JPG / PNG &middot; near-perpendicular shot of the carriageway works best</div>
+            <div class="drop-filelist" id="drop-filelist"></div>
+          </label>
+          <input type="file" id="file-input" accept="image/*">
+
+          <!-- video sample rate row (hidden by default) -->
+          <div class="field-row" id="video-sample-row" style="display:none;">
+            <label class="field-label" for="sample-every-sec">Sample every</label>
+            <select id="sample-every-sec" class="field-select">
+              <option value="0.5">0.5 sec</option>
+              <option value="1" selected>1 sec</option>
+              <option value="2">2 sec</option>
+              <option value="5">5 sec</option>
+            </select>
+            <span class="field-hint">Lower = more thorough, slower to process</span>
+          </div>
+
+          <!-- speed/challan detection row (video mode only, hidden by default) -->
+          <div class="field-row" id="speed-detect-row" style="display:none;">
+            <label class="field-label" for="enable-speed-detection">
+              <input type="checkbox" id="enable-speed-detection" name="enable_speed_detection">
+              Detect overspeeding vehicles
+            </label>
+            <input type="number" id="speed-limit-kmh" name="speed_limit_kmh"
+                   step="1" min="1" max="150" placeholder="Speed limit (km/h)"
+                   class="field-select" style="display:none; width:140px;">
+            <span class="field-hint">Slower — tracks every video frame, not just sampled ones</span>
+          </div>
+
+          <!-- photo tips -->
+          <div class="photo-tips-box">
+            <div class="photo-tips-title">📷 For best detection accuracy</div>
+            <ul class="photo-tips-list">
+              <li>Stand perpendicular to the road — not at an angle</li>
+              <li>Capture the full carriageway width in frame</li>
+              <li>Shoot from footpath at chest height (~1.2–1.5 m)</li>
+              <li>Good daylight, avoid harsh shadows across road</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- RIGHT: road parameters form -->
+        <form class="config-col" id="config-form">
+          <div class="config-title mono">ROAD PARAMETERS — MEASURED ON SITE</div>
+
+          <div class="field-grid">
+
+            <div class="field">
+              <label for="total_width_m">Total carriageway width (m)</label>
+              <input type="number" id="total_width_m" name="total_width_m"
+                     step="0.1" min="1" max="50" value="7.0" required>
+              <div class="field-hint">Measure at 3 points and average</div>
+            </div>
+
+            <div class="field">
+              <label for="num_lanes">Number of lanes</label>
+              <input type="number" id="num_lanes" name="num_lanes"
+                     step="1" min="1" max="16" value="2" required>
+              <div class="field-hint">Count markings + 1, or width ÷ 3.5</div>
+            </div>
+
+            <div class="field">
+              <label for="usable_shoulder_m">Usable shoulder width (m)</label>
+              <input type="number" id="usable_shoulder_m" name="usable_shoulder_m"
+                     step="0.1" min="0" max="10" value="0.6" required>
+              <div class="field-hint">Enter 0 if no paved shoulder</div>
+            </div>
+
+            <div class="field">
+              <label for="carriageway_key">Carriageway type (IRC:106 Table 2)</label>
+              <select id="carriageway_key" name="carriageway_key" required></select>
+            </div>
+
+            <div class="field field-wide">
+              <label for="fringe_condition">Fringe / frontage condition (IRC:106 Table 2)</label>
+              <select id="fringe_condition" name="fringe_condition" required></select>
+              <div class="field-hint" id="fringe-desc"></div>
+            </div>
+
+            <div class="field field-wide">
+              <label for="traffic_regime">Traffic composition regime (IRC:106 Table 1)</label>
+              <select id="traffic_regime" name="traffic_regime" required></select>
+              <div class="field-hint" id="regime-desc"></div>
+            </div>
+
+          </div>
+
+          <!-- Live DSV preview -->
+          <div class="dsv-preview" id="dsv-preview" style="display:none;">
+            <span class="dsv-label mono">IRC:106 BASE DSV (Design Service Volume)</span>
+            <div class="dsv-row">
+              <span class="dsv-value" id="dsv-value">—</span>
+              <span class="dsv-unit">PCU / hr</span>
+            </div>
+            <div class="dsv-note mono" id="dsv-note"></div>
+          </div>
+
+          <button type="submit" class="run-btn" id="run-btn">
+            <span id="run-btn-label">Run analysis</span>
+          </button>
+          <div class="model-status mono" id="model-status"></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ============ STATUS ============ -->
+    <section class="card status-panel" id="status-panel" style="display:none;">
+      <div class="status-spinner" aria-hidden="true"></div>
+      <div class="status-text" id="status-text">Working…</div>
+    </section>
+
+    <div id="error-box" class="error-box" style="display:none;"></div>
+
+    <!-- ============ RESULTS ============ -->
+    <section id="results-root"></section>
+
+    <!-- ============ DIGITAL TWIN PANEL ============ -->
+    <section class="card dt-panel" id="dt-panel" style="display:none;">
+      <div class="dt-header">
+        <div class="dt-title">
+          <span>⚡</span> Digital Twin — Simulink Simulation
+        </div>
+        <div class="dt-status-badge" id="dt-status-badge">Initialising…</div>
+      </div>
+      <div class="dt-subtitle mono">
+        Ideal road (no defects) vs Defect road &middot; IRC:106-1990 &middot; MATLAB R2026a
+      </div>
+      <div class="dt-road-compare">
+        <div class="dt-road-card ideal">
+          <div class="dt-road-label">🟢 IDEAL ROAD — No Defects</div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-ideal-cap">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Base Capacity (IRC:106)</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-ideal-vol">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Design Volume (0.7 × DSV)</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value">50</span>
+            <span class="dt-stat-unit">km/h</span>
+            <span class="dt-stat-label">Free-flow Speed</span>
+          </div>
+          <div class="dt-road-visual ideal-visual">
+            <div class="dt-lane-mark"></div>
+            <div class="dt-vehicles" id="dt-ideal-vehicles"></div>
+          </div>
+        </div>
+        <div class="dt-vs-divider">
+          <div class="dt-loss-badge">
+            <div class="dt-loss-pct" id="dt-loss-pct">—%</div>
+            <div class="dt-loss-label">Capacity Lost</div>
+          </div>
+        </div>
+        <div class="dt-road-card defect">
+          <div class="dt-road-label">🔴 DEFECT ROAD — Current State</div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-defect-cap">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Reduced Capacity</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-defect-vol">—</span>
+            <span class="dt-stat-unit">PCU/hr</span>
+            <span class="dt-stat-label">Design Volume (defect)</span>
+          </div>
+          <div class="dt-road-stat">
+            <span class="dt-stat-value" id="dt-defect-speed">—</span>
+            <span class="dt-stat-unit">km/h</span>
+            <span class="dt-stat-label">Congested Speed</span>
+          </div>
+          <div class="dt-road-visual defect-visual">
+            <div class="dt-lane-mark"></div>
+            <div class="dt-pothole" id="dt-pothole-marker" style="display:none;"></div>
+            <div class="dt-vehicles" id="dt-defect-vehicles"></div>
+          </div>
+        </div>
+      </div>
+      <div class="dt-chart-section">
+        <div class="dt-chart-title mono">SIMULINK OUTPUT — CAPACITY OVER TIME (60s SIMULATION)</div>
+        <div class="dt-charts-row">
+          <div class="dt-chart-wrap">
+            <div class="dt-chart-label">Traffic Flow (PCU/hr)</div>
+            <canvas id="dt-cap-chart" width="500" height="200"></canvas>
+          </div>
+          <div class="dt-chart-wrap">
+            <div class="dt-chart-label">Vehicle Speed (km/h)</div>
+            <canvas id="dt-spd-chart" width="500" height="200"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="dt-speed-section mono" id="dt-speed-section" style="display:none;">
+        ⚠️ Pothole depth impact: vehicle speed reduced by
+        <strong id="dt-speed-reduction">—</strong>%
+        (from 50 km/h → <strong id="dt-congested-speed">—</strong> km/h)
+      </div>
+    </section>
+
+  </div>
+
+  <footer class="mono">
+    Capacity computed from IRC:106-1990 Table 2 (urban Design Service Volume) ·
+    Defect width uses overlap-aware interval union (no double counting) ·
+    Pothole penalty derived from Greenshields model, headway expansion and lane-merge bottleneck theory ·
+    This is a pilot-study tool — not a substitute for a full IRC-compliant traffic survey ·
+    Verify action code references against latest published editions before citing in an official report.
+  </footer>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>
