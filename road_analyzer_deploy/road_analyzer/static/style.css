@@ -198,6 +198,21 @@ header {
     cursor: pointer;
 }
 
+/* Native file inputs are visually hidden but stay functional/focusable —
+   the area's own click handler calls input.click(). Do NOT use display:none
+   or the input becomes unclickable via .click() in some browsers. */
+input[type="file"] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 .file-info {
     margin-top: 14px;
     padding: 10px 14px;
