@@ -61,6 +61,10 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!area || !input) return;
 
         area.addEventListener('click', function (e) {
+            // If the click originated on the real input itself (e.g. keyboard
+            // activation), let its native behavior run — don't also call
+            // input.click() again, or the dialog can open twice.
+            if (e.target === input) return;
             e.preventDefault();
             input.click();
         });
