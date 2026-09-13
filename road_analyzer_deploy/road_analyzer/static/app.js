@@ -742,6 +742,14 @@
           <span class="depth-sev depth-${depth.worst_severity}">${depth.worst_severity.toUpperCase()} POTHOLE</span>
           <span class="depth-detail">~${depth.avg_estimated_depth_cm} cm avg depth · penalty factor: ${depth.penalty_applied}</span>
         </div>` : "";
+      const rec = d.rectification;
+      const rectHTML = rec ? `
+        <div class="defect-action" style="border-top:1px solid #333;margin-top:8px;padding-top:8px;">
+          <strong>${rec.rectification_category}</strong> — ${rec.priority}
+          <div style="font-size:0.85em;opacity:0.85;margin-top:4px;">${rec.method}</div>
+          <div style="font-size:0.8em;opacity:0.7;">${rec.materials}</div>
+          <div style="font-size:0.8em;opacity:0.7;">${rec.work_zone_note}</div>
+        </div>` : "";
       return `
         <div class="defect-card sev-${sev}">
           <div class="defect-head">
@@ -757,6 +765,7 @@
             <div class="m"><div class="v">${fmt(d.width_factor ? (1-d.width_factor)*100 : null,1)}%</div><div class="l">width reduction</div></div>
           </div>
           ${depthHTML}
+          ${rectHTML}
           <div class="defect-action">${d.action || "No specific action mapped - flag for manual inspection."}</div>
           <div class="defect-code">${d.code_ref || ""}</div>
         </div>`;
@@ -764,557 +773,284 @@
   }
 
   // ----------------------------------------------------------------
-  // MATLAB Digital Twin button
+  // RoadRunner Scenario export
   // ----------------------------------------------------------------
-  function matlabButtonHTML(data) {
+  // The dashboard no longer shows an in-browser "simulation" (CSS-animated
+  // dots / canvas figure) — those were toy visuals, not a real simulation.
+  // The actual simulation now happens in RoadRunner itself. This generates
+  // a MATLAB script that uses RoadRunner's real authoring API (Automated
+  // Driving Toolbox, R2025a+) to place your detected defects as static
+  // props on a road you've already built in RoadRunner, and add a vehicle
+  // actor so you can watch it drive through the defected section.
+  //
+  // IMPORTANT — read before running the generated script:
+  //   1. addActor() places actors at a WORLD [x y z] position, not a
+  //      "meters along the road" position. This script assumes your road
+  //      is a straight segment starting near the world origin and running
+  //      along the +X axis (RoadRunner's default when you draw a single
+  //      straight road from the origin). If your road is angled or offset,
+  //      edit ROAD_ORIGIN_XY / ROAD_HEADING_DEG at the top of the script.
+  //   2. core.py's left_m/right_m for each defect is its position ACROSS
+  //      the road's width (which lane / how far from the edge) — a single
+  //      photo is one cross-section, so it has NO information about how
+  //      far down the road each defect sits. This script places every
+  //      defect at the same representative station (DEFECT_STATION_M
+  //      below, default 15m in) with the correct lateral offset for each
+  //      — it does not claim to know their real longitudinal spread.
+  //      If you analysed a video instead of a single photo, that's a
+  //      different data shape (frame-by-frame) and this script would need
+  //      adapting — ask if you want that version.
+  //   3. Asset paths (e.g. "Props/TrafficBarricade.fbx") are PLACEHOLDERS.
+  //      Open your RoadRunner project's Asset Library panel and copy the
+  //      real relative paths for whatever barrier/prop/vehicle assets you
+  //      actually have — getAsset() will error on a path that doesn't
+  //      exist in your project.
+  //   4. This script places actors; it does not script vehicle speed
+  //      logic (that's done in RoadRunner Scenario's Logic Editor after
+  //      actors are placed — the script prints the target speed to the
+  //      MATLAB console as a reminder of what to set it to).
+  function generateRoadRunnerScript(data) {
+    const cfg   = data.road_config          || {};
+    const calc  = data.capacity_calculation || {};
+    const tr    = data.traffic_regime       || {};
+    const perDefect = data.per_defect       || {};
+
+    const totalW      = cfg.total_width_m        || 7;
+    const freeFlow     = data.free_flow_speed_kmh || 50;
+    const congested     = tr.congested_speed_kmh   || Math.round(freeFlow * 0.7);
+    const image        = data.image               || "unknown";
+    const lossPct      = data.capacity_loss_pct    || 0;
+
+    // Flatten per_defect into a simple list of {type, lateral_offset_m,
+    // width_m} using the left_m/right_m your existing analysis already
+    // computed — these are positions ACROSS the road, not along it.
+    const defectRows = [];
+    Object.keys(perDefect).forEach((cls) => {
+      const entry = perDefect[cls];
+      (entry.detections || []).forEach((det) => {
+        if (det.left_m == null || det.right_m == null) return;
+        const lateralM = (det.left_m + det.right_m) / 2;
+        const widthM   = det.right_m - det.left_m;
+        defectRows.push({ type: cls, lateral_m: lateralM.toFixed(2), width_m: widthM.toFixed(2) });
+      });
+    });
+
+    // Map your defect classes to placeholder RoadRunner prop asset paths.
+    // EDIT these to match assets that actually exist in your project's
+    // Asset Library (right-click an asset there -> Copy Path).
+    const assetMap = {
+      pothole:          "Props/Misc/RoadHazardCone.fbx",
+      barricade:        "Props/Barriers/JerseyBarrier.fbx",
+      illegal_parking:  "Vehicles/Sedan.fbx",
+      street_vendor:    "Props/Misc/MarketStall.fbx",
+      garbage:          "Props/Misc/DebrisPile.fbx",
+      tree:             "Props/Vegetation/RoadsideTree.fbx",
+    };
+
+    const defectLines = defectRows.map((d) => {
+      const assetPath = assetMap[d.type] || "Props/Misc/GenericObstacle.fbx";
+      return [
+        `% ---- ${d.type}: ${d.lateral_m} m from the road's left edge, ~${d.width_m} m wide ----`,
+        `try`,
+        `    obsAsset = getAsset(prj, "${assetPath}", "MovableObjectAsset");`,
+        `    obsPos   = roadPointToWorld(DEFECT_STATION_M, ${d.lateral_m} - ${totalW.toFixed(2)}/2, ROAD_ORIGIN_XY, ROAD_HEADING_DEG);`,
+        `    addActor(scnro, obsAsset, obsPos);`,
+        `catch ME`,
+        `    warning("Could not place ${d.type} prop — check the asset path '${assetPath}' exists in your project. %s", ME.message);`,
+        `end`,
+      ].join("\n");
+    }).join("\n\n");
+
+    return [
+      "%% ================================================================",
+      "%% ROADRUNNER SCENARIO GENERATOR",
+      `%% Source image: ${image}`,
+      `%% Capacity loss from defects: ${lossPct}%  |  Free-flow: ${freeFlow} km/h  |  Congested: ${congested} km/h`,
+      "%%",
+      "%% REQUIRES: MATLAB R2025a+, Automated Driving Toolbox, RoadRunner",
+      "%% (RoadRunner Scenario), and a RoadRunner project with a base road",
+      "%% already authored — this script does NOT build road geometry.",
+      "%%",
+      "%% EDIT THESE BEFORE RUNNING:",
+      'PROJECT_FOLDER    = "C:\\path\\to\\your\\RoadRunnerProject";   % <-- EDIT',
+      'SCENE_FILE        = "YourScene.rrscene";                     % <-- EDIT',
+      "ROAD_ORIGIN_XY    = [0, 0];      % world XY where your road starts  <-- EDIT if not at origin",
+      "ROAD_HEADING_DEG  = 0;           % road heading, 0 = along +X axis  <-- EDIT if road isn't straight along +X",
+      "DEFECT_STATION_M  = 15;          % where along the road to place this photo's cross-section <-- EDIT",
+      "%% ================================================================",
+      "",
+      "function pos = roadPointToWorld(stationM, offsetM, originXY, headingDeg)",
+      "    % Converts a (station-along-road, lateral-offset-from-centerline)",
+      "    % pair to a world [x y z] position, assuming a straight road. If",
+      "    % your road curves, replace this with RoadRunner's",
+      "    % findSceneAnchor/anchorToPoint workflow instead (see MathWorks",
+      "    % doc for 'anchorToPoint').",
+      "    theta = deg2rad(headingDeg);",
+      "    x = originXY(1) + stationM * cos(theta) - offsetM * sin(theta);",
+      "    y = originXY(2) + stationM * sin(theta) + offsetM * cos(theta);",
+      "    pos = [x, y, 0];",
+      "end",
+      "",
+      "%% ---- Connect to RoadRunner ----",
+      "rrApp = roadrunner(ProjectFolder=PROJECT_FOLDER);",
+      "openScene(rrApp, SCENE_FILE);",
+      "newScenario(rrApp);",
+      "",
+      "rrApi  = roadrunnerAPI(rrApp);",
+      "scn    = rrApi.Scene;",
+      "scnro  = rrApi.Scenario;",
+      "prj    = rrApi.Project;",
+      "",
+      "%% ---- Place detected defects as static props ----",
+      "%% All placed at the SAME station (DEFECT_STATION_M) with correct",
+      "%% lateral spacing — see note #2 above on why station is a single",
+      "%% assumed value, not measured.",
+      defectLines || "% No defects detected in this analysis — nothing to place.",
+      "",
+      "%% ---- Add a vehicle actor before the defect section ----",
+      "try",
+      '    carAsset = getAsset(prj, "Vehicles/Sedan.fbx", "VehicleAsset");   % <-- EDIT if you use a different vehicle asset',
+      "    carPos   = roadPointToWorld(0, 0, ROAD_ORIGIN_XY, ROAD_HEADING_DEG);",
+      "    car = addActor(scnro, carAsset, carPos);",
+      "catch ME",
+      '    warning("Could not place vehicle actor — check the asset path exists. %s", ME.message);',
+      "end",
+      "",
+      "%% ---- Reminder: set vehicle speed in RoadRunner Scenario's Logic Editor ----",
+      `disp("Scenario built. Target speed for this defect condition: ${congested} km/h (${(congested/3.6).toFixed(2)} m/s).");`,
+      'disp("Open RoadRunner Scenario -> Logic Editor -> add a Speed Action on the vehicle actor to set this.");',
+      "",
+      "%% ---- Run it ----",
+      "simulateScenario(rrApp);",
+    ].join("\n");
+  }
+
+  function roadRunnerButtonHTML(data) {
     return `
-      <div class="matlab-twin-bar">
-        <div class="matlab-twin-info">
-          <span class="matlab-twin-icon">⚡</span>
+      <div class="action-bar">
+        <div class="action-bar-info">
+          <span class="action-bar-icon">🛣️</span>
           <div>
-            <div class="matlab-twin-title">Digital Twin - MATLAB Animation</div>
-            <div class="matlab-twin-sub">Click to download a MATLAB script pre-loaded with your analysis results.
-            Open in MATLAB R2022b+ to see animated vehicle behaviour on ideal vs defect road.</div>
+            <div class="action-bar-title">RoadRunner Scenario Script</div>
+            <div class="action-bar-sub">Downloads a MATLAB script that places your detected defects as
+            static props in RoadRunner and adds a vehicle actor. Requires a RoadRunner project with a
+            base road already authored — edit the project/scene path at the top of the script before running.</div>
           </div>
         </div>
-        <button class="matlab-dl-btn" id="matlab-dl-btn">
-          ↓ Download MATLAB Script
+        <button class="action-dl-btn" id="roadrunner-dl-btn">
+          ↓ Download RoadRunner Script
         </button>
       </div>`;
+  }
+
+  function attachRoadRunnerButton(data) {
+    const btn = document.getElementById('roadrunner-dl-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      const script = generateRoadRunnerScript(data);
+      const blob   = new Blob([script], { type: 'text/plain' });
+      const url    = URL.createObjectURL(blob);
+      const a      = document.createElement('a');
+      a.href       = url;
+      a.download   = 'roadrunner_scenario.m';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  function xodrButtonHTML(data) {
+    if (!data.roadrunner_xodr_available || !data.job_id) return "";
+    return `
+      <div class="action-bar">
+        <div class="action-bar-info">
+          <span class="action-bar-icon">🗺️</span>
+          <div>
+            <div class="action-bar-title">RoadRunner Road (.xodr)</div>
+            <div class="action-bar-sub">A real OpenDRIVE file — import it in RoadRunner (File \u2192 Import \u2192
+            ASAM OpenDRIVE) and it builds the 3D road and places your detected defects automatically. No manual
+            road-drawing, no asset-path guessing. Straight segment only \u2014 see the file's own comments for why.</div>
+          </div>
+        </div>
+        <a class="action-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/roadrunner.xodr"
+           download>
+          ↓ Download .xodr
+        </a>
+      </div>`;
+  }
+
+  // Results from every image analysed THIS BROWSER SESSION — used only
+  // to build the multi-photo corridor export below. Not sent anywhere
+  // until the user explicitly clicks the corridor download button.
+  const _sessionAnalyses = [];
+
+  function corridorButtonHTML() {
+    if (_sessionAnalyses.length < 2) return "";
+    return `
+      <div class="action-bar">
+        <div class="action-bar-info">
+          <span class="action-bar-icon">🛣️</span>
+          <div>
+            <div class="action-bar-title">Full Corridor (.xodr) — ${_sessionAnalyses.length} photos</div>
+            <div class="action-bar-sub">Combines every photo you've analysed this session into one continuous
+            RoadRunner road, ordered by the chainage you entered for each. Segments with no chainage entered
+            fall back to a fixed spacing, in upload order.</div>
+          </div>
+        </div>
+        <button class="action-dl-btn" id="corridor-dl-btn">
+          ↓ Download Corridor (${_sessionAnalyses.length})
+        </button>
+      </div>`;
+  }
+
+  function attachCorridorButton() {
+    const btn = document.getElementById('corridor-dl-btn');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Building…';
+      try {
+        const res = await fetch('/api/export/roadrunner-corridor.xodr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ results: _sessionAnalyses }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Server returned ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = 'roadrunner_corridor.xodr';
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert(`Could not build corridor export: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = `↓ Download Corridor (${_sessionAnalyses.length})`;
+      }
+    });
   }
 
   function departmentReportButtonHTML(data) {
     if (!data.department_report_available || !data.job_id) return "";
     return `
-      <div class="matlab-twin-bar">
-        <div class="matlab-twin-info">
-          <span class="matlab-twin-icon">📄</span>
+      <div class="action-bar">
+        <div class="action-bar-info">
+          <span class="action-bar-icon">📄</span>
           <div>
-            <div class="matlab-twin-title">Department Action Report</div>
-            <div class="matlab-twin-sub">Defects grouped by the civic department responsible for each —
+            <div class="action-bar-title">Department Action Report</div>
+            <div class="action-bar-sub">Defects grouped by the civic department responsible for each —
             PWD, Traffic Police, or Municipal Corporation — with IRC code references, ready to send as-is.</div>
           </div>
         </div>
-        <a class="matlab-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/department-report.pdf"
+        <a class="action-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/department-report.pdf"
            download>
           ↓ Download PDF Report
         </a>
       </div>`;
-  }
-
-  function generateMatlabScript(data) {
-    const cfg  = data.road_config         || {};
-    const calc = data.capacity_calculation || {};
-    const irc  = data.irc_basis           || {};
-    const tr   = data.traffic_regime      || {};
-
-    const base       = data.original_capacity_pcu_hr || 1500;
-    const reduced    = data.reduced_capacity_pcu_hr  || 1200;
-    const lossPct    = data.capacity_loss_pct        || 0;
-    const wf         = calc.width_factor             || 1;
-    const pen        = calc.pothole_penalty          || 1;
-    const blocked    = calc.total_blocked_m          || 0;
-    const effW       = calc.effective_width_m        || cfg.total_width_m || 7;
-    const totalW     = cfg.total_width_m             || 7;
-    const lanes      = cfg.num_lanes                 || 2;
-    const depth      = calc.worst_pothole_depth      || 'unknown';
-    const fringe     = cfg.fringe_condition          || 'arterial';
-    const cwKey      = cfg.carriageway_key           || '2lane_twoway';
-    const regime     = tr.regime                     || 'low';
-    const avgPcu     = tr.avg_pcu_per_vehicle        || 1.0;
-    const baseVeh    = data.original_capacity_vehicles_hr || Math.round(base / avgPcu);
-    const redVeh     = data.reduced_capacity_vehicles_hr  || Math.round(reduced / avgPcu);
-    const image      = data.image                    || 'unknown';
-
-    const defects = Object.keys(data.per_defect || {});
-    const defectLabel = defects.length ? defects.join(' + ') : 'none detected';
-
-    return [
-      '%% ================================================================',
-      '%% INDIAN ROAD CAPACITY DIGITAL TWIN',
-      '%% File: roadtwin.m',
-      '%%',
-      '%% HOW TO RUN:',
-      '%%   1. Save this file as roadtwin.m',
-      '%%   2. Open MATLAB R2022b or later',
-      '%%   3. In Command Window: cd to folder, then type roadtwin',
-      '%% ================================================================',
-      '',
-      'function roadtwin()',
-      'clc;',
-      `base_dsv        = ${base};`,
-      `reduced_cap     = ${reduced};`,
-      `cap_loss_pct    = ${lossPct.toFixed(1)};`,
-      `total_width_m   = ${totalW};`,
-      `blocked_width_m = ${blocked.toFixed(2)};`,
-      `width_factor    = ${wf.toFixed(4)};`,
-      `pothole_penalty = ${pen};`,
-      `num_lanes       = ${lanes};`,
-      `FREE_SPD        = ${data.free_flow_speed_kmh || getFreeFlowSpeed() || 50};`,
-      `base_veh_hr     = ${baseVeh};`,
-      `reduced_veh_hr  = ${redVeh};`,
-      `has_pothole     = ${defects.includes('pothole')          ? 'true' : 'false'};`,
-      `has_vendor      = ${defects.includes('street_vendor')    ? 'true' : 'false'};`,
-      `has_parking     = ${defects.includes('illegal_parking')  ? 'true' : 'false'};`,
-      `has_barricade   = ${defects.includes('barricade')        ? 'true' : 'false'};`,
-      `has_garbage     = ${defects.includes('garbage')          ? 'true' : 'false'};`,
-      '',
-      'vc       = reduced_cap / base_dsv;',
-      'CONG_SPD = FREE_SPD * (1 - (1 - vc) * 0.5);',
-      `disp(['Base DSV: ' num2str(round(base_dsv)) ' PCU/hr']);`,
-      `disp(['Reduced:  ' num2str(round(reduced_cap)) ' PCU/hr  (-' num2str(cap_loss_pct,'%.1f') '%)']);`,
-      `disp(['Speed:    ' num2str(FREE_SPD) ' km/h (ideal)  ' num2str(CONG_SPD,'%.1f') ' km/h (congested)']);`,
-      '',
-      'RL=100; LH=8; TI=5; TD=50; VL=4; VH=3; OX=55; NV=10;',
-      'RDH=LH*num_lanes;',
-      'BLKW=max((blocked_width_m/total_width_m)*RL*0.35, 2);',
-      '',
-      'LYI=arrayfun(@(l) TI+(l-0.5)*LH, 1:num_lanes);',
-      'LYD=arrayfun(@(l) TD+(l-0.5)*LH, 1:num_lanes);',
-      '',
-      'SI=FREE_SPD/3.6*0.12;',
-      'SD=CONG_SPD/3.6*0.12;',
-      'SPCI=max(SI*(3600/max(base_dsv,1)), VL+5);',
-      'SPCD=max(SD*(3600/max(reduced_cap,1)), VL+3);',
-      '',
-      'VXI=(-SPCI*(NV-1):SPCI:0)\';',
-      'VXD=(-SPCD*(NV-1):SPCD:0)\';',
-      'if length(VXI)>NV, VXI=VXI(1:NV); end',
-      'if length(VXD)>NV, VXD=VXD(1:NV); end',
-      'NVI=length(VXI); NVD=length(VXD);',
-      'CURD=ones(NVD,1)*SD;',
-      '',
-      'CBG=[0.08 0.10 0.14]; CRI=[0.30 0.33 0.38]; CRD=[0.28 0.30 0.35];',
-      'CGI=[0.13 0.74 0.55]; CGD=[0.88 0.28 0.28]; CSL=[0.95 0.52 0.10];',
-      'CW=[1 1 1];',
-      '',
-      "fig=figure(''Name'',''Road Digital Twin'',''NumberTitle'',''off'',''Color'',CBG,...",
-      "    ''Position'',[40 40 1280 700],''MenuBar'',''none'',''ToolBar'',''none'');",
-      "ax=axes(''Parent'',fig,''Position'',[0.01 0.20 0.97 0.76],...",
-      "    ''XLim'',[0 RL],''YLim'',[0 70],''Color'',CBG,...",
-      "    ''XColor'',CBG,''YColor'',CBG,''XTick'',[],''YTick'',[]);",
-      "hold(ax,''on'');",
-      '',
-      "patch([0 RL RL 0],[TI TI TI+RDH TI+RDH],CRI,''EdgeColor'',''none'',''Parent'',ax);",
-      "patch([0 RL RL 0],[TD TD TD+RDH TD+RDH],CRD,''EdgeColor'',''none'',''Parent'',ax);",
-      '',
-      'for ln=1:num_lanes-1',
-      '    ydi=TI+ln*LH; ydd=TD+ln*LH;',
-      '    for xs=0:10:RL',
-      '        xe=min(xs+5,RL);',
-      "        line([xs xe],[ydi ydi],''Color'',[1 1 1 0.25],''LineWidth'',1,''Parent'',ax);",
-      "        line([xs xe],[ydd ydd],''Color'',[1 1 1 0.20],''LineWidth'',1,''Parent'',ax);",
-      '    end',
-      'end',
-      "line([0 RL],[TI TI],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
-      "line([0 RL],[TI+RDH TI+RDH],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
-      "line([0 RL],[TD TD],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
-      "line([0 RL],[TD+RDH TD+RDH],''Color'',CW,''LineWidth'',2,''Parent'',ax);",
-      '',
-      'patch([OX OX+BLKW OX+BLKW OX],[TD TD TD+RDH TD+RDH],...',
-      "    [0.8 0.15 0.15],''FaceAlpha'',0.20,''EdgeColor'',[0.9 0.2 0.2],...",
-      "    ''LineWidth'',1.5,''Parent'',ax);",
-      '',
-      'if has_pothole',
-      '    th=linspace(0,2*pi,50);',
-      '    fill(OX+2+1.8*cos(th),TD+LH*0.4+1.0*sin(th),...',
-      "        [0.22 0.15 0.15],''EdgeColor'',[0.65 0.18 0.18],''LineWidth'',2,''Parent'',ax);",
-      '    for ang=0:60:300',
-      '        ar=deg2rad(ang);',
-      '        line([OX+2+1.3*cos(ar) OX+2+2.5*cos(ar)],...',
-      '             [TD+LH*0.4+1.3*sin(ar) TD+LH*0.4+2.5*sin(ar)],...',
-      "             ''Color'',[0.55 0.18 0.18],''LineWidth'',1,''Parent'',ax);",
-      '    end',
-      'end',
-      'if has_vendor',
-      '    patch(OX+BLKW*0.55+[0 3 3 0],TD+RDH*0.55+[0 0 2.5 2.5],...',
-      "        [0.95 0.70 0.10],''EdgeColor'',[0.75 0.50 0],''LineWidth'',1.5,''Parent'',ax);",
-      'end',
-      'if has_parking',
-      '    patch(OX+BLKW*0.45+[0 5 5 0],TD+RDH*0.72+[0 0 2.5 2.5],...',
-      "        [0.85 0.20 0.20],''EdgeColor'',[0.70 0.10 0.10],''LineWidth'',1.5,''Parent'',ax);",
-      'end',
-      'if has_barricade',
-      '    for bi=0:2',
-      '        patch(OX+bi*3+[0 1.5 1.5 0],TD+[0 0 RDH RDH],...',
-      "            [0.95 0.50 0.10],''EdgeColor'',[0.75 0.30 0],''Parent'',ax);",
-      '    end',
-      'end',
-      'if has_garbage',
-      '    patch(OX+BLKW*0.7+[0 3 3.5 0.5],TD+RDH*0.5+[0 0 2 2],...',
-      "        [0.42 0.55 0.28],''EdgeColor'',[0.30 0.42 0.18],''Parent'',ax);",
-      'end',
-      '',
-      "text(RL*0.5,TI-3,''IDEAL ROAD - NO DEFECTS'',...",
-      "    ''Color'',CGI,''FontSize'',13,''FontWeight'',''bold'',...",
-      "    ''HorizontalAlignment'',''center'',''Parent'',ax);",
-      `text(RL*0.5,TD-3,'DEFECT ROAD - ${defectLabel.toUpperCase().replace(/'/g,"")}',` + "'...",
-      "    ''Color'',CGD,''FontSize'',13,''FontWeight'',''bold'',...",
-      "    ''HorizontalAlignment'',''center'',''Parent'',ax);",
-      '',
-      "spd_i=text(3,TI+RDH/2,sprintf(''%d km/h'',round(FREE_SPD)),...",
-      "    ''Color'',CGI,''FontSize'',10,''FontWeight'',''bold'',''Parent'',ax);",
-      "spd_d=text(3,TD+RDH/2,sprintf(''%.1f km/h'',CONG_SPD),...",
-      "    ''Color'',CGD,''FontSize'',10,''FontWeight'',''bold'',''Parent'',ax);",
-      '',
-      'BX=88; BW=5; BH=RDH*0.85;',
-      'patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...',
-      "    [0.10 0.28 0.16],''EdgeColor'',CGI,''LineWidth'',1,''Parent'',ax);",
-      'patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...',
-      "    CGI,''EdgeColor'',''none'',''Parent'',ax);",
-      'patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+BH TD+1+BH],...',
-      "    [0.25 0.08 0.08],''EdgeColor'',CGD,''LineWidth'',1,''Parent'',ax);",
-      'DBH=BH*(reduced_cap/base_dsv);',
-      'fd=patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+DBH TD+1+DBH],...',
-      "    CGD,''EdgeColor'',''none'',''Parent'',ax);",
-      '',
-      'NL=newline;',
-      "annotation(fig,''rectangle'',[0.01 0.01 0.48 0.17],...",
-      "    ''Color'',CGI,''LineWidth'',1.5,''FaceColor'',[0.04 0.14 0.09]);",
-      "annotation(fig,''rectangle'',[0.51 0.01 0.48 0.17],...",
-      "    ''Color'',CGD,''LineWidth'',1.5,''FaceColor'',[0.16 0.05 0.05]);",
-      "annotation(fig,''textbox'',[0.01 0.01 0.48 0.17],...",
-      `    'String',['IDEAL' NL sprintf('DSV: %d PCU/hr | %d veh/hr',round(base_dsv),round(base_veh_hr)) NL sprintf('Free-flow speed: %d km/h | Lanes: %d',round(FREE_SPD),num_lanes)],...`,
-      "    ''Color'',[0.78 0.95 0.86],''FontSize'',10,''FontName'',''Courier New'',...",
-      "    ''EdgeColor'',''none'',''VerticalAlignment'',''middle'',''HorizontalAlignment'',''center'');",
-      "annotation(fig,''textbox'',[0.51 0.01 0.48 0.17],...",
-      `    'String',['DEFECT' NL sprintf('Cap: %d PCU/hr | %d veh/hr (-%.1f%%)',round(reduced_cap),round(reduced_veh_hr),cap_loss_pct) NL sprintf('Speed: %.1f km/h | Width: %.3f | Penalty: %.2f',CONG_SPD,width_factor,pothole_penalty)],...`,
-      "    ''Color'',[0.98 0.78 0.78],''FontSize'',10,''FontName'',''Courier New'',...",
-      "    ''EdgeColor'',''none'',''VerticalAlignment'',''middle'',''HorizontalAlignment'',''center'');",
-      `annotation(fig,'textbox',[0.01 0.94 0.98 0.05],'String',sprintf('Indian Road Digital Twin | Loss: %.1f%%',cap_loss_pct),...`,
-      "    ''Color'',[0.95 0.95 0.95],''FontSize'',11,''FontWeight'',''bold'',...",
-      "    ''EdgeColor'',''none'',''HorizontalAlignment'',''center'',''FaceColor'',''none'');",
-      '',
-      'vpi=gobjects(NVI,1); vpd=gobjects(NVD,1);',
-      'for v=1:NVI',
-      '    ln=mod(v-1,num_lanes)+1;',
-      '    vpi(v)=patch(VXI(v)+[0 VL VL 0],LYI(ln)+[-VH/2 -VH/2 VH/2 VH/2],...',
-      "        CGI,''EdgeColor'',[1 1 1 0.2],''LineWidth'',0.5,''Parent'',ax);",
-      'end',
-      'for v=1:NVD',
-      '    ln=mod(v-1,num_lanes)+1;',
-      '    vpd(v)=patch(VXD(v)+[0 VL VL 0],LYD(ln)+[-VH/2 -VH/2 VH/2 VH/2],...',
-      "        CGD,''EdgeColor'',[1 1 1 0.2],''LineWidth'',0.5,''Parent'',ax);",
-      'end',
-      '',
-      "disp(''Animation running. Close figure to stop.'');",
-      'simt=0;',
-      'while isvalid(fig)',
-      '    simt=simt+0.05;',
-      '    VXI=VXI+SI;',
-      '    wi=VXI>RL+VL;',
-      '    if any(wi)',
-      '        if any(~wi)',
-      '            mn=min(VXI(~wi));',
-      '        else',
-      '            mn=0;',
-      '        end',
-      '        c=sum(wi);',
-      "        VXI(wi)=mn-(1:c)''*SPCI;",
-      '    end',
-      '    for v=1:NVD',
-      '        x=VXD(v); d=OX-x;',
-      '        if d>SPCD*4',
-      '            tsp=SD;',
-      '        elseif d>0',
-      '            tsp=SD*(0.20+0.80*d/(SPCD*4));',
-      '        elseif x>=OX && x<=OX+BLKW',
-      '            tsp=SD*0.15;',
-      '        else',
-      '            rec=min(1,(x-OX-BLKW)/(SPCD*6));',
-      '            tsp=SD*(0.20+0.80*rec);',
-      '        end',
-      '        CURD(v)=CURD(v)+(tsp-CURD(v))*0.15;',
-      '        VXD(v)=VXD(v)+CURD(v);',
-      '    end',
-      '    wd=VXD>RL+VL;',
-      '    if any(wd)',
-      '        if any(~wd)',
-      '            mn=min(VXD(~wd));',
-      '        else',
-      '            mn=0;',
-      '        end',
-      '        c=sum(wd);',
-      "        VXD(wd)=mn-(1:c)''*SPCD;",
-      '        CURD(wd)=SD*0.5;',
-      '    end',
-      '    avg=0; nc=0;',
-      '    for v=1:NVI',
-      '        ln=mod(v-1,num_lanes)+1;',
-      "        set(vpi(v),''XData'',VXI(v)+[0 VL VL 0],''YData'',LYI(ln)+[-VH/2 -VH/2 VH/2 VH/2]);",
-      '    end',
-      '    for v=1:NVD',
-      '        ln=mod(v-1,num_lanes)+1;',
-      '        x=VXD(v); sr=CURD(v)/SD;',
-      '        if sr>0.75, col=CGD;',
-      '        elseif sr>0.35',
-      '            a=(0.75-sr)/0.40; col=CGD*(1-a)+CSL*a;',
-      '        else, col=CSL;',
-      '        end',
-      "        set(vpd(v),''XData'',VXD(v)+[0 VL VL 0],''YData'',LYD(ln)+[-VH/2 -VH/2 VH/2 VH/2],''FaceColor'',col);",
-      '        if x>0 && x<RL, avg=avg+sr*CONG_SPD; nc=nc+1; end',
-      '    end',
-      "    if nc>0, set(spd_d,''String'',sprintf(''%.1f km/h'',avg/nc)); end",
-      '    ph=DBH*(0.88+0.12*sin(simt*2.8));',
-      "    set(fd,''YData'',[TD+1 TD+1 TD+1+ph TD+1+ph]);",
-      '    drawnow limitrate;',
-      '    pause(0.01);',
-      'end',
-      "disp(''Done.'');",
-      'end',
-    ].join('\n');
-  }
-
-  // ---- Canvas Road Animation ----
-  let _twinAnim = null;
-
-  function startTwinAnimation(data) {
-    const canvas  = document.getElementById('twin-canvas');
-    if (!canvas) return;
-    const ctx     = canvas.getContext('2d');
-    const W       = canvas.offsetWidth || 800;
-    canvas.width  = W;
-    const H       = 260;
-
-    if (_twinAnim) cancelAnimationFrame(_twinAnim);
-
-    const base    = data.original_capacity_pcu_hr || 1500;
-    const reduced = data.reduced_capacity_pcu_hr  || 1200;
-    const lossPct = data.capacity_loss_pct         || 0;
-    const lanes   = (data.road_config || {}).num_lanes || 2;
-    const totalW  = (data.road_config || {}).total_width_m || 7;
-    const blocked = (data.capacity_calculation || {}).total_blocked_m || 0;
-    const pen     = (data.capacity_calculation || {}).pothole_penalty || 1;
-    const defects = Object.keys(data.per_defect || {});
-
-    // Use server-provided free flow speed, or derive from carriageway+fringe
-    const FREE_SPD   = data.free_flow_speed_kmh ||
-                       (data.traffic_regime && data.traffic_regime.free_flow_speed_kmh) ||
-                       getFreeFlowSpeed() || 50;
-    const vcRatio    = reduced / base;
-    const congSpd    = FREE_SPD * (1 - (1 - vcRatio) * 0.5);
-
-    // Road layout
-    const ROAD_H     = H / 2 - 10;
-    const LANE_H     = ROAD_H / lanes;
-    const ROAD_TOP_I = 8;
-    const ROAD_TOP_D = H / 2 + 8;
-    const OBS_X      = W * 0.58;
-    const BLK_W      = Math.min((blocked / totalW) * W * 0.3, W * 0.25);
-    const VW         = 28;
-    const VH         = Math.max(8, LANE_H - 4);
-    const N_VEH      = 8;
-
-    const hiIdeal   = 3600 / Math.max(base, 1);
-    const hiDefect  = 3600 / Math.max(reduced, 1);
-    const spcI      = Math.max((FREE_SPD/3.6) * hiIdeal * 0.1,  VW + 8);
-    const spcD      = Math.max((congSpd/3.6)  * hiDefect * 0.1, VW + 4);
-    const vsI       = FREE_SPD  / 3.6 * 0.15;
-    const vsD       = congSpd   / 3.6 * 0.15;
-
-    // Vehicle positions
-    let vxI = Array.from({length: N_VEH}, (_, i) => -spcI * (N_VEH - 1 - i));
-    let vxD = Array.from({length: N_VEH}, (_, i) => -spcD * (N_VEH - 1 - i));
-
-    const laneYI = (ln) => ROAD_TOP_I  + (ln + 0.5) * LANE_H;
-    const laneYD = (ln) => ROAD_TOP_D  + (ln + 0.5) * LANE_H;
-
-    const hasDefect = (name) => defects.includes(name);
-
-    function drawRoad(yTop, color, dashed) {
-      ctx.fillStyle = color;
-      ctx.fillRect(0, yTop, W, ROAD_H);
-      // Lane dividers
-      ctx.setLineDash([14, 10]);
-      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-      ctx.lineWidth = 1.5;
-      for (let ln = 1; ln < lanes; ln++) {
-        ctx.beginPath();
-        ctx.moveTo(0, yTop + ln * LANE_H);
-        ctx.lineTo(W, yTop + ln * LANE_H);
-        ctx.stroke();
-      }
-      ctx.setLineDash([]);
-      // Edge lines
-      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(0, yTop); ctx.lineTo(W, yTop); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, yTop+ROAD_H); ctx.lineTo(W, yTop+ROAD_H); ctx.stroke();
-    }
-
-    function drawDefects(yTop) {
-      // Blocked zone overlay
-      ctx.fillStyle = 'rgba(220,50,50,0.18)';
-      ctx.fillRect(OBS_X, yTop, BLK_W, ROAD_H);
-      ctx.strokeStyle = 'rgba(220,50,50,0.6)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(OBS_X, yTop, BLK_W, ROAD_H);
-
-      // Pothole
-      if (hasDefect('pothole')) {
-        ctx.beginPath();
-        ctx.ellipse(OBS_X + BLK_W*0.3, yTop + LANE_H*0.5, 14, 8, 0, 0, Math.PI*2);
-        ctx.fillStyle = '#3a1a1a';
-        ctx.fill();
-        ctx.strokeStyle = '#c04040';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.fillStyle = '#fca5a5';
-        ctx.font = '9px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Pothole', OBS_X + BLK_W*0.3, yTop + LANE_H*0.5 - 12);
-      }
-      // Vendor
-      if (hasDefect('street_vendor')) {
-        const vx = OBS_X + BLK_W * 0.62;
-        const vy = yTop + LANE_H * (lanes > 1 ? 1.0 : 0.25);
-        ctx.fillStyle = '#f59e0b';
-        ctx.fillRect(vx - 12, vy - 10, 24, 16);
-        ctx.fillStyle = '#fde68a';
-        ctx.font = '8px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Vendor', vx, vy - 13);
-      }
-      // Illegal parking
-      if (hasDefect('illegal_parking')) {
-        const px = OBS_X + BLK_W * 0.5;
-        const py = yTop + ROAD_H * 0.65;
-        ctx.fillStyle = '#dc2626';
-        ctx.beginPath();
-        ctx.roundRect(px-16, py-7, 32, 14, 3);
-        ctx.fill();
-        ctx.fillStyle = '#fca5a5';
-        ctx.font = '7px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Parking', px, py - 10);
-      }
-      // Barricade
-      if (hasDefect('barricade')) {
-        for (let bi = 0; bi < 3; bi++) {
-          ctx.fillStyle = '#f97316';
-          ctx.fillRect(OBS_X + bi*8 + 2, yTop + 2, 5, ROAD_H - 4);
-        }
-      }
-      // Garbage
-      if (hasDefect('garbage')) {
-        ctx.fillStyle = '#65a30d';
-        ctx.fillRect(OBS_X + BLK_W*0.7, yTop + ROAD_H*0.5, 14, 12);
-        ctx.fillStyle = '#d9f99d';
-        ctx.font = '7px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Garbage', OBS_X+BLK_W*0.77, yTop+ROAD_H*0.5-4);
-      }
-
-      // Blocked label
-      ctx.fillStyle = '#fca5a5';
-      ctx.font = 'bold 9px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(blocked.toFixed(1)+'m blocked', OBS_X + BLK_W/2, yTop + ROAD_H + 7);
-    }
-
-    function drawVehicle(ctx, x, y, color) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.roundRect(x, y - VH/2, VW, VH, 3);
-      ctx.fill();
-      // Windshield
-      ctx.fillStyle = 'rgba(150,210,255,0.5)';
-      ctx.fillRect(x + VW*0.55, y - VH/2 + 2, VW*0.3, VH - 4);
-    }
-
-    function getDefectColor(x) {
-      const d = OBS_X - x;
-      if (x >= OBS_X && x <= OBS_X + BLK_W) return '#f97316';
-      if (d > 0 && d < spcD * 3) {
-        const a = Math.max(0, Math.min(1, 1 - d/(spcD*3)));
-        return `rgba(${Math.round(227+28*a)},${Math.round(73-23*a)},${Math.round(72-62*a)},1)`;
-      }
-      return '#e34948';
-    }
-
-    function frame() {
-      if (!canvas.isConnected) return;
-      ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, W, H);
-
-      // Roads
-      drawRoad(ROAD_TOP_I, '#535a66', false);
-      drawRoad(ROAD_TOP_D, '#4d5260', true);
-      drawDefects(ROAD_TOP_D);
-
-      // Ideal vehicles
-      vxI = vxI.map((x, i) => {
-        const nx = x + vsI;
-        return nx > W + VW ? -spcI * (N_VEH - 1) + Math.min(...vxI.filter(v=>v<=W+VW)) : nx;
-      });
-      // wrap properly
-      const maxWrapI = vxI.filter(x => x > W+VW).length;
-      if (maxWrapI > 0) {
-        const minX = Math.min(...vxI.filter(x => x <= W+VW));
-        let wi = 0;
-        vxI = vxI.map(x => x > W+VW ? minX - spcI*(++wi) : x);
-      }
-
-      vxI.forEach((x, i) => {
-        const ln = i % lanes;
-        drawVehicle(ctx, x, laneYI(ln), '#1baf7a');
-      });
-
-      // Defect vehicles — slow near obstacle
-      vxD = vxD.map((x, i) => {
-        const d = OBS_X - x;
-        let spd;
-        if (d > 0 && d < spcD*3)      spd = vsD * (0.25 + 0.75 * Math.min(1, d/(spcD*2)));
-        else if (x >= OBS_X && x <= OBS_X+BLK_W) spd = vsD * 0.2;
-        else if (x > OBS_X+BLK_W)     spd = vsD * (0.25 + 0.75 * Math.min(1, (x-OBS_X-BLK_W)/40));
-        else                            spd = vsD;
-        return x + spd;
-      });
-      const maxWrapD = vxD.filter(x => x > W+VW).length;
-      if (maxWrapD > 0) {
-        const minX = Math.min(...vxD.filter(x => x <= W+VW));
-        let wd = 0;
-        vxD = vxD.map(x => x > W+VW ? minX - spcD*(++wd) : x);
-      }
-
-      vxD.forEach((x, i) => {
-        const ln = i % lanes;
-        drawVehicle(ctx, x, laneYD(ln), getDefectColor(x));
-      });
-
-      // Speed labels
-      ctx.fillStyle = '#1baf7a';
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(`→ ${FREE_SPD} km/h`, 8, ROAD_TOP_I + ROAD_H/2 + 4);
-      ctx.fillStyle = '#e34948';
-      ctx.fillText(`→ ${congSpd.toFixed(1)} km/h`, 8, ROAD_TOP_D + ROAD_H/2 + 4);
-
-      _twinAnim = requestAnimationFrame(frame);
-    }
-
-    // Set formula text
-    const calc = data.capacity_calculation || {};
-    const formulaEl = document.getElementById('twin-formula');
-    if (formulaEl && calc.formula) formulaEl.textContent = 'Formula: ' + calc.formula;
-
-    frame();
-  }
-
-  function attachMatlabButton(data) {
-    const btn = document.getElementById('matlab-dl-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      const script = generateMatlabScript(data);
-      const blob   = new Blob([script], { type: 'text/plain' });
-      const url    = URL.createObjectURL(blob);
-      const a      = document.createElement('a');
-      a.href       = url;
-      a.download   = 'roadtwin.m';
-      a.click();
-      URL.revokeObjectURL(url);
-    });
   }
 
   // ----------------------------------------------------------------
@@ -1324,17 +1060,21 @@
     resultsRoot.innerHTML =
       heroHTML(data) +
       defectAlertBannerHTML(data.per_defect) +
-      matlabButtonHTML(data) +
+      roadRunnerButtonHTML(data) +
+      xodrButtonHTML(data) +
       departmentReportButtonHTML(data) +
+      corridorButtonHTML() +
       roadbarHTML(data.road_config || {}, data.per_defect || {}) +
       `<div class="section-title">Defects Detected - Capacity Loss &amp; Recommended Actions</div>` +
       defectGridHTML(data.per_defect);
 
-    // Attach MATLAB download button click handler
-    attachMatlabButton(data);
+    // Attach RoadRunner script download button click handler
+    attachRoadRunnerButton(data);
 
-    // Start canvas animation after panel renders
-    requestAnimationFrame(() => startTwinAnimation(data));
+    // Track this analysis for the "combine into one corridor" export —
+    // session-only (in browser memory), not persisted server-side.
+    _sessionAnalyses.push(data);
+    attachCorridorButton();
   }
 
   // ----------------------------------------------------------------
@@ -1494,7 +1234,6 @@
 
     dtDrawCapChart(twin);
     dtDrawSpdChart(twin);
-    dtAnimateRoads(s);
     const phEl = document.getElementById("dt-pothole-marker");
     if (phEl && (s.pothole_speed_impact_pct || 0) > 0) phEl.style.display = "";
   }
@@ -1573,30 +1312,6 @@
       ctx.lineTo(xScale(xData[0] || 0), yScale(yMin));
       ctx.closePath(); ctx.fill();
     });
-  }
-
-  function dtAnimateRoads(summary) {
-    const idealCount  = Math.max(1, Math.round((summary.ideal_volume_design_pcu  || 1000) / 300));
-    const defectCount = Math.max(1, Math.round((summary.defect_volume_design_pcu || 700)  / 300));
-    spawnVehicles("dt-ideal-vehicles",  idealCount,  50,                           "#22c55e");
-    spawnVehicles("dt-defect-vehicles", defectCount, summary.steady_state_speed_kmh || 35, "#ef4444");
-  }
-
-  function spawnVehicles(containerId, count, speedKmh, accentColor) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-    container.innerHTML = "";
-    const types   = ["car","two-w","truck","car","car","two-w"];
-    const durBase = Math.max(1.5, 50 / Math.max(speedKmh, 5) * 3);
-    for (let i = 0; i < Math.min(count, 6); i++) {
-      const el  = document.createElement("div");
-      const type = types[i % types.length];
-      const dur  = durBase + Math.random() * 1.5;
-      const top  = 20 + (i % 2) * 28;
-      el.className = `dt-vehicle ${type}`;
-      el.style.cssText = `animation-duration:${dur}s;animation-delay:${-(Math.random()*dur)}s;top:${top}px;background:${type==="truck"?"#f59e0b":type==="two-w"?"#a855f7":accentColor};`;
-      container.appendChild(el);
-    }
   }
 
   function setText(id, val) {
