@@ -117,6 +117,13 @@
             </div>
 
             <div class="field">
+              <label for="chainage_m">Chainage — distance from road survey start (m)</label>
+              <input type="number" id="chainage_m" name="chainage_m"
+                     step="1" min="0" value="0">
+              <div class="field-hint">Where THIS photo was taken along the road — needed for RoadRunner placement, not for capacity calculation</div>
+            </div>
+
+            <div class="field">
               <label for="carriageway_key">Carriageway type (IRC:106 Table 2)</label>
               <select id="carriageway_key" name="carriageway_key" required></select>
             </div>
@@ -168,12 +175,12 @@
     <section class="card dt-panel" id="dt-panel" style="display:none;">
       <div class="dt-header">
         <div class="dt-title">
-          <span>⚡</span> Digital Twin — Simulink Simulation
+          <span>⚡</span> Digital Twin — Capacity &amp; Speed Analytics
         </div>
         <div class="dt-status-badge" id="dt-status-badge">Initialising…</div>
       </div>
       <div class="dt-subtitle mono">
-        Ideal road (no defects) vs Defect road &middot; IRC:106-1990 &middot; MATLAB R2026a
+        Ideal road (no defects) vs Defect road &middot; IRC:106-1990 &middot; visual simulation runs in RoadRunner (see script below)
       </div>
       <div class="dt-road-compare">
         <div class="dt-road-card ideal">
@@ -192,10 +199,6 @@
             <span class="dt-stat-value">50</span>
             <span class="dt-stat-unit">km/h</span>
             <span class="dt-stat-label">Free-flow Speed</span>
-          </div>
-          <div class="dt-road-visual ideal-visual">
-            <div class="dt-lane-mark"></div>
-            <div class="dt-vehicles" id="dt-ideal-vehicles"></div>
           </div>
         </div>
         <div class="dt-vs-divider">
@@ -221,15 +224,10 @@
             <span class="dt-stat-unit">km/h</span>
             <span class="dt-stat-label">Congested Speed</span>
           </div>
-          <div class="dt-road-visual defect-visual">
-            <div class="dt-lane-mark"></div>
-            <div class="dt-pothole" id="dt-pothole-marker" style="display:none;"></div>
-            <div class="dt-vehicles" id="dt-defect-vehicles"></div>
-          </div>
         </div>
       </div>
       <div class="dt-chart-section">
-        <div class="dt-chart-title mono">SIMULINK OUTPUT — CAPACITY OVER TIME (60s SIMULATION)</div>
+        <div class="dt-chart-title mono">CAPACITY OVER TIME (60s, Greenshields model)</div>
         <div class="dt-charts-row">
           <div class="dt-chart-wrap">
             <div class="dt-chart-label">Traffic Flow (PCU/hr)</div>
