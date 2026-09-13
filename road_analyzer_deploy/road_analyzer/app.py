@@ -25,9 +25,9 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -58,6 +58,8 @@ _DT_ENABLED = True
 logger.info("Digital Twin engine loaded (pure-Python Greenshields model).")
 
 from road_analyzer.department_extensions import generate_department_report_pdf
+from road_analyzer.pothole_rectification import build_pwd_report_row
+from road_analyzer.roadrunner_export import build_single_road_xodr, build_corridor_xodr
 
 # ----------------------------------------------------------------
 # Paths
@@ -144,6 +146,7 @@ def _road_config_from_form(
     fringe_condition: str,
     usable_shoulder_m: float,
     traffic_regime:   str = "low",
+    chainage_m:       float = 0.0,
 ) -> dict:
     if carriageway_key not in IRC106_DSV:
         raise HTTPException(400, f"Unknown carriageway_key '{carriageway_key}'. "
@@ -179,6 +182,7 @@ def _road_config_from_form(
         "fringe_condition": fringe_condition,
         "usable_shoulder_m": float(usable_shoulder_m),
         "traffic_regime":   traffic_regime,
+        "chainage_m":       float(chainage_m),
     }
 
 
@@ -265,10 +269,11 @@ async def analyze_image(
     fringe_condition:  str   = Form(...),
     usable_shoulder_m: float = Form(...),
     traffic_regime:    str   = Form("low"),
+    chainage_m:        float = Form(0.0),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
-        fringe_condition, usable_shoulder_m, traffic_regime,
+        fringe_condition, usable_shoulder_m, traffic_regime, chainage_m,
     )
 
     # Fresh job_id for EVERY request — this is what fixes the
@@ -293,6 +298,18 @@ async def analyze_image(
     result.pop("_csv_path", None)
     result["job_id"] = job_id
 
+    # Pothole rectification recommendation — pure lookup over data
+    # analyse_image() already computed (severity, depth, capacity loss).
+    # Only runs when a pothole was actually detected; every other
+    # per_defect entry and every other field in `result` is untouched.
+    if "pothole" in result.get("per_defect", {}):
+        try:
+            result["per_defect"]["pothole"]["rectification"] = build_pwd_report_row(
+                result["per_defect"]["pothole"], location=safe_name
+            )
+        except Exception as e:
+            logger.warning("Pothole rectification lookup failed: %s", e)
+
     # Department-routed PDF report — replaces the old CSV export, which
     # was written to disk but never exposed through any download route.
     # Generated synchronously here (a single-image report takes well
@@ -306,6 +323,20 @@ async def analyze_image(
     except Exception as e:
         logger.warning("Department PDF report generation failed: %s", e)
         result["department_report_available"] = False
+
+    # RoadRunner OpenDRIVE (.xodr) export — a straight road segment sized
+    # to this photo's measured width/lanes, with detected defects placed
+    # as road objects. Saved to disk the same way as the PDF report so
+    # /api/jobs/{job_id}/roadrunner.xodr can serve it without re-running
+    # analysis. See roadrunner_export.py for the honest limits on what
+    # this can and can't know from a single photo.
+    try:
+        xodr_path = job_dir / f"{Path(dest).stem}_roadrunner.xodr"
+        xodr_path.write_text(build_single_road_xodr(result), encoding="utf-8")
+        result["roadrunner_xodr_available"] = True
+    except Exception as e:
+        logger.warning("RoadRunner .xodr export failed: %s", e)
+        result["roadrunner_xodr_available"] = False
 
     # Generate Digital Twin data — pure-Python Greenshields model, runs
     # synchronously in milliseconds (no MATLAB, no subprocess, no waiting).
@@ -526,6 +557,53 @@ def get_department_report(job_id: str):
         str(pdfs[0]),
         media_type="application/pdf",
         filename=pdfs[0].name,
+    )
+
+
+@app.get("/api/jobs/{job_id}/roadrunner.xodr")
+def get_roadrunner_xodr(job_id: str):
+    # Same validation and disk-lookup pattern as the PDF report above.
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", job_id):
+        raise HTTPException(400, "Invalid job_id.")
+    job_dir = RESULTS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(404, f"Unknown job_id '{job_id}'.")
+    xodrs = sorted(job_dir.glob("*_roadrunner.xodr"))
+    if not xodrs:
+        raise HTTPException(404, "No RoadRunner export was generated for this job.")
+    return FileResponse(
+        str(xodrs[0]),
+        media_type="application/xml",
+        filename=xodrs[0].name,
+    )
+
+
+@app.post("/api/export/roadrunner-corridor.xodr")
+async def export_roadrunner_corridor(request: Request):
+    # Takes a JSON body of {"results": [<result dict>, ...]} — the same
+    # result objects /api/analyze/image already returned to the browser
+    # for each photo analysed this session. Built in-memory (not saved
+    # to disk, unlike the single-road export above) since a corridor is
+    # a one-off combination the user assembles client-side, not tied to
+    # any single job_id.
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Request body must be JSON: {\"results\": [...]}")
+    results = body.get("results")
+    if not isinstance(results, list) or not results:
+        raise HTTPException(400, "Provide a non-empty 'results' list of prior analysis results.")
+    try:
+        xodr_text = build_corridor_xodr(results)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error("Corridor .xodr build failed: %s", e, exc_info=True)
+        raise HTTPException(500, f"Could not build corridor export: {e}")
+    return Response(
+        content=xodr_text,
+        media_type="application/xml",
+        headers={"Content-Disposition": 'attachment; filename="roadrunner_corridor.xodr"'},
     )
 
 
