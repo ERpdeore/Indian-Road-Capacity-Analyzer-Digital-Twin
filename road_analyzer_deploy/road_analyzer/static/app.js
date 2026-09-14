@@ -773,154 +773,110 @@
   }
 
   // ----------------------------------------------------------------
-  // RoadRunner Scenario export
+  // RoadRunner vehicle-motion script
   // ----------------------------------------------------------------
-  // The dashboard no longer shows an in-browser "simulation" (CSS-animated
-  // dots / canvas figure) — those were toy visuals, not a real simulation.
-  // The actual simulation now happens in RoadRunner itself. This generates
-  // a MATLAB script that uses RoadRunner's real authoring API (Automated
-  // Driving Toolbox, R2025a+) to place your detected defects as static
-  // props on a road you've already built in RoadRunner, and add a vehicle
-  // actor so you can watch it drive through the defected section.
+  // This does ONE job: add moving vehicles to a scene you've already
+  // built. It assumes the road itself, and the defect markers on it,
+  // came from importing the .xodr file (see xodrButtonHTML below) —
+  // either by hand (File > Import > ASAM OpenDRIVE in RoadRunner) or
+  // some other way you already have a road in this project. This
+  // script does NOT place defects or build road geometry — that's the
+  // .xodr file's job, and it does it more reliably (no guessed asset
+  // paths, no assumptions about where your road sits in world space).
   //
-  // IMPORTANT — read before running the generated script:
-  //   1. addActor() places actors at a WORLD [x y z] position, not a
-  //      "meters along the road" position. This script assumes your road
-  //      is a straight segment starting near the world origin and running
-  //      along the +X axis (RoadRunner's default when you draw a single
-  //      straight road from the origin). If your road is angled or offset,
-  //      edit ROAD_ORIGIN_XY / ROAD_HEADING_DEG at the top of the script.
-  //   2. core.py's left_m/right_m for each defect is its position ACROSS
-  //      the road's width (which lane / how far from the edge) — a single
-  //      photo is one cross-section, so it has NO information about how
-  //      far down the road each defect sits. This script places every
-  //      defect at the same representative station (DEFECT_STATION_M
-  //      below, default 15m in) with the correct lateral offset for each
-  //      — it does not claim to know their real longitudinal spread.
-  //      If you analysed a video instead of a single photo, that's a
-  //      different data shape (frame-by-frame) and this script would need
-  //      adapting — ask if you want that version.
-  //   3. Asset paths (e.g. "Props/TrafficBarricade.fbx") are PLACEHOLDERS.
-  //      Open your RoadRunner project's Asset Library panel and copy the
-  //      real relative paths for whatever barrier/prop/vehicle assets you
-  //      actually have — getAsset() will error on a path that doesn't
-  //      exist in your project.
-  //   4. This script places actors; it does not script vehicle speed
-  //      logic (that's done in RoadRunner Scenario's Logic Editor after
-  //      actors are placed — the script prints the target speed to the
-  //      MATLAB console as a reminder of what to set it to).
+  // What actually makes a vehicle move — verified against MathWorks'
+  // own docs, not assumed: placing an actor with addActor() and no
+  // custom behavior already gives it RoadRunner's default lane-following
+  // behavior for free. The only extra step is setting its speed, via
+  // the actor's auto-created initial Change Speed action.
+  //
+  // VEHICLE COUNT — PHASE A (generic vehicles, no classification yet):
+  // How many vehicles is derived from your Digital Twin panel's own
+  // numbers using basic traffic flow theory: density = flow ÷ speed.
+  //   density (PCU/km) = defect_capacity_pcu_hr ÷ steady_state_speed_kmh
+  //   vehicles in this segment = density × (segment length in km)
+  // Each spawned vehicle is treated as 1 generic unit (not weighted by
+  // real PCU-per-type, since there's no per-class breakdown yet — that's
+  // Phase B, once the vehicle-counting/classification module exists and
+  // can tell this script the REAL mix of cars/two-wheelers/autos/buses/
+  // trucks instead of identical sedans).
+  // If the Digital Twin panel hasn't finished its calculation yet when
+  // you click download, this falls back to 1 vehicle — wait for the
+  // "Simulation complete" badge on the twin panel before downloading
+  // for an accurate count.
+  //
+  // REQUIRES: MATLAB R2025a+, Automated Driving Toolbox, RoadRunner.
   function generateRoadRunnerScript(data) {
-    const cfg   = data.road_config          || {};
-    const calc  = data.capacity_calculation || {};
-    const tr    = data.traffic_regime       || {};
-    const perDefect = data.per_defect       || {};
+    const tr        = data.traffic_regime || {};
+    const freeFlow  = data.free_flow_speed_kmh || 50;
+    const congested = tr.congested_speed_kmh || Math.round(freeFlow * 0.7);
+    const speedMs   = (congested / 3.6).toFixed(2);
+    const image     = data.image || "unknown";
+    const segmentM  = 40;  // must match roadrunner_export.py's DEFAULT_SEGMENT_LENGTH_M
 
-    const totalW      = cfg.total_width_m        || 7;
-    const freeFlow     = data.free_flow_speed_kmh || 50;
-    const congested     = tr.congested_speed_kmh   || Math.round(freeFlow * 0.7);
-    const image        = data.image               || "unknown";
-    const lossPct      = data.capacity_loss_pct    || 0;
+    const twin = DT.lastSummary || {};
+    const flowPcuHr  = twin.defect_capacity_pcu_hr;
+    const speedForDensity = twin.steady_state_speed_kmh || congested;
+    let vehicleCount = 1;
+    let densityNote  = "Digital Twin data not ready yet — defaulted to 1 vehicle. Wait for \"Simulation complete\" on the twin panel and re-download for an accurate count.";
+    if (flowPcuHr && speedForDensity > 0) {
+      const densityPcuKm = flowPcuHr / speedForDensity;        // PCU per km, whole road
+      const raw = densityPcuKm * (segmentM / 1000);            // PCU in this segment
+      vehicleCount = Math.max(1, Math.min(20, Math.round(raw)));
+      densityNote = `Derived from Digital Twin: ${flowPcuHr} PCU/hr \u00f7 ${speedForDensity} km/h = ${densityPcuKm.toFixed(1)} PCU/km \u00d7 ${segmentM}m segment \u2248 ${raw.toFixed(1)} \u2192 ${vehicleCount} vehicle(s).`;
+    }
 
-    // Flatten per_defect into a simple list of {type, lateral_offset_m,
-    // width_m} using the left_m/right_m your existing analysis already
-    // computed — these are positions ACROSS the road, not along it.
-    const defectRows = [];
-    Object.keys(perDefect).forEach((cls) => {
-      const entry = perDefect[cls];
-      (entry.detections || []).forEach((det) => {
-        if (det.left_m == null || det.right_m == null) return;
-        const lateralM = (det.left_m + det.right_m) / 2;
-        const widthM   = det.right_m - det.left_m;
-        defectRows.push({ type: cls, lateral_m: lateralM.toFixed(2), width_m: widthM.toFixed(2) });
-      });
-    });
-
-    // Map your defect classes to placeholder RoadRunner prop asset paths.
-    // EDIT these to match assets that actually exist in your project's
-    // Asset Library (right-click an asset there -> Copy Path).
-    const assetMap = {
-      pothole:          "Props/Misc/RoadHazardCone.fbx",
-      barricade:        "Props/Barriers/JerseyBarrier.fbx",
-      illegal_parking:  "Vehicles/Sedan.fbx",
-      street_vendor:    "Props/Misc/MarketStall.fbx",
-      garbage:          "Props/Misc/DebrisPile.fbx",
-      tree:             "Props/Vegetation/RoadsideTree.fbx",
-    };
-
-    const defectLines = defectRows.map((d) => {
-      const assetPath = assetMap[d.type] || "Props/Misc/GenericObstacle.fbx";
-      return [
-        `% ---- ${d.type}: ${d.lateral_m} m from the road's left edge, ~${d.width_m} m wide ----`,
-        `try`,
-        `    obsAsset = getAsset(prj, "${assetPath}", "MovableObjectAsset");`,
-        `    obsPos   = roadPointToWorld(DEFECT_STATION_M, ${d.lateral_m} - ${totalW.toFixed(2)}/2, ROAD_ORIGIN_XY, ROAD_HEADING_DEG);`,
-        `    addActor(scnro, obsAsset, obsPos);`,
-        `catch ME`,
-        `    warning("Could not place ${d.type} prop — check the asset path '${assetPath}' exists in your project. %s", ME.message);`,
-        `end`,
-      ].join("\n");
-    }).join("\n\n");
+    // Spread vehicles evenly along the segment so they don't overlap.
+    // Alternate left/right lane (t offset) purely for visual variety —
+    // not derived from any real lane-occupancy data.
+    const spawnLines = [];
+    for (let i = 0; i < vehicleCount; i++) {
+      const sPos = Math.round((segmentM / (vehicleCount + 1)) * (i + 1));
+      const tOff = (i % 2 === 0) ? -1.5 : 1.5;
+      spawnLines.push(
+        `carAsset = getAsset(prj, VEHICLE_ASSET, "VehicleAsset");`,
+        `carPos${i}   = [${sPos}, ${tOff}, 0];   % vehicle ${i + 1} of ${vehicleCount}`,
+        `car${i}      = addActor(scnro, carAsset, carPos${i});`,
+        `initPhase${i} = initialPhaseForActor(rrLogic, car${i});`,
+        `initSpeed${i} = findActions(initPhase${i}, "ChangeSpeedAction");`,
+        `initSpeed${i}.Speed = TARGET_SPEED_MS;`,
+        ``
+      );
+    }
 
     return [
       "%% ================================================================",
-      "%% ROADRUNNER SCENARIO GENERATOR",
+      "%% ROADRUNNER — ADD MOVING VEHICLES",
       `%% Source image: ${image}`,
-      `%% Capacity loss from defects: ${lossPct}%  |  Free-flow: ${freeFlow} km/h  |  Congested: ${congested} km/h`,
+      `%% This defect condition's typical speed: ${congested} km/h (${speedMs} m/s)`,
+      `%% Vehicle count: ${vehicleCount} — ${densityNote}`,
       "%%",
-      "%% REQUIRES: MATLAB R2025a+, Automated Driving Toolbox, RoadRunner",
-      "%% (RoadRunner Scenario), and a RoadRunner project with a base road",
-      "%% already authored — this script does NOT build road geometry.",
+      "%% BEFORE RUNNING: import your .xodr file into this project's scene",
+      "%% first (File > Import > ASAM OpenDRIVE in RoadRunner, or see the",
+      "%% roadrunner.importScene MATLAB function if you want to script that",
+      "%% step too). This script only adds and drives vehicles on a road",
+      "%% that already exists.",
       "%%",
-      "%% EDIT THESE BEFORE RUNNING:",
-      'PROJECT_FOLDER    = "C:\\path\\to\\your\\RoadRunnerProject";   % <-- EDIT',
-      'SCENE_FILE        = "YourScene.rrscene";                     % <-- EDIT',
-      "ROAD_ORIGIN_XY    = [0, 0];      % world XY where your road starts  <-- EDIT if not at origin",
-      "ROAD_HEADING_DEG  = 0;           % road heading, 0 = along +X axis  <-- EDIT if road isn't straight along +X",
-      "DEFECT_STATION_M  = 15;          % where along the road to place this photo's cross-section <-- EDIT",
+      "%% EDIT THESE before running:",
+      'PROJECT_FOLDER = "C:\\path\\to\\your\\RoadRunnerProject";   % <-- EDIT',
+      'SCENE_FILE     = "YourScene.rrscene";                     % <-- EDIT (the scene you imported the .xodr into)',
+      'VEHICLE_ASSET  = "Vehicles/Sedan.fbx";                    % <-- EDIT if you use a different vehicle asset (all vehicles are this one type until Phase B)',
+      `TARGET_SPEED_MS = ${speedMs};    % m/s — defaults to this photo's congested-condition speed`,
       "%% ================================================================",
-      "",
-      "function pos = roadPointToWorld(stationM, offsetM, originXY, headingDeg)",
-      "    % Converts a (station-along-road, lateral-offset-from-centerline)",
-      "    % pair to a world [x y z] position, assuming a straight road. If",
-      "    % your road curves, replace this with RoadRunner's",
-      "    % findSceneAnchor/anchorToPoint workflow instead (see MathWorks",
-      "    % doc for 'anchorToPoint').",
-      "    theta = deg2rad(headingDeg);",
-      "    x = originXY(1) + stationM * cos(theta) - offsetM * sin(theta);",
-      "    y = originXY(2) + stationM * sin(theta) + offsetM * cos(theta);",
-      "    pos = [x, y, 0];",
-      "end",
       "",
       "%% ---- Connect to RoadRunner ----",
       "rrApp = roadrunner(ProjectFolder=PROJECT_FOLDER);",
       "openScene(rrApp, SCENE_FILE);",
-      "newScenario(rrApp);",
       "",
       "rrApi  = roadrunnerAPI(rrApp);",
-      "scn    = rrApi.Scene;",
       "scnro  = rrApi.Scenario;",
       "prj    = rrApi.Project;",
+      "rrLogic = scnro.PhaseLogic;",
       "",
-      "%% ---- Place detected defects as static props ----",
-      "%% All placed at the SAME station (DEFECT_STATION_M) with correct",
-      "%% lateral spacing — see note #2 above on why station is a single",
-      "%% assumed value, not measured.",
-      defectLines || "% No defects detected in this analysis — nothing to place.",
-      "",
-      "%% ---- Add a vehicle actor before the defect section ----",
-      "try",
-      '    carAsset = getAsset(prj, "Vehicles/Sedan.fbx", "VehicleAsset");   % <-- EDIT if you use a different vehicle asset',
-      "    carPos   = roadPointToWorld(0, 0, ROAD_ORIGIN_XY, ROAD_HEADING_DEG);",
-      "    car = addActor(scnro, carAsset, carPos);",
-      "catch ME",
-      '    warning("Could not place vehicle actor — check the asset path exists. %s", ME.message);',
-      "end",
-      "",
-      "%% ---- Reminder: set vehicle speed in RoadRunner Scenario's Logic Editor ----",
-      `disp("Scenario built. Target speed for this defect condition: ${congested} km/h (${(congested/3.6).toFixed(2)} m/s).");`,
-      'disp("Open RoadRunner Scenario -> Logic Editor -> add a Speed Action on the vehicle actor to set this.");',
-      "",
+      `%% ---- Add ${vehicleCount} vehicle(s), each with default lane-following + set speed ----`,
+      ...spawnLines,
       "%% ---- Run it ----",
+      `disp("${vehicleCount} vehicle(s) added, driving at " + TARGET_SPEED_MS + " m/s (${congested} km/h).");`,
       "simulateScenario(rrApp);",
     ].join("\n");
   }
@@ -931,10 +887,10 @@
         <div class="action-bar-info">
           <span class="action-bar-icon">🛣️</span>
           <div>
-            <div class="action-bar-title">RoadRunner Scenario Script</div>
-            <div class="action-bar-sub">Downloads a MATLAB script that places your detected defects as
-            static props in RoadRunner and adds a vehicle actor. Requires a RoadRunner project with a
-            base road already authored — edit the project/scene path at the top of the script before running.</div>
+            <div class="action-bar-title">RoadRunner Vehicle Script</div>
+            <div class="action-bar-sub">Downloads a MATLAB script that adds a moving vehicle, driven at this
+            defect condition's typical speed, to a scene you've already imported the .xodr road into.
+            Run this AFTER importing the .xodr file below — it drives a vehicle, it doesn't build the road.</div>
           </div>
         </div>
         <button class="action-dl-btn" id="roadrunner-dl-btn">
@@ -1190,7 +1146,7 @@
       panel.style.display = "";
       panel.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-    dtSetBadge("running", "Simulink running…");
+    dtSetBadge("running", "Calculating…");
   }
 
   function dtStartPolling() {
@@ -1212,13 +1168,14 @@
         clearInterval(DT.pollTimer);
         dtSetBadge("error", "Simulation error");
       } else {
-        dtSetBadge("running", "Simulink running…");
+        dtSetBadge("running", "Calculating…");
       }
     } catch (e) { /* silent */ }
   }
 
   function dtRender(twin) {
     const s = twin.summary || {};
+    DT.lastSummary = s;  // stash for the RoadRunner script generator (vehicle count)
     setText("dt-ideal-cap",    Math.round(s.ideal_capacity_pcu_hr  || 0));
     setText("dt-defect-cap",   Math.round(s.defect_capacity_pcu_hr || 0));
     setText("dt-ideal-vol",    Math.round(s.ideal_volume_design_pcu  || 0));
