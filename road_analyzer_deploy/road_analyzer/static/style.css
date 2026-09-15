@@ -1,17 +1,17 @@
 :root{
-  --bg:           #15171A;
-  --surface:      #1F2228;
-  --surface-2:    #262A31;
-  --line:         #34383F;
-  --text:         #E8E9EB;
-  --text-dim:     #9BA1A8;
-  --text-faint:   #6B7077;
-  --amber:        #F2A93B;
+  --bg:           #1B1E24;
+  --surface:      #242830;
+  --surface-2:    #2C3139;
+  --line:         #3A3F48;
+  --text:         #E4E6EA;
+  --text-dim:     #A3A9B1;
+  --text-faint:   #757C86;
+  --amber:        #E6A94A;
   --amber-dim:    #8A6526;
-  --green:        #5FA777;
+  --green:        #6FB98A;
   --green-dim:    #2E4A39;
   --yellow:       #D9B84A;
-  --red:          #D9534F;
+  --red:          #E06B67;
   --red-dim:      #4A2C2A;
   --radius:       10px;
 }
@@ -781,9 +781,9 @@ canvas { width: 100% !important; }
 }
 
 /* ================================================================
-   MATLAB DIGITAL TWIN BUTTON BAR
+   ACTION BAR (download buttons: RoadRunner script, department PDF)
    ================================================================ */
-.matlab-twin-bar {
+.action-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -794,32 +794,32 @@ canvas { width: 100% !important; }
   padding: 14px 18px;
   margin-bottom: 20px;
 }
-.matlab-twin-info {
+.action-bar-info {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   flex: 1;
 }
-.matlab-twin-icon {
+.action-bar-icon {
   font-size: 22px;
   line-height: 1;
   flex-shrink: 0;
   margin-top: 2px;
 }
-.matlab-twin-title {
+.action-bar-title {
   font-family: 'Oswald', sans-serif;
   font-size: 1rem;
   color: #60a5fa;
   letter-spacing: 0.03em;
   margin-bottom: 4px;
 }
-.matlab-twin-sub {
+.action-bar-sub {
   font-size: 12px;
   color: var(--text-faint);
   line-height: 1.5;
   max-width: 520px;
 }
-.matlab-dl-btn {
+.action-dl-btn {
   flex-shrink: 0;
   padding: 10px 20px;
   background: #1e3a5f;
@@ -835,16 +835,16 @@ canvas { width: 100% !important; }
   display: inline-block;
   text-decoration: none;
 }
-.matlab-dl-btn:hover {
+.action-dl-btn:hover {
   background: #2d4f7a;
   color: #dbeafe;
 }
-.matlab-dl-btn:active {
+.action-dl-btn:active {
   background: #1a3050;
 }
 @media (max-width: 640px) {
-  .matlab-twin-bar { flex-direction: column; align-items: flex-start; }
-  .matlab-dl-btn   { width: 100%; text-align: center; }
+  .action-bar    { flex-direction: column; align-items: flex-start; }
+  .action-dl-btn { width: 100%; text-align: center; }
 }
 
 /* ================================================================
