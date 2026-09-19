@@ -18,6 +18,7 @@ FIXES IN THIS VERSION
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
 import shutil
@@ -349,6 +350,22 @@ async def analyze_image(
         logger.warning("RoadRunner ideal .xodr export failed: %s", e)
         result["roadrunner_ideal_xodr_available"] = False
 
+    # Capacity numbers sidecar -- a small JSON file next to the two .xodr
+    # files, carrying the real ideal-vs-reduced capacity (vehicles/hr)
+    # this job already calculated. The RoadRunner/MATLAB side reads this
+    # to decide how many vehicles to actually show in each 3D simulation,
+    # so the visual traffic density reflects your real IRC-based numbers
+    # instead of an arbitrary fixed vehicle count.
+    try:
+        capacity_path = job_dir / f"{Path(dest).stem}_roadrunner_capacity.json"
+        capacity_path.write_text(json.dumps({
+            "original_capacity_vehicles_hr": result.get("original_capacity_vehicles_hr"),
+            "reduced_capacity_vehicles_hr": result.get("reduced_capacity_vehicles_hr"),
+            "capacity_loss_pct": result.get("capacity_loss_pct"),
+        }), encoding="utf-8")
+    except Exception as e:
+        logger.warning("RoadRunner capacity sidecar export failed: %s", e)
+
     # Generate Digital Twin data — pure-Python Greenshields model, runs
     # synchronously in milliseconds (no MATLAB, no subprocess, no waiting).
     # We still report "running" then let the frontend's existing poll hit
@@ -586,6 +603,23 @@ def get_roadrunner_xodr(job_id: str):
         str(xodrs[0]),
         media_type="application/xml",
         filename=xodrs[0].name,
+    )
+
+
+@app.get("/api/jobs/{job_id}/roadrunner-capacity.json")
+def get_roadrunner_capacity_json(job_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", job_id):
+        raise HTTPException(400, "Invalid job_id.")
+    job_dir = RESULTS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(404, f"Unknown job_id '{job_id}'.")
+    jsons = sorted(job_dir.glob("*_roadrunner_capacity.json"))
+    if not jsons:
+        raise HTTPException(404, "No capacity data was generated for this job.")
+    return FileResponse(
+        str(jsons[0]),
+        media_type="application/json",
+        filename=jsons[0].name,
     )
 
 
