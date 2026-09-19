@@ -53,29 +53,80 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
              'then fix the project_folder line in this file.'], project_folder);
     end
 
+    % If roadrunnerSetup() has been run once, this line is all you need.
+    % If you still get "Unable to open RoadRunner application from
+    % installation folder" after running roadrunnerSetup, uncomment the
+    % line below and fill in your real RoadRunner install folder (find it
+    % via: right-click your RoadRunner shortcut -> Open file location).
+    INSTALLATION_FOLDER = 'C:\Program Files\RoadRunner R2026a\bin\win64';
+
     fprintf('[1/5] (%s) Opening RoadRunner project: %s\n', mode, project_folder);
-    rrApp = roadrunner(project_folder);
+    if isempty(INSTALLATION_FOLDER)
+        rrApp = roadrunner(project_folder);
+    else
+        rrApp = roadrunner(project_folder, 'InstallationFolder', INSTALLATION_FOLDER);
+    end
     pause(5);
 
     fprintf('[2/5] Importing road from: %s\n', xodr_path);
     try
-        importScene(rrApp, xodr_path);
+        newScene(rrApp);
+        importScene(rrApp, xodr_path, "OpenDRIVE");
     catch importErr
         error('auto_import_roadrunner:ImportFailed', 'importScene failed: %s', importErr.message);
     end
     fprintf('[3/5] Saving scene...\n');
-    saveScene(rrApp);
+    saveScene(rrApp, sprintf('%s_demo_scene.rrscene', mode));
 
     fprintf('[4/5] Adding %s traffic...\n', mode);
-    if strcmp(mode, 'ideal')
-        add_vehicles_ideal(rrApp);
+    % Look for the capacity sidecar JSON next to the .xodr (same folder,
+    % same base name) -- if found, real ideal-vs-reduced capacity numbers
+    % drive how many vehicles get shown. If not found, falls back to a
+    % fixed default count so the demo still works either way.
+    [xodrFolder, xodrBase] = fileparts(xodr_path);
+    xodrBase = erase(xodrBase, '_ideal');
+    xodrBase = erase(xodrBase, '_roadrunner');
+    capacityJsonPath = fullfile(xodrFolder, [xodrBase '_roadrunner_capacity.json']);
+
+    baselineVehicles = 6;   % vehicle count shown for the ideal case
+    numVehicles = baselineVehicles;
+    if isfile(capacityJsonPath)
+        try
+            cap = jsondecode(fileread(capacityJsonPath));
+            if strcmp(mode, 'nonideal') && ~isempty(cap.original_capacity_vehicles_hr) ...
+                    && cap.original_capacity_vehicles_hr > 0
+                ratio = cap.reduced_capacity_vehicles_hr / cap.original_capacity_vehicles_hr;
+                numVehicles = max(1, round(baselineVehicles * ratio));
+                fprintf('      Using real capacity data: %.0f -> %.0f veh/hr (%.0f%% loss) -> %d vehicles shown\n', ...
+                    cap.original_capacity_vehicles_hr, cap.reduced_capacity_vehicles_hr, ...
+                    cap.capacity_loss_pct, numVehicles);
+            end
+        catch
+            fprintf('      Could not read capacity data, using default vehicle count.\n');
+        end
     else
-        add_vehicles_nonideal(rrApp);
+        fprintf('      No capacity data found (%s) -- using default vehicle count.\n', capacityJsonPath);
     end
 
-    fprintf('[5/5] Building and running simulation...\n');
-    sim = createSimulation(rrApp);
-    run(sim);
+    if strcmp(mode, 'ideal')
+        add_vehicles_ideal(rrApp, baselineVehicles);
+    else
+        add_vehicles_nonideal(rrApp, numVehicles);
+    end
+
+    fprintf('[5/5] Starting simulation...\n');
+    rrSim = createSimulation(rrApp);
+    set(rrSim, 'SimulationCommand', 'Start');
 
     fprintf('\nDONE (%s). Road and traffic are in RoadRunner and the simulation is running.\n', mode);
+    fprintf('Keeping this window open so the simulation keeps running for your demo.\n');
+    fprintf('When you''re done, just close this window (or press Ctrl+C here).\n\n');
+
+    % IMPORTANT: MATLAB -batch closes everything the instant the script
+    % ends, which disconnects and STOPS the simulation. This loop keeps
+    % MATLAB alive on purpose so your demo keeps playing until you're
+    % ready to close it yourself.
+    while true
+        pause(1);
+    end
 end
