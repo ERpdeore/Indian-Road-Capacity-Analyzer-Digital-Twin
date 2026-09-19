@@ -215,3 +215,13 @@ def build_corridor_xodr(results: list[dict]) -> str:
     odr.adjust_startpoints()
 
     return _serialize(odr)
+
+
+def build_ideal_road_xodr(result: dict, segment_length_m: float = DEFAULT_SEGMENT_LENGTH_M) -> str:
+    """Same road geometry (width, lane count) as build_single_road_xodr,
+    but with every detected defect stripped out -- this is the IDEAL
+    (unobstructed) version of the same road, for an ideal-vs-non-ideal
+    side-by-side comparison in RoadRunner."""
+    ideal_result = dict(result)
+    ideal_result["per_defect"] = {}
+    return build_single_road_xodr(ideal_result, segment_length_m=segment_length_m)
