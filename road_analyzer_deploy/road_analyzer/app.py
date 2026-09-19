@@ -59,7 +59,7 @@ logger.info("Digital Twin engine loaded (pure-Python Greenshields model).")
 
 from road_analyzer.department_extensions import generate_department_report_pdf
 from road_analyzer.pothole_rectification import build_pwd_report_row
-from road_analyzer.roadrunner_export import build_single_road_xodr, build_corridor_xodr
+from road_analyzer.roadrunner_export import build_single_road_xodr, build_corridor_xodr, build_ideal_road_xodr
 
 # ----------------------------------------------------------------
 # Paths
@@ -338,6 +338,17 @@ async def analyze_image(
         logger.warning("RoadRunner .xodr export failed: %s", e)
         result["roadrunner_xodr_available"] = False
 
+    # IDEAL version of the same road (same width/lanes, defects removed)
+    # -- generated alongside the non-ideal one so both are ready to go
+    # the instant analysis finishes, with no extra wait during the demo.
+    try:
+        ideal_xodr_path = job_dir / f"{Path(dest).stem}_roadrunner_ideal.xodr"
+        ideal_xodr_path.write_text(build_ideal_road_xodr(result), encoding="utf-8")
+        result["roadrunner_ideal_xodr_available"] = True
+    except Exception as e:
+        logger.warning("RoadRunner ideal .xodr export failed: %s", e)
+        result["roadrunner_ideal_xodr_available"] = False
+
     # Generate Digital Twin data — pure-Python Greenshields model, runs
     # synchronously in milliseconds (no MATLAB, no subprocess, no waiting).
     # We still report "running" then let the frontend's existing poll hit
@@ -571,6 +582,23 @@ def get_roadrunner_xodr(job_id: str):
     xodrs = sorted(job_dir.glob("*_roadrunner.xodr"))
     if not xodrs:
         raise HTTPException(404, "No RoadRunner export was generated for this job.")
+    return FileResponse(
+        str(xodrs[0]),
+        media_type="application/xml",
+        filename=xodrs[0].name,
+    )
+
+
+@app.get("/api/jobs/{job_id}/roadrunner-ideal.xodr")
+def get_roadrunner_ideal_xodr(job_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", job_id):
+        raise HTTPException(400, "Invalid job_id.")
+    job_dir = RESULTS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(404, f"Unknown job_id '{job_id}'.")
+    xodrs = sorted(job_dir.glob("*_roadrunner_ideal.xodr"))
+    if not xodrs:
+        raise HTTPException(404, "No ideal RoadRunner export was generated for this job.")
     return FileResponse(
         str(xodrs[0]),
         media_type="application/xml",
