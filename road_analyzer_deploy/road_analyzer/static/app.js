@@ -88,6 +88,66 @@
   // ----------------------------------------------------------------
   fileInput.addEventListener("change", (e) => handleFiles(e.target.files));
 
+  // ---------------------------------------------------------------
+  // Camera capture -- opens the device camera, lets you snap a photo,
+  // and feeds it through the exact same handleFiles() pipeline as a
+  // normal drag-and-drop upload. Requires https:// (or localhost) --
+  // browsers block camera access on plain http:// otherwise.
+  // ---------------------------------------------------------------
+  const cameraBtn        = document.getElementById("camera-btn");
+  const cameraModal      = document.getElementById("camera-modal");
+  const cameraVideo      = document.getElementById("camera-video");
+  const cameraCanvas     = document.getElementById("camera-canvas");
+  const cameraCaptureBtn = document.getElementById("camera-capture-btn");
+  const cameraCancelBtn  = document.getElementById("camera-cancel-btn");
+  let cameraStream = null;
+
+  async function openCamera() {
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      cameraVideo.srcObject = cameraStream;
+      cameraModal.style.display = "flex";
+    } catch (err) {
+      alert("Could not access camera: " + err.message +
+            "\nCheck your browser's camera permission for this site.");
+    }
+  }
+
+  function closeCamera() {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+      cameraStream = null;
+    }
+    cameraModal.style.display = "none";
+  }
+
+  function captureFromCamera() {
+    const w = cameraVideo.videoWidth;
+    const h = cameraVideo.videoHeight;
+    cameraCanvas.width = w;
+    cameraCanvas.height = h;
+    cameraCanvas.getContext("2d").drawImage(cameraVideo, 0, 0, w, h);
+
+    cameraCanvas.toBlob((blob) => {
+      const filename = `camera_${Date.now()}.jpg`;
+      const file = new File([blob], filename, { type: "image/jpeg" });
+
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+      handleFiles(dt.files);
+
+      closeCamera();
+    }, "image/jpeg", 0.92);
+  }
+
+  cameraBtn.addEventListener("click", openCamera);
+  cameraCaptureBtn.addEventListener("click", captureFromCamera);
+  cameraCancelBtn.addEventListener("click", closeCamera);
+
   dropEl.addEventListener("dragover", (e) => {
     e.preventDefault();
     dropEl.classList.add("drag");
@@ -955,7 +1015,65 @@
         <button class="action-dl-btn" id="corridor-dl-btn">
           ↓ Download Corridor (${_sessionAnalyses.length})
         </button>
+      </div>
+      <div class="action-bar">
+        <div class="action-bar-info">
+          <span class="action-bar-icon">✨</span>
+          <div>
+            <div class="action-bar-title">Ideal Corridor (.xodr)</div>
+            <div class="action-bar-sub">Same combined road, same lengths and lanes, with every detected defect
+            removed -- the "what it could look like" comparison version.</div>
+          </div>
+        </div>
+        <button class="action-dl-btn" id="corridor-ideal-dl-btn">
+          ↓ Download Ideal Corridor
+        </button>
+      </div>
+      <div class="action-bar">
+        <div class="action-bar-info">
+          <span class="action-bar-icon">📊</span>
+          <div>
+            <div class="action-bar-title">Corridor Capacity Summary (.json)</div>
+            <div class="action-bar-sub">Combines every photo's capacity numbers into one real ideal-vs-reduced
+            figure for the whole stretch (weakest-segment rule) -- used to size traffic in the RoadRunner demo.</div>
+          </div>
+        </div>
+        <button class="action-dl-btn" id="corridor-capacity-dl-btn">
+          ↓ Download Capacity Summary
+        </button>
       </div>`;
+  }
+
+  function _downloadCorridorVariant(endpoint, filename, btnId, busyLabel, idleLabel) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = busyLabel;
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ results: _sessionAnalyses }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Server returned ${res.status}`);
+        }
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert(`Could not build export: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = idleLabel;
+      }
+    });
   }
 
   function attachCorridorButton() {
@@ -988,6 +1106,22 @@
         btn.textContent = `↓ Download Corridor (${_sessionAnalyses.length})`;
       }
     });
+
+    _downloadCorridorVariant(
+      '/api/export/roadrunner-corridor-ideal.xodr',
+      'roadrunner_corridor_ideal.xodr',
+      'corridor-ideal-dl-btn',
+      'Building…',
+      '↓ Download Ideal Corridor'
+    );
+
+    _downloadCorridorVariant(
+      '/api/export/roadrunner-corridor-capacity.json',
+      'roadrunner_corridor_capacity.json',
+      'corridor-capacity-dl-btn',
+      'Building…',
+      '↓ Download Capacity Summary'
+    );
   }
 
   function departmentReportButtonHTML(data) {
