@@ -53,6 +53,21 @@
           </label>
           <input type="file" id="file-input" accept="image/*">
 
+          <button type="button" id="camera-btn" class="camera-btn">
+            Take Photo
+          </button>
+
+          <div id="camera-modal" class="camera-modal" style="display:none;">
+            <div class="camera-modal-inner">
+              <video id="camera-video" autoplay playsinline muted></video>
+              <canvas id="camera-canvas" style="display:none;"></canvas>
+              <div class="camera-modal-actions">
+                <button type="button" id="camera-capture-btn">Capture</button>
+                <button type="button" id="camera-cancel-btn">Cancel</button>
+              </div>
+            </div>
+          </div>
+
           <!-- video sample rate row (hidden by default) -->
           <div class="field-row" id="video-sample-row" style="display:none;">
             <label class="field-label" for="sample-every-sec">Sample every</label>
