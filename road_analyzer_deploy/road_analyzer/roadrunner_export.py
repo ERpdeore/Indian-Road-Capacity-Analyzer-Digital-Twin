@@ -225,3 +225,56 @@ def build_ideal_road_xodr(result: dict, segment_length_m: float = DEFAULT_SEGMEN
     ideal_result = dict(result)
     ideal_result["per_defect"] = {}
     return build_single_road_xodr(ideal_result, segment_length_m=segment_length_m)
+
+
+def build_ideal_corridor_xodr(results: list[dict]) -> str:
+    """Same as build_corridor_xodr (same segment lengths, same chainage
+    ordering, same widths/lanes per photo) but with every photo's
+    detected defects stripped out first -- the IDEAL (unobstructed)
+    version of the whole corridor, for an ideal-vs-non-ideal comparison
+    across a multi-photo stretch."""
+    ideal_results = []
+    for r in results:
+        ideal_r = dict(r)
+        ideal_r["per_defect"] = {}
+        ideal_results.append(ideal_r)
+    return build_corridor_xodr(ideal_results)
+
+
+def corridor_capacity_summary(results: list[dict]) -> dict:
+    """Combines the per-photo capacity numbers already calculated for
+    each segment into ONE summary for the whole corridor, using the
+    weakest-segment (bottleneck) rule: a corridor's real capacity is
+    limited by its worst segment, not the average of all of them --
+    that's standard traffic-engineering practice, not an arbitrary
+    choice. Speeds are taken from that same bottleneck segment so the
+    numbers stay internally consistent with each other."""
+    if not results:
+        raise ValueError("No completed analyses to summarize.")
+
+    def reduced(r):
+        v = r.get("reduced_capacity_vehicles_hr")
+        return v if v is not None else float("inf")
+
+    worst = min(results, key=reduced)
+
+    original_vals = [r.get("original_capacity_vehicles_hr") for r in results
+                      if r.get("original_capacity_vehicles_hr") is not None]
+    worst_original = min(original_vals) if original_vals else worst.get("original_capacity_vehicles_hr")
+    worst_reduced  = worst.get("reduced_capacity_vehicles_hr")
+
+    loss_pct = None
+    if worst_original and worst_reduced is not None and worst_original > 0:
+        loss_pct = round((worst_original - worst_reduced) / worst_original * 100, 1)
+
+    return {
+        "original_capacity_vehicles_hr": worst_original,
+        "reduced_capacity_vehicles_hr": worst_reduced,
+        "capacity_loss_pct": loss_pct,
+        "free_flow_speed_kmh": worst.get("free_flow_speed_kmh"),
+        "congested_speed_kmh": (worst.get("traffic_regime") or {}).get("congested_speed_kmh"),
+        "bottleneck_note": (
+            f"Combined from {len(results)} photos using the weakest segment "
+            f"(lowest reduced capacity) as the corridor's real limiting capacity."
+        ),
+    }
