@@ -60,7 +60,10 @@ logger.info("Digital Twin engine loaded (pure-Python Greenshields model).")
 
 from road_analyzer.department_extensions import generate_department_report_pdf
 from road_analyzer.pothole_rectification import build_pwd_report_row
-from road_analyzer.roadrunner_export import build_single_road_xodr, build_corridor_xodr, build_ideal_road_xodr
+from road_analyzer.roadrunner_export import (
+    build_single_road_xodr, build_corridor_xodr, build_ideal_road_xodr,
+    build_ideal_corridor_xodr, corridor_capacity_summary,
+)
 
 # ----------------------------------------------------------------
 # Paths
@@ -362,6 +365,13 @@ async def analyze_image(
             "original_capacity_vehicles_hr": result.get("original_capacity_vehicles_hr"),
             "reduced_capacity_vehicles_hr": result.get("reduced_capacity_vehicles_hr"),
             "capacity_loss_pct": result.get("capacity_loss_pct"),
+            # Real Greenshields-model speeds (km/h) from this same analysis --
+            # free_flow_speed_kmh is the ideal-road speed, congested_speed_kmh
+            # is what the road actually supports with its detected defects.
+            # These drive actual vehicle speed in the RoadRunner simulation,
+            # not just vehicle count.
+            "free_flow_speed_kmh": result.get("free_flow_speed_kmh"),
+            "congested_speed_kmh": (result.get("traffic_regime") or {}).get("congested_speed_kmh"),
         }), encoding="utf-8")
     except Exception as e:
         logger.warning("RoadRunner capacity sidecar export failed: %s", e)
@@ -666,6 +676,54 @@ async def export_roadrunner_corridor(request: Request):
         content=xodr_text,
         media_type="application/xml",
         headers={"Content-Disposition": 'attachment; filename="roadrunner_corridor.xodr"'},
+    )
+
+
+@app.post("/api/export/roadrunner-corridor-ideal.xodr")
+async def export_roadrunner_corridor_ideal(request: Request):
+    # Same input contract as the real corridor export above: {"results": [...]}
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Request body must be JSON: {\"results\": [...]}")
+    results = body.get("results")
+    if not isinstance(results, list) or not results:
+        raise HTTPException(400, "Provide a non-empty 'results' list of prior analysis results.")
+    try:
+        xodr_text = build_ideal_corridor_xodr(results)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error("Ideal corridor .xodr build failed: %s", e, exc_info=True)
+        raise HTTPException(500, f"Could not build ideal corridor export: {e}")
+    return Response(
+        content=xodr_text,
+        media_type="application/xml",
+        headers={"Content-Disposition": 'attachment; filename="roadrunner_corridor_ideal.xodr"'},
+    )
+
+
+@app.post("/api/export/roadrunner-corridor-capacity.json")
+async def export_roadrunner_corridor_capacity(request: Request):
+    # Combines each photo's already-calculated capacity numbers into one
+    # summary for the whole corridor (weakest-segment rule -- see
+    # corridor_capacity_summary's docstring). This is what the RoadRunner
+    # automation reads to decide vehicle count/speed for a corridor demo.
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Request body must be JSON: {\"results\": [...]}")
+    results = body.get("results")
+    if not isinstance(results, list) or not results:
+        raise HTTPException(400, "Provide a non-empty 'results' list of prior analysis results.")
+    try:
+        summary = corridor_capacity_summary(results)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return Response(
+        content=json.dumps(summary),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="roadrunner_corridor_capacity.json"'},
     )
 
 
