@@ -955,3 +955,52 @@ canvas { width: 100% !important; }
   .twin-road-labels { grid-template-columns: 1fr; }
   .twin-stats-row   { grid-template-columns: 1fr; }
 }
+
+/* Camera capture button + modal (added for live photo capture) */
+.camera-btn {
+  margin-top: 10px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  background: #f5f5f5;
+  cursor: pointer;
+  font-size: 14px;
+}
+.camera-btn:hover { background: #e8e8e8; }
+
+.camera-modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.camera-modal-inner {
+  background: #111;
+  padding: 16px;
+  border-radius: 10px;
+  max-width: 90vw;
+}
+#camera-video {
+  max-width: 80vw;
+  max-height: 70vh;
+  border-radius: 6px;
+  display: block;
+}
+.camera-modal-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.camera-modal-actions button {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+}
+#camera-capture-btn { background: #2563eb; color: white; }
+#camera-cancel-btn { background: #444; color: white; }
