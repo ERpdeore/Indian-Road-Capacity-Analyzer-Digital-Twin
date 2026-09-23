@@ -361,17 +361,23 @@ async def analyze_image(
     # instead of an arbitrary fixed vehicle count.
     try:
         capacity_path = job_dir / f"{Path(dest).stem}_roadrunner_capacity.json"
+        cap_calc = result.get("capacity_calculation") or {}
         capacity_path.write_text(json.dumps({
             "original_capacity_vehicles_hr": result.get("original_capacity_vehicles_hr"),
             "reduced_capacity_vehicles_hr": result.get("reduced_capacity_vehicles_hr"),
             "capacity_loss_pct": result.get("capacity_loss_pct"),
-            # Real Greenshields-model speeds (km/h) from this same analysis --
-            # free_flow_speed_kmh is the ideal-road speed, congested_speed_kmh
-            # is what the road actually supports with its detected defects.
-            # These drive actual vehicle speed in the RoadRunner simulation,
-            # not just vehicle count.
             "free_flow_speed_kmh": result.get("free_flow_speed_kmh"),
             "congested_speed_kmh": (result.get("traffic_regime") or {}).get("congested_speed_kmh"),
+            # Extra fields for the 2D roadtwin.m animation -- a fully
+            # deterministic MATLAB-only visualization (no RoadRunner app,
+            # no asset-library dependency) so vehicle placement/movement
+            # is 100% under our own control, never "random."
+            "total_width_m": cap_calc.get("total_width_m"),
+            "total_blocked_m": cap_calc.get("total_blocked_m"),
+            "width_factor": cap_calc.get("width_factor"),
+            "pothole_penalty": cap_calc.get("pothole_penalty"),
+            "num_lanes": (result.get("road_config") or {}).get("num_lanes"),
+            "defects_found": list((result.get("per_defect") or {}).keys()),
         }), encoding="utf-8")
     except Exception as e:
         logger.warning("RoadRunner capacity sidecar export failed: %s", e)
