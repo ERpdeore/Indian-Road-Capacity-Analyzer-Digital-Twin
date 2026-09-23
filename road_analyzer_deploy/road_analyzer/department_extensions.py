@@ -73,6 +73,17 @@ DEFAULT_DEPARTMENT = {
 }
 
 
+def _format_survey_date(analysis_date: Optional[str]) -> str:
+    """'2026-09-23' -> '23 Sep 2026'. Falls back to today's date if missing
+    or unparseable, so the report never prints a blank or a raw ISO string."""
+    if analysis_date:
+        try:
+            return datetime.strptime(analysis_date.strip(), "%Y-%m-%d").strftime("%d %b %Y")
+        except ValueError:
+            pass
+    return datetime.now().strftime("%d %b %Y")
+
+
 def _styles():
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(
@@ -145,11 +156,18 @@ def generate_department_report_pdf(result: dict, output_path: str,
     irc_basis   = result.get("irc_basis", {}) or {}
     generated_at = datetime.now().strftime("%d %b %Y, %I:%M %p")
 
+    # Date the site photo/video was actually analysed (set by the operator
+    # on the dashboard, defaulting to today) — distinct from generated_at
+    # above, which is just when this PDF file happened to be rendered.
+    # This is the date that belongs on a department report: "survey date",
+    # not "PDF render timestamp".
+    survey_date = _format_survey_date(road_config.get("analysis_date"))
+
     # ---- Header ----
     story.append(Paragraph("Road Capacity Obstruction Report", styles["ReportTitle"]))
     story.append(Paragraph(
-        f"Generated {generated_at} &middot; Site: {site_label or result.get('image', '-')} "
-        f"&middot; IRC:106-1990 Table 2 basis",
+        f"Date of analysis: <b>{survey_date}</b> &middot; Site: {site_label or result.get('image', '-')} "
+        f"&middot; IRC:106-1990 Table 2 basis &middot; Report generated {generated_at}",
         styles["ReportSubtitle"],
     ))
     story.append(HRFlowable(width="100%", color=colors.HexColor("#cbd5e1"), thickness=1))
@@ -161,6 +179,7 @@ def generate_department_report_pdf(result: dict, output_path: str,
         guidance = f"{guidance.get('band', '-')} — {guidance.get('action', '-')}"
 
     summary_rows = [
+        ["Date of analysis", survey_date],
         ["Carriageway type", str(irc_basis.get("carriageway_key", "-"))],
         ["Fringe condition", str(irc_basis.get("fringe_desc", "-"))],
         ["Total carriageway width", f"{road_config.get('total_width_m', '-')} m"],
