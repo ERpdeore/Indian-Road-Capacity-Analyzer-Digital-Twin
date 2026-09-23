@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import uuid
+from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -144,6 +145,24 @@ def _unique_dest(job_dir: Path, filename: str) -> Path:
         n += 1
 
 
+def _normalise_analysis_date(analysis_date: str) -> str:
+    """
+    Returns a plain 'YYYY-MM-DD' string. The frontend's <input type="date">
+    always sends one already, defaulted to today by app.js on page load, but
+    this is the backstop for direct API calls that omit it, send it blank,
+    or send something malformed — same date shown on screen must be the date
+    that lands in the department report PDF, so this is the one place both
+    the live UI and the PDF ultimately derive it from when the client didn't
+    supply a valid one.
+    """
+    if analysis_date:
+        try:
+            return datetime.strptime(analysis_date.strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            logger.warning("Ignoring unparseable analysis_date %r — using today's date instead.", analysis_date)
+    return date.today().isoformat()
+
+
 def _road_config_from_form(
     total_width_m:    float,
     num_lanes:        int,
@@ -152,6 +171,7 @@ def _road_config_from_form(
     usable_shoulder_m: float,
     traffic_regime:   str = "low",
     chainage_m:       float = 0.0,
+    analysis_date:    str = "",
 ) -> dict:
     if carriageway_key not in IRC106_DSV:
         raise HTTPException(400, f"Unknown carriageway_key '{carriageway_key}'. "
@@ -188,6 +208,7 @@ def _road_config_from_form(
         "usable_shoulder_m": float(usable_shoulder_m),
         "traffic_regime":   traffic_regime,
         "chainage_m":       float(chainage_m),
+        "analysis_date":    _normalise_analysis_date(analysis_date),
     }
 
 
@@ -275,10 +296,12 @@ async def analyze_image(
     usable_shoulder_m: float = Form(...),
     traffic_regime:    str   = Form("low"),
     chainage_m:        float = Form(0.0),
+    analysis_date:     str   = Form(""),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
         fringe_condition, usable_shoulder_m, traffic_regime, chainage_m,
+        analysis_date,
     )
 
     # Fresh job_id for EVERY request — this is what fixes the
@@ -477,6 +500,7 @@ async def analyze_batch(
     fringe_condition:  str   = Form(...),
     usable_shoulder_m: float = Form(...),
     traffic_regime:    str   = Form("low"),
+    analysis_date:     str   = Form(""),
 ):
     if not files:
         raise HTTPException(400, "Upload at least one image.")
@@ -484,6 +508,7 @@ async def analyze_batch(
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
         fringe_condition, usable_shoulder_m, traffic_regime,
+        chainage_m=0.0, analysis_date=analysis_date,
     )
 
     job_id, job_dir = _new_job("batch")
@@ -566,10 +591,12 @@ async def analyze_video(
     usable_shoulder_m: float = Form(...),
     sample_every_sec:  float = Form(1.0),
     traffic_regime:    str   = Form("low"),
+    analysis_date:     str   = Form(""),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
         fringe_condition, usable_shoulder_m, traffic_regime,
+        chainage_m=0.0, analysis_date=analysis_date,
     )
 
     job_id, job_dir = _new_job("video")
