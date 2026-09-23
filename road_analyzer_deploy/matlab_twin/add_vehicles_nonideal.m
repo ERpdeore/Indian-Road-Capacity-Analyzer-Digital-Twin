@@ -1,9 +1,14 @@
-function add_vehicles_nonideal(rrApp, numVehicles)
+function add_vehicles_nonideal(rrApp, numVehicles, speedKmh, roadLength_m)
 %ADD_VEHICLES_NONIDEAL  Traffic for the NON-IDEAL (defect-affected) road.
-%   numVehicles: how many cars to place -- normally computed by
+%   numVehicles : how many cars to place -- normally computed by
 %   auto_import_roadrunner.m from your REAL reduced-capacity number
 %   (vehicles/hr), so fewer vehicles here visually represents the actual
 %   capacity loss your analysis calculated, not an arbitrary guess.
+%   speedKmh    : real congested speed from the capacity JSON (defaults
+%                 to 30 km/h if not supplied).
+%   roadLength_m: REAL road length parsed from the .xodr by
+%                 auto_import_roadrunner.m (defaults to 40 if not
+%                 supplied). Previously hardcoded here.
 %
 %   Vehicles get only a small safe sideways jitter (+/-0.3m) to suggest
 %   weaving around obstructions, while staying anchored to the real lane
@@ -13,19 +18,26 @@ function add_vehicles_nonideal(rrApp, numVehicles)
     if nargin < 2 || isempty(numVehicles)
         numVehicles = 6;
     end
+    if nargin < 3 || isempty(speedKmh)
+        speedKmh = 30;   % non-ideal-road default congested speed
+    end
+    if nargin < 4 || isempty(roadLength_m)
+        roadLength_m = 40;   % fallback only -- real value now comes from the caller
+    end
 
-    fprintf('      Placing %d non-ideal vehicles...\n', numVehicles);
+    fprintf('      Placing %d non-ideal vehicles on a %.1fm road at %.0f km/h...\n', ...
+        numVehicles, roadLength_m, speedKmh);
 
     newScenario(rrApp);
     rrApi = roadrunnerAPI(rrApp);
     scnro = rrApi.Scenario;
     prj   = rrApi.Project;
 
-    roadLength_m = 40;   % matches DEFAULT_SEGMENT_LENGTH_M in roadrunner_export.py
     margin_m     = 3;
-    usable_m     = roadLength_m - 2*margin_m;
+    usable_m     = max(roadLength_m - 2*margin_m, 1);
     spacing_m    = usable_m / max(numVehicles, 1);
-    driveDist    = min(8, spacing_m * 0.6);
+
+    driveDist = min(spacing_m * 0.6, max(speedKmh / 50 * 8, 2));
 
     jitter = 0.3;   % small, safe sideways variation -- stays within the lane
 
