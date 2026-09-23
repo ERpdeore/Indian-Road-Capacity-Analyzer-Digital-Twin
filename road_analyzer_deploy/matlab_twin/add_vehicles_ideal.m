@@ -1,6 +1,16 @@
-function add_vehicles_ideal(rrApp, numVehicles)
+function add_vehicles_ideal(rrApp, numVehicles, speedKmh, roadLength_m)
 %ADD_VEHICLES_IDEAL  Orderly, evenly-spaced traffic for the IDEAL road.
-%   numVehicles: how many cars to place (defaults to 6).
+%   numVehicles : how many cars to place (defaults to 6).
+%   speedKmh    : free-flow speed for this road, from the real capacity
+%                 JSON (defaults to 50 km/h if not supplied). Used to
+%                 scale how far each vehicle's initial route point sits
+%                 ahead of it, so a faster road visibly shows vehicles
+%                 further along their lane, not just more of them.
+%   roadLength_m: REAL road length parsed from the .xodr by
+%                 auto_import_roadrunner.m (defaults to 40 if not
+%                 supplied). Previously this was hardcoded here, which
+%                 silently ignored the actual road length and could
+%                 place vehicles past the end of shorter/longer roads.
 %
 %   Vehicles are placed centered in the lane (no manual sideways offset)
 %   and snapped onto the road via autoAnchor -- this keeps them from
@@ -9,19 +19,29 @@ function add_vehicles_ideal(rrApp, numVehicles)
     if nargin < 2 || isempty(numVehicles)
         numVehicles = 6;
     end
+    if nargin < 3 || isempty(speedKmh)
+        speedKmh = 50;   % ideal-road default free-flow speed
+    end
+    if nargin < 4 || isempty(roadLength_m)
+        roadLength_m = 40;   % fallback only -- real value now comes from the caller
+    end
 
-    fprintf('      Placing %d ideal (orderly) vehicles...\n', numVehicles);
+    fprintf('      Placing %d ideal (orderly) vehicles on a %.1fm road at %.0f km/h...\n', ...
+        numVehicles, roadLength_m, speedKmh);
 
     newScenario(rrApp);
     rrApi = roadrunnerAPI(rrApp);
     scnro = rrApi.Scenario;
     prj   = rrApi.Project;
 
-    roadLength_m = 40;   % matches DEFAULT_SEGMENT_LENGTH_M in roadrunner_export.py
     margin_m     = 3;    % keep clear of the very start/end of the road
-    usable_m     = roadLength_m - 2*margin_m;
+    usable_m     = max(roadLength_m - 2*margin_m, 1);
     spacing_m    = usable_m / max(numVehicles, 1);
-    driveDist    = min(10, spacing_m * 0.6);  % how far each vehicle drives forward
+
+    % Faster roads => each vehicle's initial route point sits further
+    % ahead, visually implying more forward motion; capped so it never
+    % overlaps the next vehicle's start position.
+    driveDist = min(spacing_m * 0.6, max(speedKmh / 50 * 10, 3));
 
     placed = 0;
     for i = 1:numVehicles
