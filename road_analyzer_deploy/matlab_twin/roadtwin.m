@@ -1,17 +1,21 @@
-function roadtwin()
+function roadtwin(jsonPath)
 %% ================================================================
 %% INDIAN ROAD CAPACITY DIGITAL TWIN
 %% File: roadtwin.m
 %%
-%% USAGE:
-%%   1. Open MATLAB
-%%   2. cd to folder containing this file
-%%   3. Type: roadtwin
-%%   4. Press Enter
+%% USAGE (with your REAL analysis data -- recommended):
+%%   roadtwin('C:\Users\Admin\Downloads\images (1)_roadrunner_capacity.json')
+%%   (or just run 3_run_2D_digital_twin.bat, which finds this automatically)
+%%
+%% USAGE (with placeholder demo numbers, no real data):
+%%   roadtwin()
 %%
 %% WHAT YOU SEE:
-%%   TOP    = Ideal road  : vehicles flow at 50 km/h, full capacity
+%%   TOP    = Ideal road  : vehicles flow at free-flow speed, full capacity
 %%   BOTTOM = Defect road : vehicles slow at obstacle, queue builds
+%%   This is 100% deterministic MATLAB plotting -- no RoadRunner app, no
+%%   3D asset library, nothing that can place vehicles "randomly." Every
+%%   position here is a number I set directly.
 %%
 %% VIDEO: roadtwin_video.avi saved in same folder after animation
 %% ================================================================
@@ -19,8 +23,14 @@ function roadtwin()
 clc;
 fprintf('Road Digital Twin starting...\n');
 
+if nargin < 1
+    jsonPath = '';
+end
+
 %% ============================================================
-%% PARAMETERS  (edit to match your analysis output)
+%% PARAMETERS -- loaded from your REAL analysis data if a JSON path
+%% was given and found; otherwise falls back to demo defaults below,
+%% so this always runs even with no data.
 %% ============================================================
 BASE_DSV        = 1500;
 REDUCED_CAP     = 1050;
@@ -31,22 +41,68 @@ WIDTH_FACTOR    = 0.700;
 POTHOLE_PENALTY = 0.85;
 NUM_LANES       = 2;
 DEFECTS         = 'pothole + street vendor';
-
-%% IRC Design Speed (km/h) — based on carriageway type and fringe condition
-%% IRC:106-1990 / IRC:64-1990 design speed guidance:
-%%   2-lane twoway arterial    = 50 km/h
-%%   4-lane divided arterial   = 80 km/h
-%%   6-lane divided arterial   = 100 km/h
-%%   any collector             = 30 km/h
-%%   any sub-arterial 2-lane   = 40 km/h
-%% When downloaded from dashboard, this is auto-filled correctly.
-FREE_FLOW_SPEED = 50;   %% <-- CHANGE THIS to match your road type
+FREE_FLOW_SPEED = 50;
 
 HAS_POTHOLE   = true;
 HAS_VENDOR    = true;
 HAS_PARKING   = false;
 HAS_BARRICADE = false;
 HAS_GARBAGE   = false;
+
+usedRealData = false;
+if ~isempty(jsonPath) && isfile(jsonPath)
+    try
+        cap = jsondecode(fileread(jsonPath));
+        if isfield(cap,'original_capacity_vehicles_hr') && ~isempty(cap.original_capacity_vehicles_hr)
+            BASE_DSV = cap.original_capacity_vehicles_hr;
+        end
+        if isfield(cap,'reduced_capacity_vehicles_hr') && ~isempty(cap.reduced_capacity_vehicles_hr)
+            REDUCED_CAP = cap.reduced_capacity_vehicles_hr;
+        end
+        if isfield(cap,'capacity_loss_pct') && ~isempty(cap.capacity_loss_pct)
+            CAP_LOSS_PCT = cap.capacity_loss_pct;
+        end
+        if isfield(cap,'total_width_m') && ~isempty(cap.total_width_m)
+            TOTAL_WIDTH_M = cap.total_width_m;
+        end
+        if isfield(cap,'total_blocked_m') && ~isempty(cap.total_blocked_m)
+            BLOCKED_M = cap.total_blocked_m;
+        end
+        if isfield(cap,'width_factor') && ~isempty(cap.width_factor)
+            WIDTH_FACTOR = cap.width_factor;
+        end
+        if isfield(cap,'pothole_penalty') && ~isempty(cap.pothole_penalty)
+            POTHOLE_PENALTY = cap.pothole_penalty;
+        end
+        if isfield(cap,'num_lanes') && ~isempty(cap.num_lanes)
+            NUM_LANES = cap.num_lanes;
+        end
+        if isfield(cap,'free_flow_speed_kmh') && ~isempty(cap.free_flow_speed_kmh)
+            FREE_FLOW_SPEED = cap.free_flow_speed_kmh;
+        end
+        if isfield(cap,'defects_found') && ~isempty(cap.defects_found)
+            found = cellstr(string(cap.defects_found));
+            HAS_POTHOLE   = any(strcmp(found, 'pothole'));
+            HAS_VENDOR    = any(strcmp(found, 'street_vendor'));
+            HAS_PARKING   = any(strcmp(found, 'illegal_parking'));
+            HAS_BARRICADE = any(strcmp(found, 'barricade'));
+            HAS_GARBAGE   = any(strcmp(found, 'garbage'));
+            DEFECTS = strjoin(strrep(found, '_', ' '), ' + ');
+            if isempty(DEFECTS)
+                DEFECTS = 'none detected';
+            end
+        end
+        usedRealData = true;
+        fprintf('Loaded REAL analysis data from: %s\n', jsonPath);
+    catch e
+        fprintf('Could not read %s (%s) -- using demo placeholder numbers instead.\n', jsonPath, e.message);
+    end
+else
+    fprintf('No data file given/found -- using demo placeholder numbers.\n');
+end
+if ~usedRealData
+    fprintf('NOTE: this run is showing DEMO numbers, not your real analysis. Pass a capacity JSON path to use real data.\n');
+end
 
 SAVE_VIDEO    = true;
 VIDEO_SEC     = 8;
@@ -57,6 +113,7 @@ VIDEO_FPS     = 20;
 %% ============================================================
 FREE_SPD = FREE_FLOW_SPEED;
 CONG_SPD = FREE_SPD * (1 - (1 - REDUCED_CAP/BASE_DSV) * 0.5);
+
 
 fprintf('Base DSV      : %d PCU/hr\n', round(BASE_DSV));
 fprintf('Reduced cap   : %d PCU/hr  (%.1f%% loss)\n', round(REDUCED_CAP), CAP_LOSS_PCT);
