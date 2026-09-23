@@ -832,148 +832,6 @@
     }).join("")}</div>`;
   }
 
-  // ----------------------------------------------------------------
-  // RoadRunner vehicle-motion script
-  // ----------------------------------------------------------------
-  // This does ONE job: add moving vehicles to a scene you've already
-  // built. It assumes the road itself, and the defect markers on it,
-  // came from importing the .xodr file (see xodrButtonHTML below) —
-  // either by hand (File > Import > ASAM OpenDRIVE in RoadRunner) or
-  // some other way you already have a road in this project. This
-  // script does NOT place defects or build road geometry — that's the
-  // .xodr file's job, and it does it more reliably (no guessed asset
-  // paths, no assumptions about where your road sits in world space).
-  //
-  // What actually makes a vehicle move — verified against MathWorks'
-  // own docs, not assumed: placing an actor with addActor() and no
-  // custom behavior already gives it RoadRunner's default lane-following
-  // behavior for free. The only extra step is setting its speed, via
-  // the actor's auto-created initial Change Speed action.
-  //
-  // VEHICLE COUNT — PHASE A (generic vehicles, no classification yet):
-  // How many vehicles is derived from your Digital Twin panel's own
-  // numbers using basic traffic flow theory: density = flow ÷ speed.
-  //   density (PCU/km) = defect_capacity_pcu_hr ÷ steady_state_speed_kmh
-  //   vehicles in this segment = density × (segment length in km)
-  // Each spawned vehicle is treated as 1 generic unit (not weighted by
-  // real PCU-per-type, since there's no per-class breakdown yet — that's
-  // Phase B, once the vehicle-counting/classification module exists and
-  // can tell this script the REAL mix of cars/two-wheelers/autos/buses/
-  // trucks instead of identical sedans).
-  // If the Digital Twin panel hasn't finished its calculation yet when
-  // you click download, this falls back to 1 vehicle — wait for the
-  // "Simulation complete" badge on the twin panel before downloading
-  // for an accurate count.
-  //
-  // REQUIRES: MATLAB R2025a+, Automated Driving Toolbox, RoadRunner.
-  function generateRoadRunnerScript(data) {
-    const tr        = data.traffic_regime || {};
-    const freeFlow  = data.free_flow_speed_kmh || 50;
-    const congested = tr.congested_speed_kmh || Math.round(freeFlow * 0.7);
-    const speedMs   = (congested / 3.6).toFixed(2);
-    const image     = data.image || "unknown";
-    const segmentM  = 40;  // must match roadrunner_export.py's DEFAULT_SEGMENT_LENGTH_M
-
-    const twin = DT.lastSummary || {};
-    const flowPcuHr  = twin.defect_capacity_pcu_hr;
-    const speedForDensity = twin.steady_state_speed_kmh || congested;
-    let vehicleCount = 1;
-    let densityNote  = "Digital Twin data not ready yet — defaulted to 1 vehicle. Wait for \"Simulation complete\" on the twin panel and re-download for an accurate count.";
-    if (flowPcuHr && speedForDensity > 0) {
-      const densityPcuKm = flowPcuHr / speedForDensity;        // PCU per km, whole road
-      const raw = densityPcuKm * (segmentM / 1000);            // PCU in this segment
-      vehicleCount = Math.max(1, Math.min(20, Math.round(raw)));
-      densityNote = `Derived from Digital Twin: ${flowPcuHr} PCU/hr \u00f7 ${speedForDensity} km/h = ${densityPcuKm.toFixed(1)} PCU/km \u00d7 ${segmentM}m segment \u2248 ${raw.toFixed(1)} \u2192 ${vehicleCount} vehicle(s).`;
-    }
-
-    // Spread vehicles evenly along the segment so they don't overlap.
-    // Alternate left/right lane (t offset) purely for visual variety —
-    // not derived from any real lane-occupancy data.
-    const spawnLines = [];
-    for (let i = 0; i < vehicleCount; i++) {
-      const sPos = Math.round((segmentM / (vehicleCount + 1)) * (i + 1));
-      const tOff = (i % 2 === 0) ? -1.5 : 1.5;
-      spawnLines.push(
-        `carAsset = getAsset(prj, VEHICLE_ASSET, "VehicleAsset");`,
-        `carPos${i}   = [${sPos}, ${tOff}, 0];   % vehicle ${i + 1} of ${vehicleCount}`,
-        `car${i}      = addActor(scnro, carAsset, carPos${i});`,
-        `initPhase${i} = initialPhaseForActor(rrLogic, car${i});`,
-        `initSpeed${i} = findActions(initPhase${i}, "ChangeSpeedAction");`,
-        `initSpeed${i}.Speed = TARGET_SPEED_MS;`,
-        ``
-      );
-    }
-
-    return [
-      "%% ================================================================",
-      "%% ROADRUNNER — ADD MOVING VEHICLES",
-      `%% Source image: ${image}`,
-      `%% This defect condition's typical speed: ${congested} km/h (${speedMs} m/s)`,
-      `%% Vehicle count: ${vehicleCount} — ${densityNote}`,
-      "%%",
-      "%% BEFORE RUNNING: import your .xodr file into this project's scene",
-      "%% first (File > Import > ASAM OpenDRIVE in RoadRunner, or see the",
-      "%% roadrunner.importScene MATLAB function if you want to script that",
-      "%% step too). This script only adds and drives vehicles on a road",
-      "%% that already exists.",
-      "%%",
-      "%% EDIT THESE before running:",
-      'PROJECT_FOLDER = "C:\\path\\to\\your\\RoadRunnerProject";   % <-- EDIT',
-      'SCENE_FILE     = "YourScene.rrscene";                     % <-- EDIT (the scene you imported the .xodr into)',
-      'VEHICLE_ASSET  = "Vehicles/Sedan.fbx";                    % <-- EDIT if you use a different vehicle asset (all vehicles are this one type until Phase B)',
-      `TARGET_SPEED_MS = ${speedMs};    % m/s — defaults to this photo's congested-condition speed`,
-      "%% ================================================================",
-      "",
-      "%% ---- Connect to RoadRunner ----",
-      "rrApp = roadrunner(ProjectFolder=PROJECT_FOLDER);",
-      "openScene(rrApp, SCENE_FILE);",
-      "",
-      "rrApi  = roadrunnerAPI(rrApp);",
-      "scnro  = rrApi.Scenario;",
-      "prj    = rrApi.Project;",
-      "rrLogic = scnro.PhaseLogic;",
-      "",
-      `%% ---- Add ${vehicleCount} vehicle(s), each with default lane-following + set speed ----`,
-      ...spawnLines,
-      "%% ---- Run it ----",
-      `disp("${vehicleCount} vehicle(s) added, driving at " + TARGET_SPEED_MS + " m/s (${congested} km/h).");`,
-      "simulateScenario(rrApp);",
-    ].join("\n");
-  }
-
-  function roadRunnerButtonHTML(data) {
-    return `
-      <div class="action-bar">
-        <div class="action-bar-info">
-          <span class="action-bar-icon">🛣️</span>
-          <div>
-            <div class="action-bar-title">RoadRunner Vehicle Script</div>
-            <div class="action-bar-sub">Downloads a MATLAB script that adds a moving vehicle, driven at this
-            defect condition's typical speed, to a scene you've already imported the .xodr road into.
-            Run this AFTER importing the .xodr file below — it drives a vehicle, it doesn't build the road.</div>
-          </div>
-        </div>
-        <button class="action-dl-btn" id="roadrunner-dl-btn">
-          ↓ Download RoadRunner Script
-        </button>
-      </div>`;
-  }
-
-  function attachRoadRunnerButton(data) {
-    const btn = document.getElementById('roadrunner-dl-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      const script = generateRoadRunnerScript(data);
-      const blob   = new Blob([script], { type: 'text/plain' });
-      const url    = URL.createObjectURL(blob);
-      const a      = document.createElement('a');
-      a.href       = url;
-      a.download   = 'roadrunner_scenario.m';
-      a.click();
-      URL.revokeObjectURL(url);
-    });
-  }
-
   function xodrButtonHTML(data) {
     if (!data.roadrunner_xodr_available || !data.job_id) return "";
     return `
@@ -1150,16 +1008,12 @@
     resultsRoot.innerHTML =
       heroHTML(data) +
       defectAlertBannerHTML(data.per_defect) +
-      roadRunnerButtonHTML(data) +
       xodrButtonHTML(data) +
       departmentReportButtonHTML(data) +
       corridorButtonHTML() +
       roadbarHTML(data.road_config || {}, data.per_defect || {}) +
       `<div class="section-title">Defects Detected - Capacity Loss &amp; Recommended Actions</div>` +
       defectGridHTML(data.per_defect);
-
-    // Attach RoadRunner script download button click handler
-    attachRoadRunnerButton(data);
 
     // Track this analysis for the "combine into one corridor" export —
     // session-only (in browser memory), not persisted server-side.
