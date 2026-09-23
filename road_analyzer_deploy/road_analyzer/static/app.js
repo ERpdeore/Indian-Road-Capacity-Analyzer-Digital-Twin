@@ -837,20 +837,23 @@
     return `
       <div class="action-bar">
         <div class="action-bar-info">
-          <span class="action-bar-icon">🗺️</span>
+          <span class="action-bar-icon">🛣️</span>
           <div>
-            <div class="action-bar-title">RoadRunner Road (.xodr)</div>
-            <div class="action-bar-sub">A real OpenDRIVE file — import it in RoadRunner (File \u2192 Import \u2192
-            ASAM OpenDRIVE) and it builds the 3D road and places your detected defects automatically. No manual
-            road-drawing, no asset-path guessing. Straight segment only \u2014 see the file's own comments for why.</div>
+            <div class="action-bar-title">Digital Twin Bundle (.zip)</div>
+            <div class="action-bar-sub">Everything for the 3D RoadRunner simulation in one download: the ideal
+            road, the non-ideal (defect) road, the capacity numbers, and the MATLAB scripts + one-click launchers.
+            Extract this straight into your Downloads folder, then double-click
+            <code>run_ideal_digital_twin.bat</code> and <code>run_nonideal_digital_twin.bat</code> to see each
+            simulation — open both to compare side by side.</div>
           </div>
         </div>
-        <a class="action-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/roadrunner.xodr"
+        <a class="action-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/bundle.zip"
            download>
-          ↓ Download .xodr
+          ↓ Download Everything (.zip)
         </a>
       </div>`;
   }
+
 
   // Results from every image analysed THIS BROWSER SESSION — used only
   // to build the multi-photo corridor export below. Not sent anywhere
