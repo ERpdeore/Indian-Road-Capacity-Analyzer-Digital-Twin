@@ -26,6 +26,8 @@ import os
 import re
 import shutil
 import uuid
+import io
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional
@@ -78,6 +80,11 @@ UPLOAD_DIR  = BASE_DIR / "uploads"
 RESULTS_DIR = BASE_DIR / "results"
 MODELS_DIR  = BASE_DIR / "models"
 STATIC_DIR  = BASE_DIR / "static"
+# road_analyzer_deploy/matlab_twin — sibling of road_analyzer/, one level
+# above this file's own folder. Holds the STATIC (not per-job) MATLAB
+# helper scripts that /api/jobs/{job_id}/bundle.zip packages alongside
+# each job's generated .xodr/.json files.
+MATLAB_TWIN_DIR = BASE_DIR.parent / "matlab_twin"
 
 for d in (UPLOAD_DIR, RESULTS_DIR, MODELS_DIR, STATIC_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -792,6 +799,92 @@ def get_roadrunner_ideal_xodr(job_id: str):
         str(xodrs[0]),
         media_type="application/xml",
         filename=xodrs[0].name,
+    )
+
+
+# Static (not per-job) files bundle.zip pulls from matlab_twin/ alongside
+# whatever the job actually generated. Listed by filename, not glob,
+# since these are fixed helper scripts, not per-job output.
+_BUNDLE_STATIC_FILES = [
+    "auto_import_roadrunner.m",
+    "add_vehicles_ideal.m",
+    "add_vehicles_nonideal.m",
+    "run_ideal_digital_twin.bat",
+    "run_nonideal_digital_twin.bat",
+]
+
+
+@app.get("/api/jobs/{job_id}/bundle.zip")
+def get_digital_twin_bundle(job_id: str):
+    """Everything the 'Digital Twin Bundle' button on the dashboard
+    promises: this job's ideal .xodr, non-ideal .xodr and capacity JSON,
+    plus the static matlab_twin/ scripts and .bat launchers needed to
+    actually run them in RoadRunner. Previously this route didn't exist
+    at all — the frontend linked to it, but nothing on the backend
+    served it, so every click 404'd."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", job_id):
+        raise HTTPException(400, "Invalid job_id.")
+    job_dir = RESULTS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(404, f"Unknown job_id '{job_id}'.")
+
+    # Per-job generated files — include whichever actually exist; each
+    # was generated independently (and independently allowed to fail)
+    # by the analyze endpoint, so don't require all three.
+    job_patterns = [
+        "*_roadrunner.xodr",
+        "*_roadrunner_ideal.xodr",
+        "*_roadrunner_capacity.json",
+    ]
+    job_files: list[Path] = []
+    for pat in job_patterns:
+        job_files.extend(sorted(job_dir.glob(pat)))
+
+    if not job_files:
+        raise HTTPException(
+            404,
+            "No RoadRunner export was generated for this job yet — analyse "
+            "an image first, then download the bundle.",
+        )
+
+    missing_static = [
+        name for name in _BUNDLE_STATIC_FILES
+        if not (MATLAB_TWIN_DIR / name).is_file()
+    ]
+    if missing_static:
+        logger.warning(
+            "bundle.zip: matlab_twin/ is missing %s — packaging job files "
+            "without them.", missing_static)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in job_files:
+            zf.write(f, arcname=f.name)
+        for name in _BUNDLE_STATIC_FILES:
+            src = MATLAB_TWIN_DIR / name
+            if src.is_file():
+                zf.write(src, arcname=name)
+        zf.writestr(
+            "HOW_TO_USE.txt",
+            "1. Extract this zip anywhere on your machine.\n"
+            "2. Set the MATLAB_EXE environment variable to your matlab.exe "
+            "path (see the .bat files for the default location they try "
+            "first).\n"
+            "3. Double-click run_ideal_digital_twin.bat to open the "
+            "defect-free version of this road in RoadRunner.\n"
+            "4. Double-click run_nonideal_digital_twin.bat to open the "
+            "version with the detected defects placed on it.\n"
+            "5. Both scripts read the matching .xodr/.json in this same "
+            "folder automatically — keep everything together.\n",
+        )
+    buf.seek(0)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{job_id}_digital_twin_bundle.zip"'
+        },
     )
 
 
