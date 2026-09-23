@@ -15,3 +15,4 @@ psutil==6.0.0
 timm==1.0.9
 reportlab==4.2.5
 scenariogeneration==0.16.6
+openpyxl==3.1.5
