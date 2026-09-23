@@ -13,7 +13,7 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     end
 
     % ---- FILLED IN based on your screenshots -- double check these two! ----
-    RESULTS_DIR = 'C:\Users\Admin\Downloads';   % where your browser downloads land
+    RESULTS_DIR = 'C:\Users\Admin\Desktop';   % where you actually put the bundle's files
     if nargin < 3 || isempty(project_folder)
         project_folder = 'C:\Users\Admin\OneDrive\Documents\final year\matlab roadrunner\New RoadRunner Project';
     end
@@ -29,7 +29,7 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
 
     if nargin < 2 || isempty(xodr_path)
         fprintf('No file given -- looking for the most recent "%s" export in:\n  %s\n', mode, RESULTS_DIR);
-        matches = dir(fullfile(RESULTS_DIR, filePattern));   % non-recursive: Downloads is flat
+        matches = dir(fullfile(RESULTS_DIR, filePattern));   % non-recursive: RESULTS_DIR must be flat (no subfolders)
         if strcmp(mode, 'nonideal')
             matches = matches(~contains({matches.name}, '_ideal.xodr'));
         end
