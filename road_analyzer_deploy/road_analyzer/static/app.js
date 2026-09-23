@@ -26,6 +26,17 @@
   const runBtn        = document.getElementById("run-btn");
   const runBtnLabel   = document.getElementById("run-btn-label");
   const modelStatusEl = document.getElementById("model-status");
+  const analysisDateEl = document.getElementById("analysis_date");
+
+  // Default the date field to today (local time, not UTC) on load. It's
+  // a normal <input type="date"> inside #config-form, so FormData(configForm)
+  // already picks it up for every mode (image/batch/video) with no extra
+  // wiring below — same field, same name, sent through to every endpoint.
+  if (analysisDateEl && !analysisDateEl.value) {
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    analysisDateEl.value = local.toISOString().slice(0, 10);
+  }
 
   const statusPanel = document.getElementById("status-panel");
   const statusText  = document.getElementById("status-text");
@@ -549,6 +560,17 @@
     return String(s).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
+  // "2026-09-23" -> "23 Sep 2026". Falls back to the raw string (or "—")
+  // if it isn't a plain YYYY-MM-DD value, rather than showing "Invalid Date".
+  function formatDateDisplay(isoDate) {
+    if (!isoDate) return "—";
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+    if (!m) return isoDate;
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    if (isNaN(d.getTime())) return isoDate;
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  }
+
   const DEFECT_COLORS = {
     barricade:       "#D9534F",
     pothole:         "#C97A3D",
@@ -574,6 +596,7 @@
 
     const regime   = data.traffic_regime || {};
     const stripParts = [
+      ["Date",           formatDateDisplay(cfg.analysis_date)],
       ["Carriageway",    titleCase(cfg.carriageway_key || "")],
       ["Fringe",         titleCase(cfg.fringe_condition || "")],
       ["Total width",    cfg.total_width_m   != null ? cfg.total_width_m   + " m" : null],
@@ -587,7 +610,7 @@
     return `
       <div class="hero">
         <div class="card hero-main">
-          <div class="eyebrow">Analysed · <span class="image-name">${data.image || "untitled"}</span></div>
+          <div class="eyebrow">Analysed ${cfg.analysis_date ? `· ${formatDateDisplay(cfg.analysis_date)} ` : ""}· <span class="image-name">${data.image || "untitled"}</span></div>
           <div class="big-number">${fmt(data.reduced_capacity_pcu_hr, 0)} <small>PCU/hr usable capacity</small></div>
           <div class="compare">
             <div class="item">
@@ -1046,6 +1069,7 @@
     resultsRoot.innerHTML = `
       <div class="card" style="margin-bottom:24px;">
         <div class="card-title">Batch Summary - ${data.num_succeeded}/${data.num_images} images analysed</div>
+        <div class="card-sub">Date of analysis: ${formatDateDisplay((data.road_config || {}).analysis_date)}</div>
         <div class="batch-summary-row">
           <div class="batch-stat"><div class="l">Worst capacity loss</div><div class="v loss">${fmt(data.worst_capacity_loss_pct,1)}%</div></div>
           <div class="batch-stat"><div class="l">Average capacity loss</div><div class="v">${fmt(data.avg_capacity_loss_pct,1)}%</div></div>
@@ -1094,6 +1118,7 @@
     resultsRoot.innerHTML = `
       <div class="card" style="margin-bottom:24px;">
         <div class="card-title">Video Summary - ${data.video}</div>
+        <div class="card-sub">Date of analysis: ${formatDateDisplay((data.road_config || {}).analysis_date)}</div>
         <div class="batch-summary-row">
           <div class="batch-stat"><div class="l">Worst moment</div><div class="v loss">${fmt(data.worst_capacity_loss_pct,1)}%</div></div>
           <div class="batch-stat"><div class="l">Average capacity loss</div><div class="v">${fmt(data.avg_capacity_loss_pct,1)}%</div></div>
