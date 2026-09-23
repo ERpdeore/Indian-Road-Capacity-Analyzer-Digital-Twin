@@ -111,6 +111,12 @@
           <div class="field-grid">
 
             <div class="field">
+              <label for="analysis_date">Date of analysis</label>
+              <input type="date" id="analysis_date" name="analysis_date" required>
+              <div class="field-hint">Defaults to today — change it if you're analysing photos taken earlier</div>
+            </div>
+
+            <div class="field">
               <label for="total_width_m">Total carriageway width (m)</label>
               <input type="number" id="total_width_m" name="total_width_m"
                      step="0.1" min="1" max="50" value="7.0" required>
