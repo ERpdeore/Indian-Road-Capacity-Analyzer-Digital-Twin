@@ -21,8 +21,10 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
 
     if strcmp(mode, 'ideal')
         filePattern = '*_roadrunner_ideal.xodr';
+        corridorFile = 'roadrunner_corridor_ideal.xodr';
     else
         filePattern = '*_roadrunner.xodr';
+        corridorFile = 'roadrunner_corridor.xodr';
     end
 
     if nargin < 2 || isempty(xodr_path)
@@ -32,15 +34,24 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
             matches = matches(~contains({matches.name}, '_ideal.xodr'));
         end
         if isempty(matches)
-            error('auto_import_roadrunner:NoneFound', ...
-                ['No %s files found in %s.\n' ...
-                 'Did you click "Download .xodr" on the website for this job yet? ' ...
-                 'That has to happen before this script can find anything.'], ...
-                filePattern, RESULTS_DIR);
+            % Fall back to a multi-photo corridor export, if you used
+            % that instead of a single-photo one.
+            corridorPath = fullfile(RESULTS_DIR, corridorFile);
+            if isfile(corridorPath)
+                xodr_path = corridorPath;
+                fprintf('No single-photo export found -- using corridor file instead: %s\n', xodr_path);
+            else
+                error('auto_import_roadrunner:NoneFound', ...
+                    ['No %s files found in %s, and no %s corridor file either.\n' ...
+                     'Did you click "Download .xodr" (or the corridor download button) on the website yet? ' ...
+                     'That has to happen before this script can find anything.'], ...
+                    filePattern, RESULTS_DIR, corridorFile);
+            end
+        else
+            [~, idx] = max([matches.datenum]);
+            xodr_path = fullfile(matches(idx).folder, matches(idx).name);
+            fprintf('Using most recent file: %s\n', xodr_path);
         end
-        [~, idx] = max([matches.datenum]);
-        xodr_path = fullfile(matches(idx).folder, matches(idx).name);
-        fprintf('Using most recent file: %s\n', xodr_path);
     end
 
     if ~isfile(xodr_path)
@@ -71,7 +82,13 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     fprintf('[2/5] Importing road from: %s\n', xodr_path);
     try
         newScene(rrApp);
-        importScene(rrApp, xodr_path, "OpenDRIVE");
+        % IMPORTANT: importScene does NOT import <object> entries (which is
+        % exactly how your defects -- potholes, barricades, etc. -- are
+        % stored in the .xodr) unless explicitly told to. Its ImportObjects
+        % option defaults to false, so without this, every defect was being
+        % silently skipped on import even though the file had them.
+        importOptions = openDriveImportOptions(ImportObjects=true, ImportSignals=true);
+        importScene(rrApp, xodr_path, "OpenDRIVE", importOptions);
     catch importErr
         error('auto_import_roadrunner:ImportFailed', 'importScene failed: %s', importErr.message);
     end
@@ -81,15 +98,43 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     fprintf('[4/5] Adding %s traffic...\n', mode);
     % Look for the capacity sidecar JSON next to the .xodr (same folder,
     % same base name) -- if found, real ideal-vs-reduced capacity numbers
-    % drive how many vehicles get shown. If not found, falls back to a
-    % fixed default count so the demo still works either way.
+    % drive how many vehicles get shown. Falls back to the corridor
+    % capacity summary if this is a corridor file, then to a fixed
+    % default if neither exists, so the demo still works either way.
     [xodrFolder, xodrBase] = fileparts(xodr_path);
-    xodrBase = erase(xodrBase, '_ideal');
-    xodrBase = erase(xodrBase, '_roadrunner');
-    capacityJsonPath = fullfile(xodrFolder, [xodrBase '_roadrunner_capacity.json']);
+    isCorridor = contains(xodrBase, 'corridor');
+    if isCorridor
+        capacityJsonPath = fullfile(xodrFolder, 'roadrunner_corridor_capacity.json');
+    else
+        xodrBase = erase(xodrBase, '_ideal');
+        xodrBase = erase(xodrBase, '_roadrunner');
+        capacityJsonPath = fullfile(xodrFolder, [xodrBase '_roadrunner_capacity.json']);
+    end
+
+    % Real road length, read straight from the .xodr's own <road length="...">
+    % values, instead of assuming a fixed 40m -- matters a lot for a
+    % multi-photo corridor, which is much longer than a single segment.
+    roadLength_m = 40;   % fallback if parsing fails
+    try
+        xodrText = fileread(xodr_path);
+        % IMPORTANT: match only <road ... length="..."> tags, not every
+        % length="..." attribute in the file -- geometry/lane elements
+        % also carry their own length attribute with the same value,
+        % which was previously causing this to be double-counted (a 40m
+        % road was being read as 80m, pushing half your vehicles off
+        % the actual road).
+        lens = regexp(xodrText, '<road\s[^>]*\blength="([\d\.]+)"', 'tokens');
+        if ~isempty(lens)
+            roadLength_m = sum(cellfun(@(c) str2double(c{1}), lens));
+            fprintf('      Detected real road length from file: %.1f m\n', roadLength_m);
+        end
+    catch
+        fprintf('      Could not parse road length from file, using default %.0f m.\n', roadLength_m);
+    end
 
     baselineVehicles = 6;   % vehicle count shown for the ideal case
     numVehicles = baselineVehicles;
+    speedKmh = [];   % empty = let the vehicle script use its own default
     if isfile(capacityJsonPath)
         try
             cap = jsondecode(fileread(capacityJsonPath));
@@ -101,17 +146,24 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
                     cap.original_capacity_vehicles_hr, cap.reduced_capacity_vehicles_hr, ...
                     cap.capacity_loss_pct, numVehicles);
             end
+            if strcmp(mode, 'ideal') && isfield(cap, 'free_flow_speed_kmh') && ~isempty(cap.free_flow_speed_kmh)
+                speedKmh = cap.free_flow_speed_kmh;
+                fprintf('      Using real free-flow speed: %.1f km/h\n', speedKmh);
+            elseif strcmp(mode, 'nonideal') && isfield(cap, 'congested_speed_kmh') && ~isempty(cap.congested_speed_kmh)
+                speedKmh = cap.congested_speed_kmh;
+                fprintf('      Using real congested speed: %.1f km/h\n', speedKmh);
+            end
         catch
-            fprintf('      Could not read capacity data, using default vehicle count.\n');
+            fprintf('      Could not read capacity data, using default vehicle count/speed.\n');
         end
     else
-        fprintf('      No capacity data found (%s) -- using default vehicle count.\n', capacityJsonPath);
+        fprintf('      No capacity data found (%s) -- using default vehicle count/speed.\n', capacityJsonPath);
     end
 
     if strcmp(mode, 'ideal')
-        add_vehicles_ideal(rrApp, baselineVehicles);
+        add_vehicles_ideal(rrApp, baselineVehicles, speedKmh, roadLength_m);
     else
-        add_vehicles_nonideal(rrApp, numVehicles);
+        add_vehicles_nonideal(rrApp, numVehicles, speedKmh, roadLength_m);
     end
 
     fprintf('[5/5] Starting simulation...\n');
