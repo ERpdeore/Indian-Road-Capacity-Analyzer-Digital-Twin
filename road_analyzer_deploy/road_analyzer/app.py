@@ -64,6 +64,7 @@ from road_analyzer.roadrunner_export import (
     build_single_road_xodr, build_corridor_xodr, build_ideal_road_xodr,
     build_ideal_corridor_xodr, corridor_capacity_summary,
 )
+from road_analyzer.excel_export import export_defects_excel
 
 # ----------------------------------------------------------------
 # Paths
@@ -382,6 +383,19 @@ async def analyze_image(
     except Exception as e:
         logger.warning("RoadRunner capacity sidecar export failed: %s", e)
 
+    # Defect coordinate Excel log -- a readable audit trail of every
+    # YOLOv8 detection on this road, with the exact s/t coordinates it
+    # was placed at in the .xodr above (see excel_export.py). Purely a
+    # human-readable side artifact for your report/viva -- it does not
+    # feed back into MATLAB or RoadRunner.
+    try:
+        excel_path = job_dir / f"{Path(dest).stem}_defects.xlsx"
+        export_defects_excel(result, str(excel_path))
+        result["defects_excel_available"] = True
+    except Exception as e:
+        logger.warning("Defect Excel export failed: %s", e)
+        result["defects_excel_available"] = False
+
     # Generate Digital Twin data — pure-Python Greenshields model, runs
     # synchronously in milliseconds (no MATLAB, no subprocess, no waiting).
     # We still report "running" then let the frontend's existing poll hit
@@ -636,6 +650,23 @@ def get_roadrunner_capacity_json(job_id: str):
         str(jsons[0]),
         media_type="application/json",
         filename=jsons[0].name,
+    )
+
+
+@app.get("/api/jobs/{job_id}/defects.xlsx")
+def get_defects_excel(job_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", job_id):
+        raise HTTPException(400, "Invalid job_id.")
+    job_dir = RESULTS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(404, f"Unknown job_id '{job_id}'.")
+    xlsxs = sorted(job_dir.glob("*_defects.xlsx"))
+    if not xlsxs:
+        raise HTTPException(404, "No defect Excel log was generated for this job.")
+    return FileResponse(
+        str(xlsxs[0]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=xlsxs[0].name,
     )
 
 
