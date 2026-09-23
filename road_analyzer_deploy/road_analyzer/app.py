@@ -13,6 +13,9 @@ FIXES IN THIS VERSION
 - second-upload "failed" bug fixed: each request gets a fresh job_id
   and the _analyzer singleton is preserved (model stays warm)
 - digital twin bridge imported safely (app works without MATLAB)
+- data_collection_date added alongside analysis_date: collection date
+  must be strictly before today, analysis date can't be in the future,
+  and analysis date can't precede the collection date
 """
 
 from __future__ import annotations
@@ -145,6 +148,24 @@ def _unique_dest(job_dir: Path, filename: str) -> Path:
         n += 1
 
 
+def _parse_iso_date(value: str, field_label: str) -> Optional[date]:
+    """
+    Parses a plain 'YYYY-MM-DD' string into a date object. Returns None
+    for an empty/blank value (caller decides whether that's allowed).
+    Raises HTTPException(400) for anything non-empty that isn't a valid
+    ISO date — this is a hard validation error, unlike analysis_date's
+    old "ignore and fall back to today" behaviour, because a collection
+    date silently replaced by today would be actively misleading.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(400, f"Invalid {field_label} '{value}' — expected YYYY-MM-DD.")
+
+
 def _normalise_analysis_date(analysis_date: str) -> str:
     """
     Returns a plain 'YYYY-MM-DD' string. The frontend's <input type="date">
@@ -163,6 +184,35 @@ def _normalise_analysis_date(analysis_date: str) -> str:
     return date.today().isoformat()
 
 
+def _validate_dates(data_collection_date: str, analysis_date: str) -> tuple[str, str]:
+    """
+    Validates and normalises both date fields together:
+      - data_collection_date is REQUIRED and must be strictly before today
+        (today itself and any future date are rejected) — this is the
+        "previous dates only" rule for when the data was actually collected
+        on site.
+      - analysis_date defaults to today when omitted/blank (same behaviour
+        as before), but is rejected if it's in the future.
+      - analysis_date cannot be earlier than data_collection_date — you
+        can't analyse data before it was collected.
+    Returns the two normalised 'YYYY-MM-DD' strings.
+    """
+    collection_dt = _parse_iso_date(data_collection_date, "data_collection_date")
+    if collection_dt is None:
+        raise HTTPException(400, "data_collection_date is required.")
+    if collection_dt >= date.today():
+        raise HTTPException(400, "data_collection_date must be a date before today.")
+
+    analysis_str = _normalise_analysis_date(analysis_date)
+    analysis_dt  = datetime.strptime(analysis_str, "%Y-%m-%d").date()
+    if analysis_dt > date.today():
+        raise HTTPException(400, "analysis_date cannot be in the future.")
+    if analysis_dt < collection_dt:
+        raise HTTPException(400, "analysis_date cannot be before data_collection_date.")
+
+    return collection_dt.isoformat(), analysis_str
+
+
 def _road_config_from_form(
     total_width_m:    float,
     num_lanes:        int,
@@ -172,6 +222,7 @@ def _road_config_from_form(
     traffic_regime:   str = "low",
     chainage_m:       float = 0.0,
     analysis_date:    str = "",
+    data_collection_date: str = "",
 ) -> dict:
     if carriageway_key not in IRC106_DSV:
         raise HTTPException(400, f"Unknown carriageway_key '{carriageway_key}'. "
@@ -200,6 +251,9 @@ def _road_config_from_form(
         raise HTTPException(400, "num_lanes must be >= 1")
     if total_width_m <= 0:
         raise HTTPException(400, "total_width_m must be > 0")
+
+    collection_str, analysis_str = _validate_dates(data_collection_date, analysis_date)
+
     return {
         "total_width_m":    float(total_width_m),
         "num_lanes":        int(num_lanes),
@@ -208,7 +262,8 @@ def _road_config_from_form(
         "usable_shoulder_m": float(usable_shoulder_m),
         "traffic_regime":   traffic_regime,
         "chainage_m":       float(chainage_m),
-        "analysis_date":    _normalise_analysis_date(analysis_date),
+        "analysis_date":    analysis_str,
+        "data_collection_date": collection_str,
     }
 
 
@@ -297,11 +352,12 @@ async def analyze_image(
     traffic_regime:    str   = Form("low"),
     chainage_m:        float = Form(0.0),
     analysis_date:     str   = Form(""),
+    data_collection_date: str = Form(...),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
         fringe_condition, usable_shoulder_m, traffic_regime, chainage_m,
-        analysis_date,
+        analysis_date, data_collection_date,
     )
 
     # Fresh job_id for EVERY request — this is what fixes the
@@ -325,6 +381,14 @@ async def analyze_image(
     json_path = result.pop("_json_path", None)
     result.pop("_csv_path", None)
     result["job_id"] = job_id
+
+    # analyser.analyse_image() builds its own road_config copy internally
+    # and may not know about the new data_collection_date field, so make
+    # sure it's present in the response either way — same value we just
+    # validated above, not whatever (if anything) core.py echoed back.
+    result.setdefault("road_config", {})
+    result["road_config"]["data_collection_date"] = road_config["data_collection_date"]
+    result["road_config"]["analysis_date"] = road_config["analysis_date"]
 
     # Pothole rectification recommendation — pure lookup over data
     # analyse_image() already computed (severity, depth, capacity loss).
@@ -448,6 +512,13 @@ def _run_batch_job(job_id: str, job_dir: Path,
         summary.pop("_json_path", None)
         per_image_full = summary.pop("_per_image_full", [])
 
+        # Make sure data_collection_date/analysis_date are present in the
+        # batch summary's road_config regardless of what core.py echoes
+        # back — same reasoning as the single-image endpoint above.
+        summary.setdefault("road_config", {})
+        summary["road_config"]["data_collection_date"] = road_config["data_collection_date"]
+        summary["road_config"]["analysis_date"] = road_config["analysis_date"]
+
         # Department PDF + Digital Twin for batch: built from the single
         # worst-case photo in the batch (highest capacity loss %), since
         # that result already has the full road_config/irc_basis/per_defect
@@ -501,6 +572,7 @@ async def analyze_batch(
     usable_shoulder_m: float = Form(...),
     traffic_regime:    str   = Form("low"),
     analysis_date:     str   = Form(""),
+    data_collection_date: str = Form(...),
 ):
     if not files:
         raise HTTPException(400, "Upload at least one image.")
@@ -509,6 +581,7 @@ async def analyze_batch(
         total_width_m, num_lanes, carriageway_key,
         fringe_condition, usable_shoulder_m, traffic_regime,
         chainage_m=0.0, analysis_date=analysis_date,
+        data_collection_date=data_collection_date,
     )
 
     job_id, job_dir = _new_job("batch")
@@ -539,6 +612,12 @@ def _run_video_job(job_id: str, job_dir: Path, video_path: str,
         )
         summary.pop("_json_path", None)
         frame_results_full = summary.pop("_frame_results_full", [])
+
+        # Same reasoning as batch mode: guarantee both date fields are
+        # present in the response's road_config.
+        summary.setdefault("road_config", {})
+        summary["road_config"]["data_collection_date"] = road_config["data_collection_date"]
+        summary["road_config"]["analysis_date"] = road_config["analysis_date"]
 
         # Department PDF + Digital Twin for video: built from the single
         # worst-case sampled frame (highest capacity loss %) for the same
@@ -592,11 +671,13 @@ async def analyze_video(
     sample_every_sec:  float = Form(1.0),
     traffic_regime:    str   = Form("low"),
     analysis_date:     str   = Form(""),
+    data_collection_date: str = Form(...),
 ):
     road_config = _road_config_from_form(
         total_width_m, num_lanes, carriageway_key,
         fringe_condition, usable_shoulder_m, traffic_regime,
         chainage_m=0.0, analysis_date=analysis_date,
+        data_collection_date=data_collection_date,
     )
 
     job_id, job_dir = _new_job("video")
