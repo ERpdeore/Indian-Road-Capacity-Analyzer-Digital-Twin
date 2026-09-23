@@ -810,6 +810,7 @@ class RoadAnalyzer:
         summary = self._summarise(per_image_results)
         summary.update({
             "mode":          "batch",
+            "road_config":   road_config,
             "num_images":    len(image_paths),
             "num_succeeded": len(per_image_results),
             "errors":        errors,
@@ -892,7 +893,8 @@ class RoadAnalyzer:
         ]
         summary = self._summarise(frame_results)
         summary.update({
-            "mode": "video", "video": Path(video_path).name, "fps": round(fps, 2),
+            "mode": "video", "road_config": road_config,
+            "video": Path(video_path).name, "fps": round(fps, 2),
             "total_frames_in_video": total_frames, "sampled_every_sec": sample_every_sec,
             "frames_analysed": len(frame_results), "unique_defect_instances": unique_defects,
             "unique_defect_count": len(unique_defects),
