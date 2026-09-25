@@ -47,9 +47,9 @@ MIN_SEGMENT_LENGTH_M     = 10.0  # floor, so a road never degenerates to ~0m
 # itself on import, so there is nothing here to "go find in your Asset
 # Library" the way the old MATLAB-script approach required.
 _OBJECT_TYPE_MAP = {
-    "pothole":         (xodr.ObjectType.obstacle, 0.8, 0.8, 0.05),
+    "pothole":         (xodr.ObjectType.obstacle, 0.8, 0.8, 0.4),
     "barricade":       (xodr.ObjectType.barrier,  1.5, 0.3, 1.0),
-    "illegal_parking": (xodr.ObjectType.parkingSpace, 2.0, 4.5, 0.0),
+    "illegal_parking": (xodr.ObjectType.parkingSpace, 2.0, 4.5, 0.3),
     "street_vendor":   (xodr.ObjectType.obstacle, 1.5, 1.5, 1.8),
     "garbage":         (xodr.ObjectType.obstacle, 1.0, 1.0, 0.5),
     "tree":            (xodr.ObjectType.tree,     1.0, 1.0, 4.0),
