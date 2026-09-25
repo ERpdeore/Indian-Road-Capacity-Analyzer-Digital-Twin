@@ -44,8 +44,11 @@
   const TODAY_ISO = todayLocalISO();
 
   // Data collection date: today or earlier allowed — only future dates
-  // are blocked in the date picker itself via max = today.
+  // are blocked in the date picker itself via max = today. Defaults to
+  // today too, same as analysis date below, so the user only has to
+  // change it if the photo/video was actually taken on an earlier day.
   if (collectionDateEl) {
+    if (!collectionDateEl.value) collectionDateEl.value = TODAY_ISO;
     collectionDateEl.max = TODAY_ISO;
   }
 
