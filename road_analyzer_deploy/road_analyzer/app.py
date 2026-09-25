@@ -457,6 +457,21 @@ async def analyze_image(
     try:
         capacity_path = job_dir / f"{Path(dest).stem}_roadrunner_capacity.json"
         cap_calc = result.get("capacity_calculation") or {}
+
+        def _jsonable(o):
+            # NumPy scalars (float32/int64/etc., common straight out of
+            # YOLO/OpenCV math) aren't JSON-serializable by default --
+            # json.dumps() throws on them, gets swallowed by this same
+            # try/except, and the file silently never gets written. This
+            # coerces anything with a NumPy-style .item() method back to
+            # a plain Python number so the write actually succeeds.
+            if hasattr(o, "item"):
+                try:
+                    return o.item()
+                except Exception:
+                    pass
+            return str(o)
+
         capacity_path.write_text(json.dumps({
             "original_capacity_vehicles_hr": result.get("original_capacity_vehicles_hr"),
             "reduced_capacity_vehicles_hr": result.get("reduced_capacity_vehicles_hr"),
@@ -473,9 +488,11 @@ async def analyze_image(
             "pothole_penalty": cap_calc.get("pothole_penalty"),
             "num_lanes": (result.get("road_config") or {}).get("num_lanes"),
             "defects_found": list((result.get("per_defect") or {}).keys()),
-        }), encoding="utf-8")
+        }, default=_jsonable), encoding="utf-8")
+        result["roadrunner_capacity_json_available"] = True
     except Exception as e:
         logger.warning("RoadRunner capacity sidecar export failed: %s", e)
+        result["roadrunner_capacity_json_available"] = False
 
     # Defect coordinate Excel log -- a readable audit trail of every
     # YOLOv8 detection on this road, with the exact s/t coordinates it
