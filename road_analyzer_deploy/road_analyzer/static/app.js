@@ -43,10 +43,10 @@
 
   const TODAY_ISO = todayLocalISO();
 
-  // Data collection date: only PAST dates allowed — today and future are
-  // blocked in the date picker itself via max = yesterday.
+  // Data collection date: today or earlier allowed — only future dates
+  // are blocked in the date picker itself via max = today.
   if (collectionDateEl) {
-    collectionDateEl.max = addDaysISO(TODAY_ISO, -1);
+    collectionDateEl.max = TODAY_ISO;
   }
 
   // Analysis date: a normal <input type="date"> inside #config-form, so
@@ -465,9 +465,9 @@
     clearResults();
 
     // ---- Date validation (NEW) ----
-    // Collection date: strictly before today — today or future not allowed.
-    if (collectionDateEl && collectionDateEl.value >= TODAY_ISO) {
-      showError("Data collection date must be a date before today.");
+    // Collection date: today or earlier — future not allowed.
+    if (collectionDateEl && collectionDateEl.value > TODAY_ISO) {
+      showError("Data collection date cannot be in the future.");
       return;
     }
     // Analysis date: cannot be in the future.
