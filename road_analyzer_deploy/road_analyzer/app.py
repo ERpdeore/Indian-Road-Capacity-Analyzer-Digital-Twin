@@ -14,8 +14,8 @@ FIXES IN THIS VERSION
   and the _analyzer singleton is preserved (model stays warm)
 - digital twin bridge imported safely (app works without MATLAB)
 - data_collection_date added alongside analysis_date: collection date
-  must be strictly before today, analysis date can't be in the future,
-  and analysis date can't precede the collection date
+  must be today or earlier (never future), analysis date can't be in
+  the future, and analysis date can't precede the collection date
 """
 
 from __future__ import annotations
@@ -194,10 +194,10 @@ def _normalise_analysis_date(analysis_date: str) -> str:
 def _validate_dates(data_collection_date: str, analysis_date: str) -> tuple[str, str]:
     """
     Validates and normalises both date fields together:
-      - data_collection_date is REQUIRED and must be strictly before today
-        (today itself and any future date are rejected) — this is the
-        "previous dates only" rule for when the data was actually collected
-        on site.
+      - data_collection_date is REQUIRED and must be today or earlier
+        (future dates are rejected) — this is the "today or previous
+        dates only, never future" rule for when the data was actually
+        collected on site.
       - analysis_date defaults to today when omitted/blank (same behaviour
         as before), but is rejected if it's in the future.
       - analysis_date cannot be earlier than data_collection_date — you
@@ -207,8 +207,8 @@ def _validate_dates(data_collection_date: str, analysis_date: str) -> tuple[str,
     collection_dt = _parse_iso_date(data_collection_date, "data_collection_date")
     if collection_dt is None:
         raise HTTPException(400, "data_collection_date is required.")
-    if collection_dt >= date.today():
-        raise HTTPException(400, "data_collection_date must be a date before today.")
+    if collection_dt > date.today():
+        raise HTTPException(400, "data_collection_date cannot be in the future.")
 
     analysis_str = _normalise_analysis_date(analysis_date)
     analysis_dt  = datetime.strptime(analysis_str, "%Y-%m-%d").date()
