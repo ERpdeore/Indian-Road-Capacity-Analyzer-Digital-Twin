@@ -49,6 +49,15 @@
     collectionDateEl.max = TODAY_ISO;
   }
 
+  // Visible, on-page proof of what "today" resolved to -- so this can be
+  // checked just by looking at the page, no dev tools required.
+  const collectionHintEl = document.getElementById("collection-date-hint");
+  if (collectionHintEl) {
+    const todayDisplay = formatDateDisplay(TODAY_ISO);
+    collectionHintEl.textContent =
+      `Date the photo/video was actually taken on site — today (${todayDisplay}) or earlier`;
+  }
+
   // Analysis date: a normal <input type="date"> inside #config-form, so
   // FormData(configForm) already picks it up for every mode (image/batch/
   // video) with no extra wiring below — same field, same name, sent
