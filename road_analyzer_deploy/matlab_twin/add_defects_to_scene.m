@@ -1,31 +1,41 @@
-function add_defects_to_scene(rrApp, defectsFound, roadLength_m)
-%ADD_DEFECTS_TO_SCENE  Places a VISIBLE marker on the road for each real
-%   defect type your YOLOv8 model detected in the analyzed photo.
+function add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m)
+%ADD_DEFECTS_TO_SCENE  Places a VISIBLE marker for each REAL defect your
+%   YOLOv8 model detected -- one marker per actual detected instance, at
+%   its REAL measured position ACROSS the road (lateral position), which
+%   is accurate data straight from your photo analysis.
 %
-%   WHY THIS EXISTS: RoadRunner does NOT automatically draw a 3D shape for
-%   generic OpenDRIVE <object> entries (which is how potholes/barricades
-%   were stored in the .xodr) unless your specific project already has a
-%   custom asset-mapping file configured -- most projects don't. So
-%   instead of relying on that import step (which was silently rendering
-%   nothing), this places a real, always-available RoadRunner prop
-%   (TrafficCone01, bundled in every default project) directly at each
-%   defect's approximate position, anchored onto the actual road lane.
+%   HONEST LIMIT (same one your own roadrunner_export.py documents): a
+%   single photo cannot measure how far apart defects are ALONG the
+%   road's length -- that information doesn't exist in one photo. So
+%   markers are evenly spread along the road for visual clarity, but
+%   their LEFT-RIGHT position is real, not guessed.
 %
-%   defectsFound: cell array of defect type strings, e.g.
-%                 {'pothole','street_vendor'} -- comes straight from
-%                 your capacity JSON's "defects_found" field (real YOLOv8
-%                 detections, not made up).
-%   roadLength_m: real road length, so markers land within the road.
+%   WHY THIS EXISTS AT ALL (instead of the .xodr import just showing
+%   them): RoadRunner does not auto-render generic OpenDRIVE <object>
+%   entries without a project-specific asset-mapping file most projects
+%   don't have -- so this places them directly via script instead,
+%   using the same reliable technique as your vehicles.
+%
+%   defectPositions: struct array (from your capacity JSON's
+%                    "defect_positions" field), each with fields
+%                    .type, .lateral_m, .width_m -- one per REAL
+%                    detected defect instance.
+%   totalWidth_m:    real road width (from capacity JSON's "total_width_m")
+%   roadLength_m:    real road length, so markers land within the road.
 
-    if nargin < 2 || isempty(defectsFound)
-        fprintf('      No defects to place (defects_found was empty).\n');
+    if nargin < 2 || isempty(defectPositions)
+        fprintf('      No defects to place (defect_positions was empty).\n');
         return;
     end
-    if nargin < 3 || isempty(roadLength_m)
+    if nargin < 3 || isempty(totalWidth_m)
+        totalWidth_m = 7.0;
+    end
+    if nargin < 4 || isempty(roadLength_m)
         roadLength_m = 40;
     end
 
-    fprintf('      Placing %d visible defect marker(s) on the road...\n', numel(defectsFound));
+    n = numel(defectPositions);
+    fprintf('      Placing %d visible defect marker(s) at REAL measured positions...\n', n);
 
     rrApi = roadrunnerAPI(rrApp);
     scnro = rrApi.Scenario;
@@ -33,29 +43,37 @@ function add_defects_to_scene(rrApp, defectsFound, roadLength_m)
 
     margin_m  = min(3, roadLength_m * 0.05);
     usable_m  = roadLength_m - 2*margin_m;
-    n = numel(defectsFound);
     spacing_m = usable_m / max(n, 1);
 
-    % One consistent, always-available prop for every defect type. A
-    % future improvement could map specific defect types to different
-    % prop assets (e.g. a barrier mesh for 'barricade'), but that requires
-    % knowing which extra props exist in YOUR specific project's library
-    % -- TrafficCone01 is guaranteed present in every default project, so
-    % it's used here to guarantee something always renders.
     placed = 0;
     for i = 1:n
         try
-            markerAsset = getAsset(prj, "Props/TrafficControl/TrafficCone01.fbx", "MovableObjectAsset");
+            d = defectPositions(i);
+
+            % REAL lateral position: convert "meters from the road's left
+            % edge" (what your photo analysis measured) into "meters left/
+            % right of the road's centerline" (what RoadRunner positions
+            % use) -- this is the exact same formula your own
+            % roadrunner_export.py uses for the .xodr version, so both
+            % stay consistent with each other.
+            t_offset = d.lateral_m - totalWidth_m / 2;
+
+            % Longitudinal position: cosmetic spread only (see docstring
+            % above) -- a single photo has no real data for this.
             posX = margin_m + (i-1) * spacing_m + spacing_m/2;
-            marker = addActor(scnro, markerAsset, [posX, 0, 0]);
+
+            markerAsset = getAsset(prj, "Props/TrafficControl/TrafficCone01.fbx", "MovableObjectAsset");
+            marker = addActor(scnro, markerAsset, [posX, t_offset, 0]);
             autoAnchor(marker.InitialPoint, PosePreservation="reset-pose");
+
             placed = placed + 1;
-            fprintf('        [%d/%d] %s marked at %.1fm along the road.\n', i, n, defectsFound{i}, posX);
+            fprintf('        [%d/%d] %s at %.2fm from centerline (real), %.1fm along road (spread for clarity).\n', ...
+                i, n, d.type, t_offset, posX);
         catch e
             warning('add_defects_to_scene:PlacementFailed', ...
-                'Could not place marker for "%s": %s', defectsFound{i}, e.message);
+                'Could not place marker %d: %s', i, e.message);
         end
     end
 
-    fprintf('      %d of %d defect markers placed.\n', placed, n);
+    fprintf('      %d of %d defect markers placed at their real measured positions.\n', placed, n);
 end
