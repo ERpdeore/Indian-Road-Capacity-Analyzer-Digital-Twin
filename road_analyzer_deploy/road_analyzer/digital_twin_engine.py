@@ -90,7 +90,16 @@ def generate_twin_data(analysis_result: dict) -> dict:
     num_lanes        = max(1, int((analysis_result.get("road_config") or {}).get("num_lanes", 1)))
     worst_pothole    = cap_calc.get("worst_pothole_depth", "unknown")
 
-    jam_density = JAM_DENSITY_PCU_PER_KM_PER_LANE * num_lanes
+    # Jam density is calibrated to the IRC:106 value instead of assumed:
+    # Greenshields maximum flow is v_f * k_j / 4, so setting it equal to the
+    # undamaged design service volume gives k_j = 4 * C_DSV / v_f. This keeps
+    # the twin's peak flow identical to the IRC figure by construction.
+    # The old fixed per-lane constant is only a fallback when inputs are
+    # missing.
+    if ideal_cap > 0 and free_flow_speed > 0:
+        jam_density = 4.0 * ideal_cap / free_flow_speed
+    else:
+        jam_density = JAM_DENSITY_PCU_PER_KM_PER_LANE * num_lanes
 
     # Density implied by each capacity level under Greenshields (inverse of
     # q = k * v with v = v_f * (1 - k/k_j) → solve for k at the flow closest
@@ -118,17 +127,10 @@ def generate_twin_data(analysis_result: dict) -> dict:
         k_d_t = _ramp_to_steady_state(k_defect, t)
 
         v_i_t = _greenshields_speed(k_i_t, free_flow_speed, jam_density)
-        # The speed chart is ramped directly toward `steady_speed` (the
-        # same congested-speed figure already computed in core.py and
-        # shown in the summary card above the chart) rather than being
-        # re-derived from the Greenshields density above. Those two are
-        # related but not numerically identical formulas, and having the
-        # chart's endpoint disagree with the number printed next to it
-        # would look like a bug even though both values are individually
-        # correct. Ramping toward the exact reported figure keeps the
-        # chart and the summary card visually consistent.
-        v_d_t = _ramp_to_steady_state(steady_speed, t) if steady_speed <= free_flow_speed \
-                else free_flow_speed
+        # Defect speed is the Greenshields speed at the defect density, so
+        # q = k * v reproduces C_eff exactly and the chart's end value equals
+        # the reported congested_speed_kmh (same closed form in core.py).
+        v_d_t = _greenshields_speed(k_d_t, free_flow_speed, jam_density)
 
         q_i_t = k_i_t * v_i_t
         q_d_t = k_d_t * v_d_t
