@@ -13,7 +13,9 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     end
 
     % ---- FILLED IN based on your screenshots -- double check these two! ----
-    RESULTS_DIR = 'C:\Users\Admin\Downloads';   % where your browser downloads land
+    % Auto-detected: the folder this script lives in. Keep the .bat, .m,
+    % .xodr and .json files together in ONE folder; no path to edit.
+    RESULTS_DIR = fileparts(mfilename('fullpath'));
     if nargin < 3 || isempty(project_folder)
         project_folder = 'C:\Users\Admin\OneDrive\Desktop\New RoadRunner Project';  % <-- CONFIRM this is your real RoadRunner project folder
     end
