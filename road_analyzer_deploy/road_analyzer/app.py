@@ -347,8 +347,12 @@ def config_options():
 # ----------------------------------------------------------------
 # SINGLE IMAGE ANALYSIS
 # ----------------------------------------------------------------
+# Plain `def` on purpose: this handler runs blocking YOLO inference with no
+# `await`. FastAPI runs a sync handler in a worker thread; an `async def`
+# one would run on the event loop and freeze every other request
+# (health check, job polling) for the whole inference.
 @app.post("/api/analyze/image")
-async def analyze_image(
+def analyze_image(
     file:              UploadFile = File(...),
     total_width_m:     float = Form(...),
     num_lanes:         int   = Form(...),
