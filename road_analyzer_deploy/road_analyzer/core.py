@@ -618,7 +618,11 @@ class RoadAnalyzer:
             real_w_m = right_m - left_m
             real_h_m = (y2 - y1) / px_per_m
 
-            all_intervals.append((left_m, right_m))
+            # Potholes are handled ONLY through the pothole factor f_p
+            # (paper Sec. III-C/D); including their lateral extent here as
+            # well would count the same pothole twice (width AND penalty).
+            if cls_name != "pothole":
+                all_intervals.append((left_m, right_m))
 
             if cls_name not in defect_data:
                 defect_data[cls_name] = {"count": 0, "intervals": [], "detections": []}
@@ -665,6 +669,8 @@ class RoadAnalyzer:
             this_blocked  = min(union_of_intervals(dinfo["intervals"]), total_width_m)
             this_eff_w    = max(total_width_m - this_blocked, 0.0)
             this_wf       = this_eff_w / total_width_m if total_width_m > 0 else 1.0
+            if dname == "pothole":
+                this_wf = 1.0   # pothole acts via f_p only (no width term)
             this_penalty  = pothole_penalty if dname == "pothole" else 1.0
             this_cap      = max(0.0, min(base_dsv * this_wf * this_penalty, base_dsv))
             this_loss     = base_dsv - this_cap
@@ -718,8 +724,15 @@ class RoadAnalyzer:
                     dsv_to_vehicles_per_hr(reduced_cap, traffic_regime), 0
                 ),
                 "free_flow_speed_kmh":   free_flow_speed,
+                # Greenshields speed on the uncongested branch at flow
+                # q = C_eff, with jam density calibrated so that the peak
+                # flow equals the IRC DSV (k_j = 4*C_DSV/v_f):
+                #   v_c = v_f * (1 + sqrt(1 - C_eff/C_DSV)) / 2
+                # Replaces the earlier 0.5-coefficient heuristic; no tuned
+                # constant, and it agrees with digital_twin_engine.py.
                 "congested_speed_kmh":   round(
-                    free_flow_speed * (1 - (1 - (reduced_cap/base_dsv)) * 0.5), 1
+                    free_flow_speed * (1 + (max(0.0, 1 - reduced_cap / base_dsv)) ** 0.5) / 2
+                    if base_dsv > 0 else free_flow_speed, 1
                 ),
                 "pcu_factors":         IRC106_PCU_FACTORS.get(traffic_regime, {}),
                 "note": (
