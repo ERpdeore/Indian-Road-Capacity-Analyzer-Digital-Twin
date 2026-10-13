@@ -1,0 +1,854 @@
+diff --git a/road_analyzer_deploy/matlab_twin/DIGITAL_TWIN_README.md b/road_analyzer_deploy/matlab_twin/DIGITAL_TWIN_README.md
+index 7c82450..1d2cf13 100644
+--- a/road_analyzer_deploy/matlab_twin/DIGITAL_TWIN_README.md
++++ b/road_analyzer_deploy/matlab_twin/DIGITAL_TWIN_README.md
+@@ -177,3 +177,40 @@ Options:
+ 
+ For a final-year project demo, option 1 or 3 is perfectly fine.
+ State clearly in your viva: "MATLAB runs locally, Python reads the output".
++
++---
++
++## RoadRunner 3D scene: visibility and traffic settings
++
++Everything about how the RoadRunner scene *looks* is set in **`twin_config.m`** -
++edit the numbers there, no other file needs to change.
++
++| File | Purpose |
++|---|---|
++| `twin_config.m` | Traffic density, vehicle mix, speeds, and how big each defect is drawn |
++| `twin_assets.m` | Finds the vehicle / prop assets that really exist in your RoadRunner project |
++| `build_traffic.m` | Places dense, mixed, moving traffic (cars, two-wheelers, trucks, buses, vans) |
++| `add_vehicles_ideal.m` / `add_vehicles_nonideal.m` | Thin wrappers around `build_traffic.m` |
++| `add_defects_to_scene.m` | Draws each defect as an enlarged cluster of markers |
++
++**Defects.** A real pothole (~0.4 m) or barricade is too small to see on a road
++model, so each is drawn over an *enlarged footprint*:
++`max(measured size x scale, minimum size)`. Potholes become a ring of cones,
++barricades a row of barrier pieces across the blocked width, illegal parking a
++parked vehicle, garbage a grid of barrels. The console prints measured size vs.
++drawn size for every defect, so the enlargement is never hidden - say so in your
++viva: *"markers are exaggerated for visibility; the lateral position is real."*
++
++**Traffic.** Vehicles are packed lane by lane with a real gap (no overlaps), in
++the mix set in `twin_config.m`. The defect road shows
++`reduced capacity / original capacity` of the ideal road's traffic, at the real
++congested speed. Vehicles get a speed and a route, so they drive when you press
++Play.
++
++**Limits to state honestly**
++- A single photo gives a ~40 m road, so vehicles can only drive a few seconds
++  before reaching the end. Use the multi-photo corridor export for a longer road.
++- Along-road spacing between defects is cosmetic (one photo cannot measure it);
++  left-right position is real.
++- If your RoadRunner release does not accept `Speed` on a route point, the script
++  warns you; set Initial Speed on the vehicles in RoadRunner Scenario instead.
+diff --git a/road_analyzer_deploy/matlab_twin/add_defects_to_scene.m b/road_analyzer_deploy/matlab_twin/add_defects_to_scene.m
+index 674ec67..4f6a7f0 100644
+--- a/road_analyzer_deploy/matlab_twin/add_defects_to_scene.m
++++ b/road_analyzer_deploy/matlab_twin/add_defects_to_scene.m
+@@ -1,79 +1,148 @@
+-function add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m)
+-%ADD_DEFECTS_TO_SCENE  Places a VISIBLE marker for each REAL defect your
+-%   YOLOv8 model detected -- one marker per actual detected instance, at
+-%   its REAL measured position ACROSS the road (lateral position), which
+-%   is accurate data straight from your photo analysis.
++function add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m, opts)
++%ADD_DEFECTS_TO_SCENE  Draws every detected defect so it is CLEARLY VISIBLE.
+ %
+-%   HONEST LIMIT (same one your own roadrunner_export.py documents): a
+-%   single photo cannot measure how far apart defects are ALONG the
+-%   road's length -- that information doesn't exist in one photo. So
+-%   markers are evenly spread along the road for visual clarity, but
+-%   their LEFT-RIGHT position is real, not guessed.
++%   WHY THE OLD VERSION WAS HARD TO SEE: each defect was a single traffic
++%   cone, whatever its type or size. A 0.4 m pothole or a 1 m barricade is a
++%   speck on a road model, so nothing stood out.
+ %
+-%   WHY THIS EXISTS AT ALL (instead of the .xodr import just showing
+-%   them): RoadRunner does not auto-render generic OpenDRIVE <object>
+-%   entries without a project-specific asset-mapping file most projects
+-%   don't have -- so this places them directly via script instead,
+-%   using the same reliable technique as your vehicles.
++%   NOW: each defect becomes a cluster of markers over an ENLARGED footprint
++%     pothole          ring of cones around the hole
++%     barricade        a row of barrier pieces across the blocked width
++%     illegal_parking  a parked vehicle at the real lateral position
++%     street_vendor    ring of cones
++%     garbage          grid of barrels
++%   Footprint = max(measured size * scale, minimum size) -- all tunable in
++%   twin_config.m. The console prints measured size vs. drawn size, so the
++%   enlargement is never hidden.
+ %
+-%   defectPositions: struct array (from your capacity JSON's
+-%                    "defect_positions" field), each with fields
+-%                    .type, .lateral_m, .width_m -- one per REAL
+-%                    detected defect instance.
+-%   totalWidth_m:    real road width (from capacity JSON's "total_width_m")
+-%   roadLength_m:    real road length, so markers land within the road.
++%   HONEST LIMIT (same as roadrunner_export.py): one photo cannot give the
++%   distance between defects ALONG the road, so they are spread evenly along
++%   it. Their LEFT-RIGHT position is real.
++%
++%   defectPositions: struct array from the capacity JSON ("defect_positions"):
++%                    .type, .lateral_m, .width_m -- one per detected defect.
++%   totalWidth_m   : real road width (JSON "total_width_m").
++%   roadLength_m   : real road length.
++%   opts (optional): .projectFolder, .numLanes, .scenarioFile
+ 
+     if nargin < 2 || isempty(defectPositions)
+         fprintf('      No defects to place (defect_positions was empty).\n');
+         return;
+     end
+-    if nargin < 3 || isempty(totalWidth_m)
+-        totalWidth_m = 7.0;
+-    end
+-    if nargin < 4 || isempty(roadLength_m)
+-        roadLength_m = 40;
+-    end
++    if nargin < 3 || isempty(totalWidth_m), totalWidth_m = 7.0; end
++    if nargin < 4 || isempty(roadLength_m), roadLength_m = 40;  end
++    if nargin < 5 || isempty(opts),         opts = struct();    end
++    if iscell(defectPositions), defectPositions = [defectPositions{:}]; end   % jsondecode quirk
++
++    cfg   = twin_config();  dc = cfg.defect;
++    nLanes = max(1, round(getOpt(opts, 'numLanes', 2)));
++    laneW  = totalWidth_m / nLanes;
++    nLeft  = ceil(nLanes/2);  nRight = nLanes - nLeft;
++    tLeft  =  nLeft  * laneW;                 % road edges in the .xodr (t, metres)
++    tRight = -nRight * laneW;
++    tMid   = (tLeft + tRight) / 2;            % equals 0 for an even lane count
++    scenarioFile = char(getOpt(opts, 'scenarioFile', 'nonideal_traffic.rrscenario'));
+ 
+     n = numel(defectPositions);
+-    fprintf('      Placing %d visible defect marker(s) at REAL measured positions...\n', n);
++    fprintf('      Placing %d defect(s) as enlarged, clearly visible markers...\n', n);
+ 
+     rrApi = roadrunnerAPI(rrApp);
+     scnro = rrApi.Scenario;
+     prj   = rrApi.Project;
++    A = twin_assets(prj, getOpt(opts, 'projectFolder', ''));
+ 
+     margin_m  = min(3, roadLength_m * 0.05);
+     usable_m  = roadLength_m - 2*margin_m;
+     spacing_m = usable_m / max(n, 1);
++    maxLen_m  = max(0.3, 0.85 * spacing_m);   % neighbouring defects must not merge
+ 
+-    placed = 0;
++    placedDefects = 0;  placedMarkers = 0;  carCount = 0;
+     for i = 1:n
+         try
+-            d = defectPositions(i);
+-
+-            % REAL lateral position: convert "meters from the road's left
+-            % edge" (what your photo analysis measured) into "meters left/
+-            % right of the road's centerline" (what RoadRunner positions
+-            % use) -- this is the exact same formula your own
+-            % roadrunner_export.py uses for the .xodr version, so both
+-            % stay consistent with each other.
+-            t_offset = d.lateral_m - totalWidth_m / 2;
+-
+-            % Longitudinal position: cosmetic spread only (see docstring
+-            % above) -- a single photo has no real data for this.
+-            posX = margin_m + (i-1) * spacing_m + spacing_m/2;
+-
+-            markerAsset = getAsset(prj, "Props/TrafficControl/TrafficCone01.fbx", "MovableObjectAsset");
+-            marker = addActor(scnro, markerAsset, [posX, t_offset, 0]);
+-            autoAnchor(marker.InitialPoint, PosePreservation="reset-pose");
+-
+-            placed = placed + 1;
+-            fprintf('        [%d/%d] %s at %.2fm from centerline (real), %.1fm along road (spread for clarity).\n', ...
+-                i, n, d.type, t_offset, posX);
++            d    = defectPositions(i);
++            type = char(d.type);
++            key  = matlab.lang.makeValidName(type);
++            if isfield(dc, key), p = dc.(key); else, p = dc.default; end
++
++            measuredW = 0.3;
++            if isfield(d, 'width_m') && ~isempty(d.width_m), measuredW = max(double(d.width_m), 0.05); end
++
++            W  = min(max(measuredW * p.scale, p.minWidth_m),  0.9 * totalWidth_m);
++            Lg = min(max(measuredW * p.scale, p.minLength_m), maxLen_m);
++
++            % Lateral position: REAL measurement (same formula as
++            % roadrunner_export.py), shifted so it stays on the real road for
++            % odd lane counts too, and clamped so the footprint stays on the road.
++            tCenter = tMid + (d.lateral_m - totalWidth_m / 2);
++            tCenter = min(max(tCenter, tRight + W/2), tLeft - W/2);
++
++            posX = margin_m + (i - 0.5) * spacing_m;       % cosmetic spread along the road
++
++            if strcmp(p.kind, 'vehicle')
++                carCount = carCount + 1;
++                pool = A.vehicles.car;
++                if carCount > 1 && ~isempty(A.vehicles.van), pool = A.vehicles.van; end
++                if isempty(pool), pool = A.vehicles.car; end
++                actor = addActor(scnro, pool{1}, [posX, tCenter, 0]);
++                autoAnchor(actor.InitialPoint, PosePreservation="reset-pose");
++                try, actor.InitialPoint.Speed = 0; catch, end      % parked: stays put
++                nMark = 1;
++            else
++                P = footprintPoints(p.kind, Lg, W, p.spacing_m, p.maxMarkers);
++                prop = A.props.(p.prop);
++                nMark = size(P, 1);
++                for m = 1:nMark
++                    mx = posX + P(m,1);
++                    my = min(max(tCenter + P(m,2), tRight + 0.1), tLeft - 0.1);
++                    marker = addActor(scnro, prop, [mx, my, 0]);
++                    autoAnchor(marker.InitialPoint, PosePreservation="reset-pose");
++                end
++            end
++
++            placedDefects = placedDefects + 1;
++            placedMarkers = placedMarkers + nMark;
++            fprintf('        [%d/%d] %-15s measured %.2f m wide -> shown %.1f x %.1f m (%d marker(s)), t=%.2f m, %.1f m along road.\n', ...
++                i, n, type, measuredW, Lg, W, nMark, tCenter, posX);
+         catch e
+             warning('add_defects_to_scene:PlacementFailed', ...
+-                'Could not place marker %d: %s', i, e.message);
++                'Could not place defect %d: %s', i, e.message);
+         end
+     end
+ 
+-    fprintf('      %d of %d defect markers placed at their real measured positions.\n', placed, n);
++    saveScenario(rrApp, scenarioFile);
++    fprintf('      %d of %d defects drawn with %d markers in total; saved to %s.\n', ...
++        placedDefects, n, placedMarkers, scenarioFile);
++end
++
++%% ---------------------------------------------------------------- helpers
++function v = getOpt(opts, name, default)
++    if isfield(opts, name) && ~isempty(opts.(name)), v = opts.(name); else, v = default; end
++end
++
++function P = footprintPoints(kind, Lg, W, sp, maxN)
++% Marker offsets [along, across] (m) around the defect centre.
++    sp = max(sp, 0.1);
++    switch kind
++        case 'ring'
++            n = max(6, round(pi * (Lg + W) / 2 / sp));
++            a = linspace(0, 2*pi, n + 1)';  a(end) = [];
++            P = [Lg/2 * cos(a), W/2 * sin(a)];
++        case 'row'
++            n = max(2, round(W / sp) + 1);
++            P = [zeros(n,1), linspace(-W/2, W/2, n)'];
++        case 'single'
++            P = [0 0];
++        otherwise                                  % 'fill'
++            nx = max(1, round(Lg / sp) + 1);
++            ny = max(1, round(W  / sp) + 1);
++            [X, Y] = meshgrid(spread(Lg, nx), spread(W, ny));
++            P = [X(:), Y(:)];
++    end
++    if size(P,1) > maxN
++        P = P(unique(round(linspace(1, size(P,1), maxN))), :);
++    end
++end
++
++function v = spread(len, n)
++    if n == 1, v = 0; else, v = linspace(-len/2, len/2, n); end
+ end
+diff --git a/road_analyzer_deploy/matlab_twin/add_vehicles_ideal.m b/road_analyzer_deploy/matlab_twin/add_vehicles_ideal.m
+index 0d74cae..204439d 100644
+--- a/road_analyzer_deploy/matlab_twin/add_vehicles_ideal.m
++++ b/road_analyzer_deploy/matlab_twin/add_vehicles_ideal.m
+@@ -1,68 +1,21 @@
+-function add_vehicles_ideal(rrApp, numVehicles, speedKmh, roadLength_m)
+-%ADD_VEHICLES_IDEAL  Orderly, evenly-spaced traffic for the IDEAL road.
+-%   numVehicles : how many cars to place (defaults to 6).
+-%   speedKmh    : free-flow speed for this road, from the real capacity
+-%                 JSON (defaults to 50 km/h if not supplied). Used to
+-%                 scale how far each vehicle's initial route point sits
+-%                 ahead of it, so a faster road visibly shows vehicles
+-%                 further along their lane, not just more of them.
+-%   roadLength_m: REAL road length parsed from the .xodr by
+-%                 auto_import_roadrunner.m (defaults to 40 if not
+-%                 supplied). Previously this was hardcoded here, which
+-%                 silently ignored the actual road length and could
+-%                 place vehicles past the end of shorter/longer roads.
++function add_vehicles_ideal(rrApp, numVehicles, speedKmh, roadLength_m, opts)
++%ADD_VEHICLES_IDEAL  Orderly, dense, moving traffic for the IDEAL road.
++%   Thin wrapper kept so existing callers still work; the real work is in
++%   build_traffic.m and every setting lives in twin_config.m.
+ %
+-%   Vehicles are placed centered in the lane (no manual sideways offset)
+-%   and snapped onto the road via autoAnchor -- this keeps them from
+-%   ever overflowing the road edges, regardless of the road's real width.
+-
+-    if nargin < 2 || isempty(numVehicles)
+-        numVehicles = 6;
+-    end
+-    if nargin < 3 || isempty(speedKmh)
+-        speedKmh = 50;   % ideal-road default free-flow speed
+-    end
+-    if nargin < 4 || isempty(roadLength_m)
+-        roadLength_m = 40;   % fallback only -- real value now comes from the caller
+-    end
+-
+-    fprintf('      Placing %d ideal (orderly) vehicles on a %.1fm road at %.0f km/h...\n', ...
+-        numVehicles, roadLength_m, speedKmh);
+-
+-    newScenario(rrApp);
+-    rrApi = roadrunnerAPI(rrApp);
+-    scnro = rrApi.Scenario;
+-    prj   = rrApi.Project;
+-
+-    margin_m     = 3;    % keep clear of the very start/end of the road
+-    usable_m     = max(roadLength_m - 2*margin_m, 1);
+-    spacing_m    = usable_m / max(numVehicles, 1);
+-
+-    % Faster roads => each vehicle's initial route point sits further
+-    % ahead, visually implying more forward motion; capped so it never
+-    % overlaps the next vehicle's start position.
+-    driveDist = min(spacing_m * 0.6, max(speedKmh / 50 * 10, 3));
+-
+-    placed = 0;
+-    for i = 1:numVehicles
+-        try
+-            asset = getAsset(prj, "Vehicles/Sedan.fbx", "VehicleAsset");
+-            startX = margin_m + (i-1) * spacing_m;
+-            car = addActor(scnro, asset, [startX, 0, 0]);   % lane_t = 0: centered in lane
+-
+-            autoAnchor(car.InitialPoint, PosePreservation="reset-pose");
+-
+-            rrRoute = car.InitialPoint.Route;
+-            endPoint = addPoint(rrRoute, [startX + driveDist, 0, 0]);
+-            autoAnchor(endPoint, PosePreservation="reset-pose");
+-
+-            placed = placed + 1;
+-        catch e
+-            warning('add_vehicles_ideal:PlacementFailed', ...
+-                'Could not place/anchor vehicle %d: %s', i, e.message);
+-        end
+-    end
+-
+-    saveScenario(rrApp, 'ideal_traffic.rrscenario');
+-    fprintf('      %d of %d vehicles placed and anchored to the road.\n', placed, numVehicles);
++%   numVehicles  : optional EXACT count. Leave empty (recommended) to fill the
++%                  lanes automatically from the road length and lane count.
++%   speedKmh     : real free-flow speed (empty = 50 km/h).
++%   roadLength_m : real road length (empty = 40 m).
++%   opts         : optional struct, see build_traffic.m (projectFolder, numLanes,
++%                  totalWidth_m, ...).
++
++    if nargin < 2, numVehicles = []; end
++    if nargin < 3, speedKmh = []; end
++    if nargin < 4, roadLength_m = []; end
++    if nargin < 5 || isempty(opts), opts = struct(); end
++    if ~isempty(numVehicles), opts.targetCount = numVehicles; end
++    opts.scenarioFile = 'ideal_traffic.rrscenario';
++
++    build_traffic(rrApp, 'ideal', speedKmh, roadLength_m, opts);
+ end
+diff --git a/road_analyzer_deploy/matlab_twin/add_vehicles_nonideal.m b/road_analyzer_deploy/matlab_twin/add_vehicles_nonideal.m
+index c7de82c..d9b2707 100644
+--- a/road_analyzer_deploy/matlab_twin/add_vehicles_nonideal.m
++++ b/road_analyzer_deploy/matlab_twin/add_vehicles_nonideal.m
+@@ -1,67 +1,23 @@
+-function add_vehicles_nonideal(rrApp, numVehicles, speedKmh, roadLength_m)
+-%ADD_VEHICLES_NONIDEAL  Traffic for the NON-IDEAL (defect-affected) road.
+-%   numVehicles : how many cars to place -- normally computed by
+-%   auto_import_roadrunner.m from your REAL reduced-capacity number
+-%   (vehicles/hr), so fewer vehicles here visually represents the actual
+-%   capacity loss your analysis calculated, not an arbitrary guess.
+-%   speedKmh    : real congested speed from the capacity JSON (defaults
+-%                 to 30 km/h if not supplied).
+-%   roadLength_m: REAL road length parsed from the .xodr by
+-%                 auto_import_roadrunner.m (defaults to 40 if not
+-%                 supplied). Previously hardcoded here.
++function add_vehicles_nonideal(rrApp, numVehicles, speedKmh, roadLength_m, opts)
++%ADD_VEHICLES_NONIDEAL  Dense, moving traffic for the DEFECT-AFFECTED road.
++%   Thin wrapper kept so existing callers still work; the real work is in
++%   build_traffic.m and every setting lives in twin_config.m.
+ %
+-%   Vehicles get only a small safe sideways jitter (+/-0.3m) to suggest
+-%   weaving around obstructions, while staying anchored to the real lane
+-%   via autoAnchor -- this keeps them from overflowing the road edges,
+-%   which is what was happening with the larger offsets before.
+-
+-    if nargin < 2 || isempty(numVehicles)
+-        numVehicles = 6;
+-    end
+-    if nargin < 3 || isempty(speedKmh)
+-        speedKmh = 30;   % non-ideal-road default congested speed
+-    end
+-    if nargin < 4 || isempty(roadLength_m)
+-        roadLength_m = 40;   % fallback only -- real value now comes from the caller
+-    end
+-
+-    fprintf('      Placing %d non-ideal vehicles on a %.1fm road at %.0f km/h...\n', ...
+-        numVehicles, roadLength_m, speedKmh);
+-
+-    newScenario(rrApp);
+-    rrApi = roadrunnerAPI(rrApp);
+-    scnro = rrApi.Scenario;
+-    prj   = rrApi.Project;
+-
+-    margin_m     = 3;
+-    usable_m     = max(roadLength_m - 2*margin_m, 1);
+-    spacing_m    = usable_m / max(numVehicles, 1);
+-
+-    driveDist = min(spacing_m * 0.6, max(speedKmh / 50 * 8, 2));
+-
+-    jitter = 0.3;   % small, safe sideways variation -- stays within the lane
+-
+-    placed = 0;
+-    for i = 1:numVehicles
+-        try
+-            asset = getAsset(prj, "Vehicles/Sedan.fbx", "VehicleAsset");
+-            startX = margin_m + (i-1) * spacing_m;
+-            lane_t = jitter * (mod(i, 2) * 2 - 1);   % alternates +/-jitter
+-
+-            car = addActor(scnro, asset, [startX, lane_t, 0]);
+-            autoAnchor(car.InitialPoint, PosePreservation="reset-pose");
+-
+-            rrRoute = car.InitialPoint.Route;
+-            endPoint = addPoint(rrRoute, [startX + driveDist, lane_t, 0]);
+-            autoAnchor(endPoint, PosePreservation="reset-pose");
+-
+-            placed = placed + 1;
+-        catch e
+-            warning('add_vehicles_nonideal:PlacementFailed', ...
+-                'Could not place/anchor vehicle %d: %s', i, e.message);
+-        end
+-    end
+-
+-    saveScenario(rrApp, 'nonideal_traffic.rrscenario');
+-    fprintf('      %d of %d vehicles placed and anchored to the road.\n', placed, numVehicles);
++%   numVehicles  : optional EXACT count. Leave empty (recommended): the count
++%                  is the ideal-road traffic scaled by opts.keepFraction
++%                  (= real reduced / original capacity), so fewer vehicles
++%                  and a lower speed show the REAL capacity loss.
++%   speedKmh     : real congested speed (empty = 30 km/h).
++%   roadLength_m : real road length (empty = 40 m).
++%   opts         : optional struct, see build_traffic.m (keepFraction,
++%                  projectFolder, numLanes, totalWidth_m, ...).
++
++    if nargin < 2, numVehicles = []; end
++    if nargin < 3, speedKmh = []; end
++    if nargin < 4, roadLength_m = []; end
++    if nargin < 5 || isempty(opts), opts = struct(); end
++    if ~isempty(numVehicles), opts.targetCount = numVehicles; end
++    opts.scenarioFile = 'nonideal_traffic.rrscenario';
++
++    build_traffic(rrApp, 'nonideal', speedKmh, roadLength_m, opts);
+ end
+diff --git a/road_analyzer_deploy/matlab_twin/auto_import_roadrunner.m b/road_analyzer_deploy/matlab_twin/auto_import_roadrunner.m
+index 6e90883..2d00068 100644
+--- a/road_analyzer_deploy/matlab_twin/auto_import_roadrunner.m
++++ b/road_analyzer_deploy/matlab_twin/auto_import_roadrunner.m
+@@ -17,7 +17,7 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
+     % .xodr and .json files together in ONE folder; no path to edit.
+     RESULTS_DIR = fileparts(mfilename('fullpath'));
+     if nargin < 3 || isempty(project_folder)
+-        project_folder = 'C:\Users\Admin\OneDrive\Desktop\New RoadRunner Project';  % <-- CONFIRM this is your real RoadRunner project folder
++        project_folder = 'C:\Users\Admin\OneDrive\Documents\final year\matlab roadrunner\New RoadRunner Project';  % <-- CONFIRM this is your real RoadRunner project folder
+     end
+     % --------------------------------------------------------------------
+ 
+@@ -134,21 +134,20 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
+         fprintf('      Could not parse road length from file, using default %.0f m.\n', roadLength_m);
+     end
+ 
+-    baselineVehicles = 6;   % vehicle count shown for the ideal case
+-    numVehicles = baselineVehicles;
+-    speedKmh = [];   % empty = let the vehicle script use its own default
++    speedKmh        = [];   % empty = twin_config.m default
+     defectPositions = [];   % real per-instance defect data, for accurate markers
+-    totalWidth_m = [];      % real road width, needed to place them correctly
++    totalWidth_m    = [];   % real road width
++    numLanes        = [];   % real lane count
++    keepFraction    = 1;    % defect road: reduced / original capacity
+     if isfile(capacityJsonPath)
+         try
+             cap = jsondecode(fileread(capacityJsonPath));
+-            if strcmp(mode, 'nonideal') && ~isempty(cap.original_capacity_vehicles_hr) ...
+-                    && cap.original_capacity_vehicles_hr > 0
+-                ratio = cap.reduced_capacity_vehicles_hr / cap.original_capacity_vehicles_hr;
+-                numVehicles = max(1, round(baselineVehicles * ratio));
+-                fprintf('      Using real capacity data: %.0f -> %.0f veh/hr (%.0f%% loss) -> %d vehicles shown\n', ...
++            if strcmp(mode, 'nonideal') && isfield(cap, 'original_capacity_vehicles_hr') ...
++                    && ~isempty(cap.original_capacity_vehicles_hr) && cap.original_capacity_vehicles_hr > 0
++                keepFraction = cap.reduced_capacity_vehicles_hr / cap.original_capacity_vehicles_hr;
++                fprintf('      Using real capacity data: %.0f -> %.0f veh/hr (%.0f%% loss) -> %.0f%% of the ideal traffic shown\n', ...
+                     cap.original_capacity_vehicles_hr, cap.reduced_capacity_vehicles_hr, ...
+-                    cap.capacity_loss_pct, numVehicles);
++                    cap.capacity_loss_pct, 100 * keepFraction);
+             end
+             if strcmp(mode, 'ideal') && isfield(cap, 'free_flow_speed_kmh') && ~isempty(cap.free_flow_speed_kmh)
+                 speedKmh = cap.free_flow_speed_kmh;
+@@ -163,21 +162,28 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
+             if isfield(cap, 'total_width_m') && ~isempty(cap.total_width_m)
+                 totalWidth_m = cap.total_width_m;
+             end
+-        catch
+-            fprintf('      Could not read capacity data, using default vehicle count/speed.\n');
++            if isfield(cap, 'num_lanes') && ~isempty(cap.num_lanes)
++                numLanes = cap.num_lanes;
++            end
++        catch capErr
++            fprintf('      Could not read capacity data (%s), using defaults.\n', capErr.message);
+         end
+     else
+-        fprintf('      No capacity data found (%s) -- using default vehicle count/speed.\n', capacityJsonPath);
++        fprintf('      No capacity data found (%s) -- using default traffic.\n', capacityJsonPath);
+     end
+ 
++    % Everything the traffic / defect scripts need to match the real road.
++    opts = struct('projectFolder', project_folder, 'numLanes', numLanes, ...
++                  'totalWidth_m', totalWidth_m, 'keepFraction', keepFraction);
++
+     if strcmp(mode, 'ideal')
+-        add_vehicles_ideal(rrApp, baselineVehicles, speedKmh, roadLength_m);
++        add_vehicles_ideal(rrApp, [], speedKmh, roadLength_m, opts);
+     else
+-        add_vehicles_nonideal(rrApp, numVehicles, speedKmh, roadLength_m);
+-        % Real detected defects (potholes, barricades, etc.) get placed as
+-        % VISIBLE markers here, at their REAL measured lateral position --
+-        % see add_defects_to_scene.m for details.
+-        add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m);
++        add_vehicles_nonideal(rrApp, [], speedKmh, roadLength_m, opts);
++        % Real detected defects (potholes, barricades, ...) become enlarged,
++        % clearly visible marker clusters -- see add_defects_to_scene.m and
++        % twin_config.m.
++        add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m, opts);
+     end
+ 
+     fprintf('[5/5] Starting simulation...\n');
+diff --git a/road_analyzer_deploy/matlab_twin/build_traffic.m b/road_analyzer_deploy/matlab_twin/build_traffic.m
+new file mode 100644
+index 0000000..2ce7916
+--- /dev/null
++++ b/road_analyzer_deploy/matlab_twin/build_traffic.m
+@@ -0,0 +1,168 @@
++function planned = build_traffic(rrApp, mode, speedKmh, roadLength_m, opts)
++%BUILD_TRAFFIC  Dense, mixed, MOVING traffic for the ideal or defect road.
++%
++%   Replaces the old "6 sedans that barely move". Vehicles are
++%     * a mix of cars, two-wheelers, trucks, buses and vans (twin_config.m)
++%     * packed lane by lane with a real gap, so they never overlap
++%     * given a speed and a route, so they actually drive when you press Play
++%     * fewer on the defect road, in proportion to the REAL capacity loss
++%
++%   mode          : 'ideal' or 'nonideal'
++%   speedKmh      : real free-flow (ideal) or congested (nonideal) speed
++%   roadLength_m  : real road length
++%   opts (optional struct, every field optional):
++%     .projectFolder  RoadRunner project folder (lets twin_assets list your real assets)
++%     .numLanes       lanes on the road (default 2)
++%     .totalWidth_m   road width in metres (default 7)
++%     .keepFraction   nonideal only: reduced/original capacity, 0..1 (default 1)
++%     .targetCount    force an exact vehicle count instead
++%     .scenarioFile   file name to save the scenario to
++%
++%   Returns the number of vehicles planned.
++
++    cfg = twin_config();  tc = cfg.traffic;
++    if nargin < 5 || isempty(opts), opts = struct(); end
++    mode = lower(char(mode));
++    if nargin < 3 || isempty(speedKmh),     speedKmh = tc.defaultSpeedKmh.(mode); end
++    if nargin < 4 || isempty(roadLength_m), roadLength_m = 40; end
++
++    nLanes       = max(1, round(getOpt(opts, 'numLanes', 2)));
++    totalWidth   = getOpt(opts, 'totalWidth_m', 7.0);
++    laneW        = totalWidth / nLanes;
++    keepFraction = getOpt(opts, 'keepFraction', 1);
++    target       = getOpt(opts, 'targetCount', []);
++    scenarioFile = char(getOpt(opts, 'scenarioFile', [mode '_traffic.rrscenario']));
++
++    %% ---- lane table: lateral centre t, travel direction, rank (1 = inner)
++    nLeft  = ceil(nLanes/2);               % same split as roadrunner_export.py
++    nRight = nLanes - nLeft;
++    plusDir = 1;  if ~tc.rightLanesTravelPlusX, plusDir = -1; end
++    lanes = struct('t',{},'dir',{},'rank',{});
++    for i = 1:nRight, lanes(end+1) = struct('t', -(i-0.5)*laneW, 'dir',  plusDir, 'rank', i); end %#ok<AGROW>
++    for i = 1:nLeft,  lanes(end+1) = struct('t',  (i-0.5)*laneW, 'dir', -plusDir, 'rank', i); end %#ok<AGROW>
++
++    %% ---- plan the vehicle slots lane by lane (no overlaps, fixed seed)
++    rng(tc.seed);
++    cats   = fieldnames(tc.mix);
++    wts    = cellfun(@(c) tc.mix.(c), cats);
++    cumw   = cumsum(wts) / sum(wts);
++    usable = max(roadLength_m - 2*tc.margin_m, 1);
++    packLen = (1 - tc.travelReserve) * usable;     % traffic starts in this part,
++    reserve = tc.travelReserve * usable;           % and drives into the rest
++    slots = zeros(0,3);                            % [lane index, x centre, category index]
++    for li = 1:numel(lanes)
++        dirn = lanes(li).dir;
++        if dirn > 0
++            x = tc.margin_m;                 limit = x + packLen;
++        else
++            x = roadLength_m - tc.margin_m;  limit = x - packLen;
++        end
++        while true
++            ci  = find(rand <= cumw, 1);
++            len = tc.length_m.(cats{ci});
++            xc  = x + dirn*len/2;
++            far = xc + dirn*len/2;
++            if (dirn > 0 && far > limit) || (dirn < 0 && far < limit), break; end
++            slots(end+1,:) = [li, xc, ci]; %#ok<AGROW>
++            x = far + dirn*tc.gap_m;
++        end
++    end
++    if isempty(slots)
++        slots = [1, roadLength_m/2, 1];
++        warning('build_traffic:RoadTooShort', 'Road is very short -- placing a single vehicle.');
++    end
++
++    %% ---- how many to show
++    n      = size(slots,1);
++    nIdeal = min(n, tc.maxVehicles);
++    if ~isempty(target)
++        nKeep = min(target, n);
++    elseif strcmp(mode, 'nonideal')
++        nKeep = max(min(tc.minVehicles, nIdeal), round(nIdeal * min(max(keepFraction,0),1)));
++    else
++        nKeep = nIdeal;
++    end
++    nKeep = max(1, min(nKeep, tc.maxVehicles));
++    if nKeep < n
++        slots = slots(unique(round(linspace(1, n, nKeep))), :);   % thin evenly: gaps only grow
++    end
++    planned = size(slots,1);
++    fprintf('      Traffic plan (%s): %d vehicles on %d lane(s), %.0f km/h, %.0f m road.\n', ...
++        mode, planned, numel(lanes), speedKmh, roadLength_m);
++
++    %% ---- place them
++    newScenario(rrApp);
++    rrApi = roadrunnerAPI(rrApp);
++    scnro = rrApi.Scenario;
++    prj   = rrApi.Project;
++    A = twin_assets(prj, getOpt(opts, 'projectFolder', ''));
++
++    used  = struct();  for c = 1:numel(cats), used.(cats{c}) = 0; end
++    placed = 0;  speedFailed = 0;
++    for k = 1:planned
++        try
++            lane   = lanes(slots(k,1));
++            cat    = cats{slots(k,3)};
++            startX = slots(k,2);
++            used.(cat) = used.(cat) + 1;
++            asset  = pickAsset(A, cat, used.(cat));
++
++            side = mod(k,2)*2 - 1;                       % alternates -1 / +1
++            lat  = lane.t;
++            if strcmp(cat, 'twoWheeler')
++                lat = lat + side * min(max(laneW/2 - 0.6, 0), 1.2);   % hug the lane edge
++            elseif strcmp(mode, 'nonideal')
++                lat = lat + side * tc.weave_m;                        % weave round obstructions
++            end
++
++            kmh = speedKmh * (1 - tc.laneSpeedStep * (lane.rank - 1));
++            mps = kmh / 3.6;
++            % Everyone in a lane drives the SAME distance, so gaps never close.
++            dist = min(mps * tc.simSeconds, reserve);
++            endX = startX + lane.dir * max(dist, 1);
++
++            car = addActor(scnro, asset, [startX, lat, 0]);
++            autoAnchor(car.InitialPoint, PosePreservation="reset-pose");
++            if ~setPointSpeed(car.InitialPoint, mps), speedFailed = speedFailed + 1; end
++
++            rrRoute  = car.InitialPoint.Route;
++            endPoint = addPoint(rrRoute, [endX, lat, 0]);
++            autoAnchor(endPoint, PosePreservation="reset-pose");
++            setPointSpeed(endPoint, mps);
++
++            placed = placed + 1;
++        catch e
++            warning('build_traffic:PlacementFailed', 'Could not place vehicle %d: %s', k, e.message);
++        end
++    end
++
++    if speedFailed > 0
++        warning('build_traffic:SpeedNotSet', ...
++            ['Could not set vehicle speeds through the API on this RoadRunner release.\n' ...
++             'In RoadRunner Scenario, select the vehicles and set their Initial Speed there.']);
++    end
++    saveScenario(rrApp, scenarioFile);
++    fprintf('      %d of %d vehicles placed, anchored and saved to %s.\n', placed, planned, scenarioFile);
++end
++
++%% ---------------------------------------------------------------- helpers
++function v = getOpt(opts, name, default)
++    if isfield(opts, name) && ~isempty(opts.(name)), v = opts.(name); else, v = default; end
++end
++
++function a = pickAsset(A, cat, n)
++    pool = A.vehicles.(cat);
++    if isempty(pool), pool = A.vehicles.car; end
++    if isempty(pool), pool = struct2cell(A.vehicles); pool = [pool{:}]; end
++    a = pool{mod(n-1, numel(pool)) + 1};
++end
++
++function ok = setPointSpeed(pt, mps)
++% Speed (m/s) on a route point -- the Point object has a Speed property.
++    ok = true;
++    try
++        pt.Speed = mps;
++    catch
++        ok = false;
++    end
++end
+diff --git a/road_analyzer_deploy/matlab_twin/twin_assets.m b/road_analyzer_deploy/matlab_twin/twin_assets.m
+new file mode 100644
+index 0000000..64b96e8
+--- /dev/null
++++ b/road_analyzer_deploy/matlab_twin/twin_assets.m
+@@ -0,0 +1,108 @@
++function A = twin_assets(prj, projectFolder)
++%TWIN_ASSETS  Finds the vehicle and prop assets that REALLY exist in your
++%   RoadRunner project, instead of hard-coding one file name.
++%
++%   A.vehicles.car / twoWheeler / truck / bus / van : cell arrays of assets
++%   A.props.cone / barrier / barrel                 : one prop asset each
++%
++%   prj           : rrApi.Project
++%   projectFolder : path of the RoadRunner project (used to list files on
++%                   disk). If empty, only the known default names are tried.
++%
++%   Anything that cannot be found falls back to a car / a traffic cone, so
++%   the scene always builds; a summary of what was found is printed.
++
++    if nargin < 2, projectFolder = ''; end
++    cats = {'car','twoWheeler','truck','bus','van'};
++    A.vehicles = struct();
++    for k = 1:numel(cats), A.vehicles.(cats{k}) = {}; end
++
++    % file-name keywords -> category (first match wins)
++    rules = { 'twoWheeler', ["motorcycle","motorbike","scooter","moped","bicycle","bike"]; ...
++              'bus',        "bus"; ...
++              'truck',      ["truck","lorry","trailer","semi"]; ...
++              'van',        "van"; ...
++              'car',        ["sedan","hatch","suv","coupe","wagon","taxi","pickup","car"] };
++
++    %% ---- vehicles
++    vehPaths = discoverAssets(projectFolder, 'Vehicles');
++    if isempty(vehPaths), vehPaths = "Vehicles/Sedan.fbx"; end
++    for k = 1:numel(vehPaths)
++        asset = tryAsset(prj, vehPaths(k), "VehicleAsset");
++        if isempty(asset), continue; end
++        name = lower(lastPart(vehPaths(k)));
++        cat = 'car';                                  % unknown vehicles count as cars
++        for r = 1:size(rules,1)
++            if any(contains(name, rules{r,2})), cat = rules{r,1}; break; end
++        end
++        A.vehicles.(cat){end+1} = asset;
++    end
++    if all(cellfun(@(c) isempty(A.vehicles.(c)), cats))
++        error('twin_assets:NoVehicles', ...
++            ['No vehicle asset could be loaded from the project.\n' ...
++             'Check that Assets/Vehicles contains at least one vehicle (e.g. Sedan.fbx_rrx).']);
++    end
++    fprintf('      Vehicle assets found:');
++    for k = 1:numel(cats), fprintf('  %s=%d', cats{k}, numel(A.vehicles.(cats{k}))); end
++    fprintf('\n');
++
++    %% ---- props (defect markers)
++    propPaths = discoverAssets(projectFolder, 'Props');
++    knownCone = "Props/TrafficControl/TrafficCone01.fbx";
++    A.props.cone = firstProp(prj, propPaths, ["cone"], ["guardrail","wall"], knownCone);
++    if isempty(A.props.cone)
++        error('twin_assets:NoCone', 'Could not load %s from the project.', knownCone);
++    end
++    A.props.barrier = firstProp(prj, propPaths, ["barricade","barrier","blockade"], ...
++                                ["guardrail","wall","rail"], "");
++    A.props.barrel  = firstProp(prj, propPaths, ["barrel","drum","bin","trash","garbage"], ...
++                                strings(1,0), "");
++    if isempty(A.props.barrier), A.props.barrier = A.props.cone; end
++    if isempty(A.props.barrel),  A.props.barrel  = A.props.cone; end
++end
++
++%% ---------------------------------------------------------------- helpers
++function paths = discoverAssets(projectFolder, sub)
++% List <project>/Assets/<sub>/**/*_rrx and return paths as getAsset expects
++% them: relative to Assets, forward slashes, without the trailing "_rrx".
++    paths = strings(0,1);
++    if isempty(projectFolder), return; end
++    root = fullfile(projectFolder, 'Assets');
++    if ~isfolder(fullfile(root, sub)), return; end
++    d = dir(fullfile(root, sub, '**', '*_rrx'));
++    d = d(~[d.isdir]);
++    for k = 1:numel(d)
++        full = string(fullfile(d(k).folder, d(k).name));
++        rel  = extractAfter(full, string(root) + filesep);
++        rel  = replace(rel, filesep, "/");
++        paths(end+1,1) = regexprep(rel, '_rrx$', ''); %#ok<AGROW>
++    end
++end
++
++function asset = tryAsset(prj, path, type)
++    try
++        asset = getAsset(prj, path, type);
++    catch
++        asset = [];
++    end
++end
++
++function s = lastPart(path)
++    parts = split(string(path), "/");
++    s = parts(end);
++end
++
++function asset = firstProp(prj, propPaths, include, exclude, fallback)
++% First loadable prop whose FILE NAME contains an include word and no exclude word.
++    asset = [];
++    for k = 1:numel(propPaths)
++        name = lower(lastPart(propPaths(k)));
++        if any(contains(name, include)) && ~any(contains(name, exclude))
++            asset = tryAsset(prj, propPaths(k), "MovableObjectAsset");
++            if ~isempty(asset), return; end
++        end
++    end
++    if strlength(fallback) > 0
++        asset = tryAsset(prj, fallback, "MovableObjectAsset");
++    end
++end
+diff --git a/road_analyzer_deploy/matlab_twin/twin_config.m b/road_analyzer_deploy/matlab_twin/twin_config.m
+new file mode 100644
+index 0000000..ae29570
+--- /dev/null
++++ b/road_analyzer_deploy/matlab_twin/twin_config.m
+@@ -0,0 +1,43 @@
++function cfg = twin_config()
++%TWIN_CONFIG  Every look-and-feel setting of the RoadRunner twin in ONE place.
++%   Edit the numbers below -- no other file needs to change.
++%
++%   Used by: build_traffic.m, add_defects_to_scene.m, twin_assets.m
++
++%% ===================== TRAFFIC =====================
++cfg.traffic.gap_m          = 3.0;    % bumper-to-bumper gap on the ideal road
++cfg.traffic.margin_m       = 3.0;    % keep clear of the road start / end
++cfg.traffic.minVehicles    = 8;      % never show fewer than this (defect road)
++cfg.traffic.maxVehicles    = 80;     % cap for very long corridors
++cfg.traffic.simSeconds     = 40;     % how long vehicles drive (distance = speed * this)
++cfg.traffic.travelReserve  = 0.40;   % share of the road kept free ahead of the traffic
++cfg.traffic.laneSpeedStep  = 0.06;   % each lane away from the centreline is 6% slower
++cfg.traffic.weave_m        = 0.25;   % sideways weave on the defect road
++cfg.traffic.seed           = 7;      % fixed seed -> identical traffic every run
++cfg.traffic.rightLanesTravelPlusX = true;   % OpenDRIVE default: lanes with t<0 drive +x
++% Vehicle mix (fractions, normalised automatically)
++cfg.traffic.mix      = struct('car',0.45,'twoWheeler',0.25,'truck',0.15,'bus',0.10,'van',0.05);
++% Typical lengths (m), used to space vehicles so they never overlap
++cfg.traffic.length_m = struct('car',4.5,'twoWheeler',2.0,'truck',8.5,'bus',11.0,'van',5.0);
++% Used only when the capacity JSON has no speed
++cfg.traffic.defaultSpeedKmh = struct('ideal',50,'nonideal',30);
++
++%% ===================== DEFECT VISIBILITY =====================
++% A real pothole (~0.4 m) or barricade is far too small to see on a road
++% model in RoadRunner. Each defect is therefore drawn as a CLUSTER of markers
++% over an ENLARGED footprint:
++%   footprint = max(measured size * scale, minimum size)
++%   kind      : 'ring' (markers around the edge), 'row' (a line across the
++%               road), 'fill' (a grid), 'single', 'vehicle' (a parked vehicle)
++%   prop      : 'cone', 'barrier' or 'barrel' (falls back to cone if the
++%               project has no such prop)
++mk = @(kind,L,W,sc,sp,prop,maxN,veh) struct('kind',kind,'minLength_m',L,'minWidth_m',W, ...
++        'scale',sc,'spacing_m',sp,'prop',prop,'maxMarkers',maxN,'vehicle',veh);
++cfg.defect.default         = mk('fill',   1.0, 1.0, 1.5, 0.40, 'cone',    16, '');
++cfg.defect.pothole         = mk('ring',   1.4, 1.4, 1.5, 0.35, 'cone',    24, '');
++cfg.defect.barricade       = mk('row',    0.5, 3.0, 1.5, 0.80, 'barrier', 12, '');
++cfg.defect.illegal_parking = mk('vehicle',0,   0,   1.0, 0,    'cone',     1, 'car');
++cfg.defect.street_vendor   = mk('ring',   1.8, 1.8, 1.2, 0.50, 'cone',    16, '');
++cfg.defect.garbage         = mk('fill',   1.2, 1.2, 1.5, 0.40, 'barrel',  16, '');
++cfg.defect.tree            = mk('single', 0.5, 0.5, 1.0, 0.50, 'cone',     1, '');
++end
