@@ -17,7 +17,7 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     % .xodr and .json files together in ONE folder; no path to edit.
     RESULTS_DIR = fileparts(mfilename('fullpath'));
     if nargin < 3 || isempty(project_folder)
-        project_folder = 'C:\Users\Admin\OneDrive\Desktop\New RoadRunner Project';  % <-- CONFIRM this is your real RoadRunner project folder
+        project_folder = 'C:\Users\Admin\OneDrive\Documents\final year\matlab roadrunner\New RoadRunner Project';  % <-- CONFIRM this is your real RoadRunner project folder
     end
     % --------------------------------------------------------------------
 
@@ -134,21 +134,20 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
         fprintf('      Could not parse road length from file, using default %.0f m.\n', roadLength_m);
     end
 
-    baselineVehicles = 6;   % vehicle count shown for the ideal case
-    numVehicles = baselineVehicles;
-    speedKmh = [];   % empty = let the vehicle script use its own default
+    speedKmh        = [];   % empty = twin_config.m default
     defectPositions = [];   % real per-instance defect data, for accurate markers
-    totalWidth_m = [];      % real road width, needed to place them correctly
+    totalWidth_m    = [];   % real road width
+    numLanes        = [];   % real lane count
+    keepFraction    = 1;    % defect road: reduced / original capacity
     if isfile(capacityJsonPath)
         try
             cap = jsondecode(fileread(capacityJsonPath));
-            if strcmp(mode, 'nonideal') && ~isempty(cap.original_capacity_vehicles_hr) ...
-                    && cap.original_capacity_vehicles_hr > 0
-                ratio = cap.reduced_capacity_vehicles_hr / cap.original_capacity_vehicles_hr;
-                numVehicles = max(1, round(baselineVehicles * ratio));
-                fprintf('      Using real capacity data: %.0f -> %.0f veh/hr (%.0f%% loss) -> %d vehicles shown\n', ...
+            if strcmp(mode, 'nonideal') && isfield(cap, 'original_capacity_vehicles_hr') ...
+                    && ~isempty(cap.original_capacity_vehicles_hr) && cap.original_capacity_vehicles_hr > 0
+                keepFraction = cap.reduced_capacity_vehicles_hr / cap.original_capacity_vehicles_hr;
+                fprintf('      Using real capacity data: %.0f -> %.0f veh/hr (%.0f%% loss) -> %.0f%% of the ideal traffic shown\n', ...
                     cap.original_capacity_vehicles_hr, cap.reduced_capacity_vehicles_hr, ...
-                    cap.capacity_loss_pct, numVehicles);
+                    cap.capacity_loss_pct, 100 * keepFraction);
             end
             if strcmp(mode, 'ideal') && isfield(cap, 'free_flow_speed_kmh') && ~isempty(cap.free_flow_speed_kmh)
                 speedKmh = cap.free_flow_speed_kmh;
@@ -163,21 +162,28 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
             if isfield(cap, 'total_width_m') && ~isempty(cap.total_width_m)
                 totalWidth_m = cap.total_width_m;
             end
-        catch
-            fprintf('      Could not read capacity data, using default vehicle count/speed.\n');
+            if isfield(cap, 'num_lanes') && ~isempty(cap.num_lanes)
+                numLanes = cap.num_lanes;
+            end
+        catch capErr
+            fprintf('      Could not read capacity data (%s), using defaults.\n', capErr.message);
         end
     else
-        fprintf('      No capacity data found (%s) -- using default vehicle count/speed.\n', capacityJsonPath);
+        fprintf('      No capacity data found (%s) -- using default traffic.\n', capacityJsonPath);
     end
 
+    % Everything the traffic / defect scripts need to match the real road.
+    opts = struct('projectFolder', project_folder, 'numLanes', numLanes, ...
+                  'totalWidth_m', totalWidth_m, 'keepFraction', keepFraction);
+
     if strcmp(mode, 'ideal')
-        add_vehicles_ideal(rrApp, baselineVehicles, speedKmh, roadLength_m);
+        add_vehicles_ideal(rrApp, [], speedKmh, roadLength_m, opts);
     else
-        add_vehicles_nonideal(rrApp, numVehicles, speedKmh, roadLength_m);
-        % Real detected defects (potholes, barricades, etc.) get placed as
-        % VISIBLE markers here, at their REAL measured lateral position --
-        % see add_defects_to_scene.m for details.
-        add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m);
+        add_vehicles_nonideal(rrApp, [], speedKmh, roadLength_m, opts);
+        % Real detected defects (potholes, barricades, ...) become enlarged,
+        % clearly visible marker clusters -- see add_defects_to_scene.m and
+        % twin_config.m.
+        add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m, opts);
     end
 
     fprintf('[5/5] Starting simulation...\n');
