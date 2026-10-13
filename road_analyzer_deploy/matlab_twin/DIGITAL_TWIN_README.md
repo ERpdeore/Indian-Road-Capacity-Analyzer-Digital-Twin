@@ -177,3 +177,40 @@ Options:
 
 For a final-year project demo, option 1 or 3 is perfectly fine.
 State clearly in your viva: "MATLAB runs locally, Python reads the output".
+
+---
+
+## RoadRunner 3D scene: visibility and traffic settings
+
+Everything about how the RoadRunner scene *looks* is set in **`twin_config.m`** -
+edit the numbers there, no other file needs to change.
+
+| File | Purpose |
+|---|---|
+| `twin_config.m` | Traffic density, vehicle mix, speeds, and how big each defect is drawn |
+| `twin_assets.m` | Finds the vehicle / prop assets that really exist in your RoadRunner project |
+| `build_traffic.m` | Places dense, mixed, moving traffic (cars, two-wheelers, trucks, buses, vans) |
+| `add_vehicles_ideal.m` / `add_vehicles_nonideal.m` | Thin wrappers around `build_traffic.m` |
+| `add_defects_to_scene.m` | Draws each defect as an enlarged cluster of markers |
+
+**Defects.** A real pothole (~0.4 m) or barricade is too small to see on a road
+model, so each is drawn over an *enlarged footprint*:
+`max(measured size x scale, minimum size)`. Potholes become a ring of cones,
+barricades a row of barrier pieces across the blocked width, illegal parking a
+parked vehicle, garbage a grid of barrels. The console prints measured size vs.
+drawn size for every defect, so the enlargement is never hidden - say so in your
+viva: *"markers are exaggerated for visibility; the lateral position is real."*
+
+**Traffic.** Vehicles are packed lane by lane with a real gap (no overlaps), in
+the mix set in `twin_config.m`. The defect road shows
+`reduced capacity / original capacity` of the ideal road's traffic, at the real
+congested speed. Vehicles get a speed and a route, so they drive when you press
+Play.
+
+**Limits to state honestly**
+- A single photo gives a ~40 m road, so vehicles can only drive a few seconds
+  before reaching the end. Use the multi-photo corridor export for a longer road.
+- Along-road spacing between defects is cosmetic (one photo cannot measure it);
+  left-right position is real.
+- If your RoadRunner release does not accept `Speed` on a route point, the script
+  warns you; set Initial Speed on the vehicles in RoadRunner Scenario instead.
