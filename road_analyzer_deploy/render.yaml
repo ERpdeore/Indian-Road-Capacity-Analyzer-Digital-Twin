@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: road-efficiency-analyzer
+    name: indian-road-capacity-analyzer
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile

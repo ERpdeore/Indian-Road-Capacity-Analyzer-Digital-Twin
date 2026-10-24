@@ -135,26 +135,42 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     end
 
     speedKmh        = [];   % empty = twin_config.m default
-    defectPositions = [];   % real per-instance defect data, for accurate markers
-    totalWidth_m    = [];   % real road width
-    numLanes        = [];   % real lane count
-    keepFraction    = 1;    % defect road: reduced / original capacity
+    defectPositions = [];   % measured lateral defect positions
+    totalWidth_m    = [];   % measured carriageway width
+    numLanes        = [];   % lane count of the analysed carriageway
+    density         = [];   % PCU/km/lane from the Python twin (twin.ideal / twin.defect)
+    avgPcu          = [];   % PCU per vehicle, to turn PCU density into vehicles
+    divided         = false;% divided-road carriageway = all lanes one direction
     if isfile(capacityJsonPath)
         try
             cap = jsondecode(fileread(capacityJsonPath));
-            if strcmp(mode, 'nonideal') && isfield(cap, 'original_capacity_vehicles_hr') ...
-                    && ~isempty(cap.original_capacity_vehicles_hr) && cap.original_capacity_vehicles_hr > 0
-                keepFraction = cap.reduced_capacity_vehicles_hr / cap.original_capacity_vehicles_hr;
-                fprintf('      Using real capacity data: %.0f -> %.0f veh/hr (%.0f%% loss) -> %.0f%% of the ideal traffic shown\n', ...
-                    cap.original_capacity_vehicles_hr, cap.reduced_capacity_vehicles_hr, ...
-                    cap.capacity_loss_pct, 100 * keepFraction);
+            % Vehicle count and speed come from the macroscopic twin, i.e. the
+            % SAME demand on both roads. A capacity loss does not mean fewer
+            % vehicles on the road: when demand exceeds the reduced capacity a
+            % queue forms upstream and density goes UP, speed goes DOWN.
+            if isfield(cap, 'twin') && ~isempty(cap.twin)
+                if strcmp(mode, 'ideal')
+                    st = cap.twin.ideal;
+                    speedKmh = st.section_speed_kmh;
+                    density  = st.section_density_pcu_km_lane;
+                else
+                    st = cap.twin.defect;
+                    if isfield(st, 'upstream_queue_density_pcu_km_lane')
+                        speedKmh = st.upstream_speed_kmh;           % queued traffic
+                        density  = st.upstream_queue_density_pcu_km_lane;
+                    else
+                        speedKmh = st.section_speed_kmh;
+                        density  = st.section_density_pcu_km_lane;
+                    end
+                end
+                fprintf('      Twin (%s): %s, %.1f km/h, %.1f PCU/km/lane at demand %.0f PCU/h\n', ...
+                    mode, st.state, speedKmh, density, cap.twin.demand_pcu_h);
             end
-            if strcmp(mode, 'ideal') && isfield(cap, 'free_flow_speed_kmh') && ~isempty(cap.free_flow_speed_kmh)
-                speedKmh = cap.free_flow_speed_kmh;
-                fprintf('      Using real free-flow speed: %.1f km/h\n', speedKmh);
-            elseif strcmp(mode, 'nonideal') && isfield(cap, 'congested_speed_kmh') && ~isempty(cap.congested_speed_kmh)
-                speedKmh = cap.congested_speed_kmh;
-                fprintf('      Using real congested speed: %.1f km/h\n', speedKmh);
+            if isfield(cap, 'avg_pcu_per_vehicle') && ~isempty(cap.avg_pcu_per_vehicle)
+                avgPcu = cap.avg_pcu_per_vehicle;
+            end
+            if isfield(cap, 'divided') && ~isempty(cap.divided)
+                divided = logical(cap.divided);
             end
             if strcmp(mode, 'nonideal') && isfield(cap, 'defect_positions') && ~isempty(cap.defect_positions)
                 defectPositions = cap.defect_positions;
@@ -172,9 +188,9 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
         fprintf('      No capacity data found (%s) -- using default traffic.\n', capacityJsonPath);
     end
 
-    % Everything the traffic / defect scripts need to match the real road.
     opts = struct('projectFolder', project_folder, 'numLanes', numLanes, ...
-                  'totalWidth_m', totalWidth_m, 'keepFraction', keepFraction);
+                  'totalWidth_m', totalWidth_m, 'densityPcuKmLane', density, ...
+                  'avgPcu', avgPcu, 'divided', divided);
 
     if strcmp(mode, 'ideal')
         add_vehicles_ideal(rrApp, [], speedKmh, roadLength_m, opts);

@@ -3,9 +3,9 @@ function add_vehicles_ideal(rrApp, numVehicles, speedKmh, roadLength_m, opts)
 %   Thin wrapper kept so existing callers still work; the real work is in
 %   build_traffic.m and every setting lives in twin_config.m.
 %
-%   numVehicles  : optional EXACT count. Leave empty (recommended) to fill the
-%                  lanes automatically from the road length and lane count.
-%   speedKmh     : real free-flow speed (empty = 50 km/h).
+%   numVehicles  : optional EXACT count. Leave empty (recommended): vehicles
+%                  are spaced at the twin's density at the design demand.
+%   speedKmh     : twin stream speed at that demand (empty = 50 km/h).
 %   roadLength_m : real road length (empty = 40 m).
 %   opts         : optional struct, see build_traffic.m (projectFolder, numLanes,
 %                  totalWidth_m, ...).

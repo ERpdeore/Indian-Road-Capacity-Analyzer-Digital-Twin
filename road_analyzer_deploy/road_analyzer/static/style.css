@@ -1004,3 +1004,11 @@ canvas { width: 100% !important; }
 }
 #camera-capture-btn { background: #2563eb; color: white; }
 #camera-cancel-btn { background: #444; color: white; }
+
+/* ---- Indo-HCM revision ---- */
+.field-hint.warn { color: #f59e0b; }
+.config-strip .factor-active { color: #fbbf24; }
+.depth-small  { background: #14532d; color: #86efac; }
+.depth-medium { background: #78350f; color: #fcd34d; }
+.depth-large  { background: #7f1d1d; color: #fca5a5; }
+#dt-notes div { margin-top: 4px; line-height: 1.5; }

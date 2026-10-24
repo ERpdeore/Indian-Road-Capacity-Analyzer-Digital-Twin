@@ -5,21 +5,26 @@ function cfg = twin_config()
 %   Used by: build_traffic.m, add_defects_to_scene.m, twin_assets.m
 
 %% ===================== TRAFFIC =====================
-cfg.traffic.gap_m          = 3.0;    % bumper-to-bumper gap on the ideal road
+% Vehicle COUNT and SPEED are not set here: they come from the Python
+% digital twin (capacity JSON -> twin.ideal / twin.defect), so both roads
+% carry the SAME demand and differ only by what the obstructions do to it.
+cfg.traffic.minGap_m       = 1.5;    % bumper-to-bumper gap at jam (queued traffic)
 cfg.traffic.margin_m       = 3.0;    % keep clear of the road start / end
-cfg.traffic.minVehicles    = 8;      % never show fewer than this (defect road)
-cfg.traffic.maxVehicles    = 80;     % cap for very long corridors
+cfg.traffic.maxVehicles    = 120;    % rendering cap for very long corridors
 cfg.traffic.simSeconds     = 40;     % how long vehicles drive (distance = speed * this)
 cfg.traffic.travelReserve  = 0.40;   % share of the road kept free ahead of the traffic
-cfg.traffic.laneSpeedStep  = 0.06;   % each lane away from the centreline is 6% slower
 cfg.traffic.weave_m        = 0.25;   % sideways weave on the defect road
 cfg.traffic.seed           = 7;      % fixed seed -> identical traffic every run
 cfg.traffic.rightLanesTravelPlusX = true;   % OpenDRIVE default: lanes with t<0 drive +x
-% Vehicle mix (fractions, normalised automatically)
-cfg.traffic.mix      = struct('car',0.45,'twoWheeler',0.25,'truck',0.15,'bus',0.10,'van',0.05);
+% Fallbacks used only when no capacity JSON is found
+cfg.traffic.defaultDensityPcuKmLane = 30;   % ~ LOS-C density on a 50 km/h urban arterial
+cfg.traffic.defaultAvgPcu           = 0.80; % matches indo_hcm.DEFAULT_COMPOSITION, divided road
+% Assumed Indian urban mix (same shares as road_analyzer/indo_hcm.py
+% DEFAULT_COMPOSITION; autos and LCVs are drawn as vans, two-wheelers as
+% two-wheelers). Replace with your classified count.
+cfg.traffic.mix      = struct('twoWheeler',0.55,'car',0.25,'van',0.14,'bus',0.03,'truck',0.03);
 % Typical lengths (m), used to space vehicles so they never overlap
-cfg.traffic.length_m = struct('car',4.5,'twoWheeler',2.0,'truck',8.5,'bus',11.0,'van',5.0);
-% Used only when the capacity JSON has no speed
+cfg.traffic.length_m = struct('car',4.0,'twoWheeler',2.0,'truck',8.5,'bus',11.0,'van',3.5);
 cfg.traffic.defaultSpeedKmh = struct('ideal',50,'nonideal',30);
 
 %% ===================== DEFECT VISIBILITY =====================

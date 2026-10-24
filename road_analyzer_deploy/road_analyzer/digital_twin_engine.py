@@ -1,193 +1,157 @@
 """
-digital_twin_engine.py
------------------------
-Pure-Python "digital twin" data generator for the web dashboard.
+road_analyzer.digital_twin_engine
+=================================
+Macroscopic digital twin of the surveyed section: ideal road vs the same
+road with the detected obstructions, under the same traffic demand.
 
-Why this exists
-----------------
-The dashboard's JS (static/app.js: dtRender / dtDrawCapChart / dtDrawSpdChart /
-dtAnimateRoads) already knows how to draw the twin — capacity-over-time charts,
-speed-over-time charts, and an animated ideal-road-vs-defect-road comparison.
-It was built to be fed by app.py's /api/digital-twin/status endpoint, which in
-turn expected a road_analyzer/digital_twin_bridge.py module that would launch
-real MATLAB/Simulink (matlab_twin/roadtwin.m) and poll it for results.
+Model
+-----
+1. Fundamental diagram (Greenshields, q = k v, v = v_f (1 - k/k_j)) for
+   each state, calibrated so its maximum flow equals the Indo-HCM capacity
+   computed in core.py:
+       ideal  : v_f = operating speed,            q_max = C0  -> k_j = 4 C0 / v_f
+       defect : v_f' = v_f (1 - pothole reduction), q_max = C  -> k_j' = 4 C / v_f'
+2. Demand q: the observed volume if the user entered one, otherwise the
+   LOS-C design service volume of the ideal road (0.70 C0). The source
+   used is always stated in the output.
+3. If q <= capacity: the section runs uncongested; speed and density come
+   from the uncongested branch of its fundamental diagram.
+   If q > capacity: the section is a bottleneck discharging at C.
+   Deterministic queueing gives the stored queue n(t) = (q - C) t and the
+   LWR shockwave between arriving traffic (q, k_A) and the queue
+   (C, k_Q on the congested branch of the upstream diagram) gives the
+   physical queue length growth w = (C - q) / (k_Q - k_A).
 
-That bridge module was never actually added to the repo, and — more
-importantly — a cloud host like Render doesn't have a licensed MATLAB
-installation available to run headless anyway. Requiring MATLAB locally to
-see the twin defeats the point of a web dashboard.
-
-This module produces the same *shape* of result using the same underlying
-traffic-flow theory your MATLAB script and core.py already use elsewhere in
-this project (Greenshields speed-density model, referenced throughout
-core.py's pothole-penalty comments), computed directly in Python from the
-numbers analyse_image() already calculated. No MATLAB, no subprocess, no
-external service — it runs in milliseconds as part of the normal request.
-
-If you later get a licensed MATLAB instance connected (e.g. via MATLAB
-Engine API for Python, or a self-hosted matlab_video_service), you can swap
-the call site in app.py back to that bridge without touching the frontend —
-the JSON shape returned here is intentionally identical to what dtRender()
-expects.
+What this replaces: a 60-second "capacity over time" ramp that started
+from zero and approached the IRC value through an arbitrary 12 s lag.
+Capacity is a property of the road, not something that builds up over
+a minute, so that chart had no physical meaning.
 """
+
+from __future__ import annotations
 
 import math
 from typing import Optional
 
-# Greenshields jam density (vehicles/PCU per km, per lane) for a typical
-# Indian urban arterial. IRC:106 does not itself specify a jam density —
-# this is a standard planning-level assumption (commonly 150-200 PCU/km/lane
-# in Indian urban traffic studies) and is deliberately conservative (mid-range)
-# rather than tuned to any specific corridor.
-JAM_DENSITY_PCU_PER_KM_PER_LANE = 170.0
+from road_analyzer import indo_hcm as hcm
 
-# How many seconds of "simulation" to generate for the dashboard charts.
-SIM_DURATION_S = 60
-SIM_STEP_S     = 2
+HORIZON_MIN = 60
+STEP_MIN = 2
+FD_POINTS = 25
 
-# In-memory store for the most recently generated twin (mirrors the simple
-# single-slot contract the frontend polling code already expects from
-# /api/digital-twin/status and /api/digital-twin/latest).
-_LATEST = {"status": "idle", "twin_data": None, "error": None}
+_LATEST = {"twin_data": None}
 
 
-def _greenshields_speed(density_pcu_km: float, free_flow_speed_kmh: float,
-                         jam_density_pcu_km: float) -> float:
-    """Greenshields linear speed-density relationship: v = v_f * (1 - k/k_j)."""
-    if jam_density_pcu_km <= 0:
-        return free_flow_speed_kmh
-    ratio = max(0.0, min(1.0, density_pcu_km / jam_density_pcu_km))
-    return free_flow_speed_kmh * (1 - ratio)
+def _v_uncongested(q: float, vf: float, qmax: float) -> float:
+    q = min(max(q, 0.0), qmax)
+    return vf * (1 + math.sqrt(max(0.0, 1 - q / qmax))) / 2
 
 
-def _ramp_to_steady_state(final_value: float, t: float, tau: float = 12.0) -> float:
-    """
-    First-order ramp-up: value(t) = final * (1 - e^(-t/tau)).
-    Models traffic building up to its steady-state flow/speed over the
-    simulation window rather than jumping to it instantly — this is what
-    gives the dashboard charts their curved "settling in" shape.
-    """
-    return final_value * (1 - math.exp(-t / tau))
+def _v_congested(q: float, vf: float, qmax: float) -> float:
+    q = min(max(q, 0.0), qmax)
+    return vf * (1 - math.sqrt(max(0.0, 1 - q / qmax))) / 2
 
 
-def generate_twin_data(analysis_result: dict) -> dict:
-    """
-    Build a browser-ready twin_data payload straight from an analyse_image()
-    result. Every number here traces back to values already computed by
-    core.py's IRC:106-based capacity calculation — this does not introduce
-    a second, independent estimate of road capacity, it only re-expresses
-    the existing result as a short time series for the dashboard charts.
-    """
-    free_flow_speed = float(analysis_result.get("free_flow_speed_kmh") or 50.0)
-    ideal_cap        = float(analysis_result.get("original_capacity_pcu_hr") or 0.0)
-    defect_cap       = float(analysis_result.get("reduced_capacity_pcu_hr") or ideal_cap)
-    cap_loss_pct     = float(analysis_result.get("capacity_loss_pct") or 0.0)
+def _state(name: str, demand: float, cap: float, vf: float, upstream_cap: float,
+           upstream_vf: float, lanes: int) -> dict:
+    kj = 4 * cap / vf
+    out = {"name": name, "capacity_pcu_h": round(cap, 1), "free_flow_speed_kmh": round(vf, 1),
+           "jam_density_pcu_km": round(kj, 1), "vc_ratio": round(demand / cap, 3) if cap else None}
+    if demand <= cap:
+        v = _v_uncongested(demand, vf, cap)
+        k = demand / v if v > 0 else 0.0
+        out.update(state="uncongested", section_speed_kmh=round(v, 1),
+                   section_density_pcu_km=round(k, 1),
+                   section_density_pcu_km_lane=round(k / lanes, 1),
+                   upstream_speed_kmh=round(_v_uncongested(demand, upstream_vf, upstream_cap), 1),
+                   queue_growth_pcu_h=0.0, shockwave_kmh=0.0)
+        return out
+    # Bottleneck: discharges at capacity, queue builds upstream.
+    v_cap = vf / 2
+    k_A = demand / _v_uncongested(min(demand, upstream_cap), upstream_vf, upstream_cap)
+    v_Q = _v_congested(cap, upstream_vf, upstream_cap)
+    k_Q = cap / v_Q if v_Q > 0 else 4 * upstream_cap / upstream_vf
+    w = (cap - demand) / (k_Q - k_A) if k_Q > k_A else 0.0  # km/h, negative = moves upstream
+    out.update(state="queue forming upstream", section_speed_kmh=round(v_cap, 1),
+               section_density_pcu_km=round(cap / v_cap, 1),
+               section_density_pcu_km_lane=round(cap / v_cap / lanes, 1),
+               upstream_speed_kmh=round(v_Q, 1),
+               upstream_queue_density_pcu_km_lane=round(k_Q / lanes, 1),
+               queue_growth_pcu_h=round(demand - cap, 1), shockwave_kmh=round(w, 2))
+    return out
 
-    traffic_regime   = analysis_result.get("traffic_regime", {}) or {}
-    steady_speed     = float(traffic_regime.get("congested_speed_kmh") or free_flow_speed)
 
-    cap_calc         = analysis_result.get("capacity_calculation", {}) or {}
-    num_lanes        = max(1, int((analysis_result.get("road_config") or {}).get("num_lanes", 1)))
-    worst_pothole    = cap_calc.get("worst_pothole_depth", "unknown")
+def generate_twin_data(result: dict) -> dict:
+    c0 = float(result["base_capacity_pcu_h"])
+    c = float(result["reduced_capacity_pcu_h"])
+    basis = result.get("capacity_basis") or {}
+    v0 = float(basis.get("operating_speed_kmh") or result.get("operating_speed_kmh") or 50.0)
+    lanes = int((result.get("road_config") or {}).get("num_lanes") or 2)
+    pothole = (result.get("capacity_calculation") or {}).get("worst_pothole_size")
+    r = hcm.POTHOLE_SPEED_REDUCTION.get(pothole, 0.0) if pothole else 0.0
+    vf_def = v0 * (1 - r)
 
-    # Jam density is calibrated to the IRC:106 value instead of assumed:
-    # Greenshields maximum flow is v_f * k_j / 4, so setting it equal to the
-    # undamaged design service volume gives k_j = 4 * C_DSV / v_f. This keeps
-    # the twin's peak flow identical to the IRC figure by construction.
-    # The old fixed per-lane constant is only a fallback when inputs are
-    # missing.
-    if ideal_cap > 0 and free_flow_speed > 0:
-        jam_density = 4.0 * ideal_cap / free_flow_speed
+    los = result.get("level_of_service") or {}
+    if los.get("observed_volume_pcu_h"):
+        demand, demand_src = float(los["observed_volume_pcu_h"]), "observed volume entered by user"
     else:
-        jam_density = JAM_DENSITY_PCU_PER_KM_PER_LANE * num_lanes
+        demand = c0 * hcm.DSV_VC_RATIO
+        demand_src = "ASSUMED: LOS-C design service volume of the ideal road (0.70 x C0)"
 
-    # Density implied by each capacity level under Greenshields (inverse of
-    # q = k * v with v = v_f * (1 - k/k_j) → solve for k at the flow closest
-    # to the observed capacity, staying on the uncongested branch).
-    def density_for_capacity(cap_pcu_hr: float) -> float:
-        # q(k) = k * v_f * (1 - k/k_j), maximised at k = k_j/2. We only ever
-        # need the uncongested-branch root (k <= k_j/2) since DSV values are
-        # design (not breakdown) volumes.
-        a = free_flow_speed / jam_density
-        b = -free_flow_speed
-        c = cap_pcu_hr
-        disc = b * b - 4 * a * c
-        if a == 0 or disc < 0:
-            return jam_density / 4  # fallback: light-traffic density
-        k = (-b - math.sqrt(disc)) / (2 * a)
-        return max(0.0, min(k, jam_density / 2))
+    warnings = []
+    if demand > c0:
+        warnings.append("Entered volume exceeds the base capacity C0 — check the count, its "
+                        "direction basis (one direction vs both) or the road type.")
+    ideal = _state("ideal", demand, c0, v0, c0, v0, lanes)
+    defect = _state("defect", demand, c, vf_def, c0, v0, lanes)
 
-    k_ideal  = density_for_capacity(ideal_cap)
-    k_defect = density_for_capacity(defect_cap)
+    times = list(range(0, HORIZON_MIN + 1, STEP_MIN))
+    def series(st):
+        g = st["queue_growth_pcu_h"]
+        w = abs(st["shockwave_kmh"])
+        return ([round(g * t / 60, 1) for t in times], [round(w * t / 60 * 1000, 1) for t in times])
+    qi, li = series(ideal)
+    qd, ld = series(defect)
 
-    sim_time, ideal_series, defect_series, speed_series = [], [], [], []
-    t = 0.0
-    while t <= SIM_DURATION_S:
-        k_i_t = _ramp_to_steady_state(k_ideal, t)
-        k_d_t = _ramp_to_steady_state(k_defect, t)
+    T = HORIZON_MIN / 60
+    for st in (ideal, defect):
+        g = st["queue_growth_pcu_h"]
+        st["queue_after_horizon_pcu"] = round(g * T, 1)
+        st["queue_length_after_horizon_m"] = round(abs(st["shockwave_kmh"]) * T * 1000, 1)
+        # mean delay of vehicles arriving during the horizon, deterministic queue
+        st["mean_queue_delay_min"] = round((g * T / (2 * demand)) * 60, 1) if g > 0 else 0.0
 
-        v_i_t = _greenshields_speed(k_i_t, free_flow_speed, jam_density)
-        # Defect speed is the Greenshields speed at the defect density, so
-        # q = k * v reproduces C_eff exactly and the chart's end value equals
-        # the reported congested_speed_kmh (same closed form in core.py).
-        v_d_t = _greenshields_speed(k_d_t, free_flow_speed, jam_density)
+    def fd(cap, vf):
+        flows = [cap * i / (FD_POINTS - 1) for i in range(FD_POINTS)]
+        return {"flow_pcu_h": [round(q, 1) for q in flows],
+                "speed_kmh": [round(_v_uncongested(q, vf, cap), 2) for q in flows]}
 
-        q_i_t = k_i_t * v_i_t
-        q_d_t = k_d_t * v_d_t
-
-        sim_time.append(round(t, 1))
-        ideal_series.append(round(q_i_t, 1))
-        defect_series.append(round(q_d_t, 1))
-        speed_series.append(round(v_d_t, 1))
-        t += SIM_STEP_S
-
-    speed_reduction_pct = round(
-        max(0.0, (free_flow_speed - steady_speed) / free_flow_speed * 100)
-        if free_flow_speed > 0 else 0.0, 1
-    )
-    pothole_speed_impact_pct = speed_reduction_pct if worst_pothole not in (None, "unknown", "none") else 0.0
-
-    twin_data = {
-        "engine": "python-greenshields",  # distinguishes from a real-MATLAB run if that's added later
-        "summary": {
-            "ideal_capacity_pcu_hr":     round(ideal_cap, 1),
-            "defect_capacity_pcu_hr":    round(defect_cap, 1),
-            "ideal_volume_design_pcu":   round(ideal_cap, 1),
-            "defect_volume_design_pcu":  round(defect_cap, 1),
-            "steady_state_speed_kmh":    round(steady_speed, 1),
-            "capacity_loss_pct":         round(cap_loss_pct, 1),
-            "speed_reduction_pct":       speed_reduction_pct,
-            "pothole_speed_impact_pct":  pothole_speed_impact_pct,
-        },
-        "simulation_time_s":       sim_time,
-        "ideal_capacity_pcu_hr":   ideal_series,
-        "defect_capacity_pcu_hr":  defect_series,
-        "vehicle_speed_kmh":       speed_series,
+    return {
+        "engine": "python-macroscopic (Greenshields FD + deterministic queue + LWR shockwave)",
+        "demand_pcu_h": round(demand, 1),
+        "demand_source": demand_src,
+        "horizon_min": HORIZON_MIN,
+        "ideal": ideal,
+        "defect": defect,
+        "capacity_loss_pct": result.get("capacity_loss_pct"),
+        "time_min": times,
+        "queue_pcu": {"ideal": qi, "defect": qd},
+        "queue_length_m": {"ideal": li, "defect": ld},
+        "speed_flow": {"ideal": fd(c0, v0), "defect": fd(c, vf_def)},
+        "warnings": warnings,
+        "assumptions": [
+            "Greenshields single-regime fundamental diagram, calibrated to Indo-HCM capacity.",
+            "Constant demand over the horizon; no demand diversion to other routes.",
+            f"Pothole speed reduction {r*100:.0f}% (project assumption, indo_hcm.POTHOLE_SPEED_REDUCTION).",
+            demand_src,
+        ],
     }
-    return twin_data
 
 
-def run_and_store(analysis_result: dict) -> dict:
-    """Generate twin data and stash it as 'the latest' for the poll endpoints."""
-    try:
-        twin_data = generate_twin_data(analysis_result)
-        _LATEST["status"]    = "done"
-        _LATEST["twin_data"] = twin_data
-        _LATEST["error"]     = None
-        return twin_data
-    except Exception as e:  # pragma: no cover - defensive, twin is a bonus view
-        _LATEST["status"]    = "error"
-        _LATEST["twin_data"] = None
-        _LATEST["error"]     = str(e)
-        raise
-
-
-def get_twin_status() -> dict:
-    if _LATEST["status"] == "error":
-        return {"status": "error", "error": _LATEST["error"]}
-    if _LATEST["status"] == "done":
-        return {"status": "done", "twin_data": _LATEST["twin_data"]}
-    return {"status": "idle"}
+def run_and_store(result: dict) -> dict:
+    twin = generate_twin_data(result)
+    _LATEST["twin_data"] = twin
+    return twin
 
 
 def get_latest_twin_data() -> Optional[dict]:

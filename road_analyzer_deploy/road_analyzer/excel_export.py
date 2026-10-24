@@ -83,18 +83,22 @@ def export_defects_excel(result: dict, out_path: str,
 
     # ---- Sheet 2: Summary ----
     ws2 = wb.create_sheet("Summary")
+    calc = result.get("capacity_calculation") or {}
+    los = result.get("level_of_service") or {}
     summary_fields = [
-        ("Image / segment",             cfg.get("image", "-")),
-        ("Total width (m)",             cfg.get("total_width_m", "-")),
-        ("Number of lanes",             cfg.get("num_lanes", "-")),
-        ("Chainage (m)",                cfg.get("chainage_m", "-")),
-        ("Original capacity (veh/hr)",  result.get("original_capacity_vehicles_hr", "-")),
-        ("Reduced capacity (veh/hr)",   result.get("reduced_capacity_vehicles_hr", "-")),
-        ("Capacity loss (%)",           result.get("capacity_loss_pct", "-")),
-        ("Level of Service",            result.get("level_of_service", "-")),
-        ("Free-flow speed (km/h)",      result.get("free_flow_speed_kmh", "-")),
-        ("Congested speed (km/h)",      (result.get("traffic_regime") or {}).get("congested_speed_kmh", "-")),
-        ("Defect count",                len(rows)),
+        ("Image / segment",               result.get("image", "-")),
+        ("Road type",                     (result.get("capacity_basis") or {}).get("road_type_label", "-")),
+        ("Total width (m)",               cfg.get("total_width_m", "-")),
+        ("Number of lanes",               cfg.get("num_lanes", "-")),
+        ("Chainage (m)",                  cfg.get("chainage_m", "-")),
+        ("Base capacity C0 (PCU/h)",      result.get("base_capacity_pcu_h", "-")),
+        ("Reduced capacity C (PCU/h)",    result.get("reduced_capacity_pcu_h", "-")),
+        ("Capacity loss (%)",             result.get("capacity_loss_pct", "-")),
+        ("Adjustment factors",            ", ".join(f"{k}={v}" for k, v in (calc.get("factors") or {}).items())),
+        ("Operating speed (km/h)",        result.get("operating_speed_kmh", "-")),
+        ("Observed volume (PCU/h)",       los.get("observed_volume_pcu_h", "not entered")),
+        ("LOS ideal / current",           f"{los.get('los_ideal')} / {los.get('los_reduced')}" if los else "needs volume"),
+        ("Defect count",                  len(rows)),
     ]
     ws2.append(["Field", "Value"])
     for cell in ws2[1]:
