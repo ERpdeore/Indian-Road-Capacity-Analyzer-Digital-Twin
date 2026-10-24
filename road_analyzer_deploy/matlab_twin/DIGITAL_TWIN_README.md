@@ -11,8 +11,8 @@ entered, otherwise the LOS-C service volume of the ideal road, `0.70 × C0`.
 
 | | Ideal road | Current road |
 |---|---|---|
-| Capacity | `C0` (Indo-HCM Table 5.4 or Eq. 5.4) | `C = C0 × F_OP × F_BS × F_AC` (Eq. 5.5) `× F_W × F_P` (project extensions) |
-| Free-flow speed | operating speed `v_f` | `v_f × (1 − pothole speed reduction)` |
+| Capacity | `C0` (Indo-HCM Table 5.4 or Eq. 5.4) | `C = C0 × F_OP × F_BS × F_AC` (Eq. 5.5) `× F_W × F_R` (project extensions) |
+| Free-flow speed | operating speed `v_f` | `v_f × roughness speed ratio` (1 unless IRI > 3 is entered) |
 | Fundamental diagram | Greenshields `v = v_f (1 − k/k_j)`, `k_j = 4 C0 / v_f` | same form, `k_j' = 4 C / v_f'` |
 
 * `q ≤ C`: no queue; speed and density from the uncongested branch.

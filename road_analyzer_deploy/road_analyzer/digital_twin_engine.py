@@ -9,8 +9,9 @@ Model
 1. Fundamental diagram (Greenshields, q = k v, v = v_f (1 - k/k_j)) for
    each state, calibrated so its maximum flow equals the Indo-HCM capacity
    computed in core.py:
-       ideal  : v_f = operating speed,            q_max = C0  -> k_j = 4 C0 / v_f
-       defect : v_f' = v_f (1 - pothole reduction), q_max = C  -> k_j' = 4 C / v_f'
+       ideal  : v_f = operating speed,                 q_max = C0 -> k_j = 4 C0 / v_f
+       defect : v_f' = v_f x roughness speed ratio,  q_max = C  -> k_j' = 4 C / v_f'
+   Indo-HCM itself uses Greenshields for its speed-flow capacities (Annex 5E.4).
 2. Demand q: the observed volume if the user entered one, otherwise the
    LOS-C design service volume of the ideal road (0.70 C0). The source
    used is always stated in the output.
@@ -87,9 +88,9 @@ def generate_twin_data(result: dict) -> dict:
     basis = result.get("capacity_basis") or {}
     v0 = float(basis.get("operating_speed_kmh") or result.get("operating_speed_kmh") or 50.0)
     lanes = int((result.get("road_config") or {}).get("num_lanes") or 2)
-    pothole = (result.get("capacity_calculation") or {}).get("worst_pothole_size")
-    r = hcm.POTHOLE_SPEED_REDUCTION.get(pothole, 0.0) if pothole else 0.0
-    vf_def = v0 * (1 - r)
+    rough = (result.get("capacity_calculation") or {}).get("roughness") or {}
+    speed_ratio = float(rough.get("speed_ratio") or 1.0)   # < 1 only when IRI was measured
+    vf_def = v0 * speed_ratio
 
     los = result.get("level_of_service") or {}
     if los.get("observed_volume_pcu_h"):
@@ -142,7 +143,10 @@ def generate_twin_data(result: dict) -> dict:
         "assumptions": [
             "Greenshields single-regime fundamental diagram, calibrated to Indo-HCM capacity.",
             "Constant demand over the horizon; no demand diversion to other routes.",
-            f"Pothole speed reduction {r*100:.0f}% (project assumption, indo_hcm.POTHOLE_SPEED_REDUCTION).",
+            (f"Free-flow speed on the current road reduced to {speed_ratio*100:.0f}% by measured roughness "
+             f"(extensions.roughness_factor)." if speed_ratio < 1 else
+             "Obstructions reduce capacity through width; free-flow speed is unchanged (no IRI measured)."),
+            f"Operating speed {v0:.1f} km/h: {basis.get('operating_speed_source', '')}.",
             demand_src,
         ],
     }

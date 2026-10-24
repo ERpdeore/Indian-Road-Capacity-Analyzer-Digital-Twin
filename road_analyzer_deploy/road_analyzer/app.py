@@ -37,6 +37,8 @@ logger = logging.getLogger("road_analyzer.app")
 
 from road_analyzer.core import RoadAnalyzer, CLASS_NAMES, OBSTRUCTION_CLASSES, resolve_road_inputs
 from road_analyzer import indo_hcm as hcm
+from road_analyzer import extensions as ext
+from road_analyzer import field_validation as fv
 from road_analyzer.digital_twin_engine import (
     run_and_store as dt_run_and_store,
     get_latest_twin_data as dt_get_latest_twin_data,
@@ -214,7 +216,8 @@ def _opt_float(value: Optional[str], label: str) -> Optional[float]:
 def road_form(
     total_width_m:        float = Form(...),
     road_type:            str   = Form(...),
-    functional_class:     str   = Form("arterial"),
+    iri_m_per_km:         Optional[str] = Form(None),
+    width_method:         str   = Form("proportional"),
     operating_speed_kmh:  Optional[str] = Form(None),
     observed_volume_pcu_h: Optional[str] = Form(None),
     on_street_parking:    str   = Form("none"),
@@ -230,7 +233,8 @@ def road_form(
     cfg = {
         "total_width_m": float(total_width_m),
         "road_type": road_type,
-        "functional_class": functional_class,
+        "iri_m_per_km": _opt_float(iri_m_per_km, "iri_m_per_km"),
+        "width_method": width_method,
         "operating_speed_kmh": _opt_float(operating_speed_kmh, "operating_speed_kmh"),
         "observed_volume_pcu_h": _opt_float(observed_volume_pcu_h, "observed_volume_pcu_h"),
         "on_street_parking": on_street_parking,
@@ -271,6 +275,7 @@ def _capacity_sidecar(result: dict, twin: Optional[dict]) -> dict:
     return {
         "units": "PCU/h unless stated",
         "base_capacity_pcu_h": result.get("base_capacity_pcu_h"),
+        "indo_hcm_capacity_pcu_h": result.get("indo_hcm_capacity_pcu_h"),
         "reduced_capacity_pcu_h": result.get("reduced_capacity_pcu_h"),
         "capacity_loss_pct": result.get("capacity_loss_pct"),
         "operating_speed_kmh": result.get("operating_speed_kmh"),
@@ -363,24 +368,23 @@ def serve_index():
 @app.get("/api/config-options")
 def config_options():
     def opts(table):
-        return [{"key": k, "label": v["label"], "factor": v["factor"]} for k, v in table.items()]
+        return [{"key": k, "label": v["label"], "factor": v["factor"], "table": v["table"]}
+                for k, v in table.items()]
     return {
-        "standard": hcm.SOURCE_NOTE,
+        "standard": hcm.SOURCE,
         "road_types": [
             {"key": k, "label": v["label"], "lanes": v["lanes"], "divided": v["divided"],
-             "basis": v["basis"], "ref_width_m": v["ref_width_m"],
-             "base_capacity_pcu_h": v["base_capacity_pcu_h"], "note": v.get("note", "")}
+             "basis": v["basis"], "paved_width_m": v["paved_width_m"], "ref_width_m": v["ref_width_m"],
+             "capacity_pcu_h": v["capacity_pcu_h"], "dsv_pcu_h": v["dsv_pcu_h"],
+             "condition": v.get("condition", "")}
             for k, v in hcm.ROAD_TYPES.items()
-        ],
-        "functional_classes": [
-            {"key": k, "label": v["label"], "operating_speed_kmh": v["operating_speed_kmh"]}
-            for k, v in hcm.FUNCTIONAL_CLASSES.items()
         ],
         "speed_model": {"a": hcm.SPEED_MODEL_A, "b": hcm.SPEED_MODEL_B,
                         "range_kmh": hcm.SPEED_MODEL_RANGE_KMH},
         "on_street_parking": opts(hcm.PARKING_FACTORS),
         "bus_stop": opts(hcm.BUS_STOP_FACTORS),
         "access_points": opts(hcm.ACCESS_FACTORS),
+        "width_methods": [{"key": k, "label": v} for k, v in ext.WIDTH_METHODS.items()],
         "dsv_vc_ratio": hcm.DSV_VC_RATIO,
         "defect_classes": OBSTRUCTION_CLASSES,
         "model_loaded": Path(MODEL_PATH).exists(),
@@ -860,6 +864,48 @@ async def export_roadrunner_corridor_capacity(request: Request):
 # ----------------------------------------------------------------
 # Health check
 # ----------------------------------------------------------------
+# ----------------------------------------------------------------
+# Field validation (Indo-HCM Annex 5C-5E): capacity from a survey video
+# ----------------------------------------------------------------
+@app.post("/api/field/analyse")
+def field_analyse(
+    file:       UploadFile = File(..., description="vehicles.csv: vehicle_type,t_entry_s,t_exit_s"),
+    trap_m:     float = Form(...),
+    road_type:  str   = Form(...),
+    pcu_method: str   = Form("table"),
+):
+    if road_type not in hcm.ROAD_TYPES:
+        raise HTTPException(400, f"Unknown road_type '{road_type}'.")
+    if pcu_method not in ("table", "se"):
+        raise HTTPException(400, "pcu_method must be 'table' or 'se'.")
+    job_id, job_dir = _new_job("field")
+    dest = job_dir / "vehicles.csv"
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    try:
+        res = fv.analyse_site(str(dest), trap_m, road_type, pcu_method)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, f"Could not read survey file: {e}")
+    res["job_id"] = job_id
+    return res
+
+
+class _ComparePairs(BaseModel):
+    predicted: List[float]
+    observed: List[float]
+
+
+@app.post("/api/field/compare")
+def field_compare(body: _ComparePairs):
+    """Dashboard-predicted vs field values (capacity, or capacity loss %)."""
+    if len(body.predicted) != len(body.observed):
+        raise HTTPException(400, "predicted and observed must have the same length.")
+    try:
+        return fv.error_metrics(body.predicted, body.observed)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "model_loaded": Path(MODEL_PATH).exists(), "model_path": MODEL_PATH}

@@ -3,30 +3,27 @@ road_analyzer.core
 ==================
 Detection + capacity engine for the Indian Road Capacity Analyzer.
 
-Capacity basis: Indo-HCM 2017 Chapter 5 (urban roads). All tables and
-factors are in road_analyzer/indo_hcm.py; this module only applies them.
+Two capacities are always reported, never mixed:
 
-    C_reduced = C0 x F_W x F_P x F_OP x F_BS x F_AC     (Indo-HCM Eq. 5.5 + two extensions)
+  1. Indo-HCM capacity   C_HCM = C0 x F_OP x F_BS x F_AC        (Eq. 5.5)
+        road_analyzer/indo_hcm.py — only what the manual provides.
+  2. Extended capacity   C_EXT = C_HCM x F_W x F_R
+        road_analyzer/extensions.py — project factors for obstructions
+        Indo-HCM does not cover (vendors, carts, garbage, barricades,
+        potholes) and optional roughness. Must be validated in the field.
 
-    C0    base capacity of the carriageway in the photo (indo_hcm.base_capacity)
-    F_W   usable-width factor for vendors, carts, garbage, barricades
-          (overlap-aware interval union + 0.25 m shy distance per obstruction)
-    F_P   pothole factor (speed reduction -> Indo-HCM speed/capacity model)
-    F_OP  on-street parking factor. Applied when parking is detected or
-          declared; parked vehicles are NOT also subtracted from width,
-          because the Indo-HCM parking factor already includes that loss.
-    F_BS, F_AC  bus stop and access point factors (site inputs - not
-          reliably visible in one photo)
+Each detected object feeds exactly one factor:
+    illegal_parking                          -> F_OP (Indo-HCM Tables 5.9/5.10)
+    street_vendor, cart, garbage, barricade,
+    pothole                                  -> F_W  (usable width)
+    vehicle                                  -> none (only vetoes vendor/cart boxes)
 
-Design Service Volume = 0.70 x C (LOS-C). LOS is reported ONLY when the user
-supplies an observed volume, because LOS needs V/C and a photo carries no
-flow information.
+LOS (Tables 5.6/5.7) needs V/C, so it is reported only when an observed
+volume is entered.
 
-Geometry assumption: the image width spans the full carriageway width, i.e.
-the photo looks ALONG the road with both edges at the left/right borders.
-Lateral positions are therefore x-pixel / (image_width / carriageway_width).
-This ignores perspective and is approximate; it is not valid for photos
-taken across the road from the footpath.
+Geometry assumption: the photo looks ALONG the road with both carriageway
+edges at the image borders, so lateral position = x-pixel x width / image
+width. Perspective is not corrected; obstruction widths are estimates.
 """
 
 from __future__ import annotations
@@ -39,6 +36,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 
 from road_analyzer import indo_hcm as hcm
+from road_analyzer import extensions as ext
 
 logger = logging.getLogger("road_analyzer.core")
 
@@ -73,7 +71,7 @@ CLASS_NAMES = ["barricade", "pothole", "illegal_parking", "street_vendor",
                "cart", "garbage", "vehicle"]
 OBSTRUCTION_CLASSES = ["barricade", "pothole", "illegal_parking",
                        "street_vendor", "cart", "garbage"]
-WIDTH_CLASSES = ("barricade", "street_vendor", "cart", "garbage")  # act through F_W
+WIDTH_CLASSES = ext.WIDTH_CLASSES   # act through F_W
 
 CONF_THRESHOLDS: Dict[str, float] = {
     "barricade":       0.45,
@@ -192,34 +190,6 @@ def apply_vehicle_veto(detections: List[dict],
     return kept, vetoed
 
 
-def union_of_intervals(intervals: List[Tuple[float, float]]) -> float:
-    """Total unique length covered by (left, right) intervals."""
-    if not intervals:
-        return 0.0
-    ivs = sorted(intervals)
-    total, cur_l, cur_r = 0.0, ivs[0][0], ivs[0][1]
-    for l, r in ivs[1:]:
-        if l <= cur_r:
-            cur_r = max(cur_r, r)
-        else:
-            total += cur_r - cur_l
-            cur_l, cur_r = l, r
-    return total + (cur_r - cur_l)
-
-
-def add_shy_distance(intervals: List[Tuple[float, float]], width_m: float,
-                     shy_m: float = hcm.SHY_DISTANCE_M) -> List[Tuple[float, float]]:
-    """Drivers keep clear of an obstruction the same way they keep clear of a
-    kerb. Widen each obstruction by the Indo-HCM shy distance on every side
-    that faces traffic (not on a side touching the carriageway edge)."""
-    out = []
-    for l, r in intervals:
-        nl = l - shy_m if l > 1e-6 else l
-        nr = r + shy_m if r < width_m - 1e-6 else r
-        out.append((max(0.0, nl), min(width_m, nr)))
-    return out
-
-
 def tier_from_loss(loss_pct: float) -> str:
     for lo, hi, tier in LOSS_TIERS:
         if lo <= loss_pct < hi:
@@ -254,88 +224,93 @@ def get_irc_action(defect_name: str, loss_pct: float, size_class: Optional[str] 
 # ================================================================
 # Road configuration -> capacity inputs
 # ================================================================
+def _opt(v) -> Optional[float]:
+    return float(v) if v not in (None, "", 0, 0.0) else None
+
+
 def resolve_road_inputs(road_config: dict) -> dict:
     """Validate a road_config dict and resolve every capacity input."""
     road_type = road_config.get("road_type")
     if road_type not in hcm.ROAD_TYPES:
         raise ValueError(f"Unknown road_type '{road_type}'. Valid: {list(hcm.ROAD_TYPES)}")
-    fclass = road_config.get("functional_class", "arterial")
-    if fclass not in hcm.FUNCTIONAL_CLASSES:
-        raise ValueError(f"Unknown functional_class '{fclass}'. Valid: {list(hcm.FUNCTIONAL_CLASSES)}")
     width = float(road_config.get("total_width_m") or 0)
     if width <= 0:
         raise ValueError("total_width_m must be > 0")
-
     rt = hcm.ROAD_TYPES[road_type]
-    measured = road_config.get("operating_speed_kmh")
-    measured = float(measured) if measured not in (None, "", 0, 0.0) else None
-    v_op = measured or float(hcm.FUNCTIONAL_CLASSES[fclass]["operating_speed_kmh"])
+    width_method = road_config.get("width_method") or "proportional"
+    if width_method not in ext.WIDTH_METHODS:
+        raise ValueError(f"Unknown width_method '{width_method}'. Valid: {list(ext.WIDTH_METHODS)}")
+    for name in hcm.FACTOR_TABLES:
+        hcm.factor(name, road_config.get(name))          # raises on unknown keys
 
-    warnings = []
-    per_lane = width / rt["lanes"]
-    if not (2.75 <= per_lane <= 4.25):
-        warnings.append(
-            f"Measured width {width:g} m gives {per_lane:.2f} m per lane for a {rt['lanes']}-lane "
-            f"carriageway; Indo-HCM base sections assume {hcm.STANDARD_LANE_WIDTH_M} m lanes. "
-            f"Check the road type or the width measurement.")
+    notes: List[str] = []
+    w = hcm.check_road_width(road_type, width)
+    if w:
+        notes.append(w)
 
+    measured = _opt(road_config.get("operating_speed_kmh"))
     base = hcm.base_capacity(road_type, measured)
-    if base["warning"]:
-        warnings.append(base["warning"])
+    notes += base["notes"]
+
+    # Speed used by the twin and the roughness factor: the measured
+    # operating speed, else the speed Eq. 5.4 associates with the Table 5.4
+    # lane capacity (clamped to the 40-80 km/h validity range).
+    if base["operating_speed_kmh"]:
+        v_ref, v_src = base["operating_speed_kmh"], "measured operating speed (base section)"
+    else:
+        lo, hi = hcm.SPEED_MODEL_RANGE_KMH
+        v_ref = min(max(hcm.operating_speed_from_lane_capacity(rt["lane_capacity_pcu_h"]), lo), hi)
+        v_src = "implied by Table 5.4 lane capacity through Eq. 5.4 (not measured)"
 
     return {
-        "road_type": road_type, "road": rt, "functional_class": fclass,
-        "total_width_m": width, "lanes": rt["lanes"], "divided": rt["divided"],
-        "operating_speed_kmh": v_op, "speed_measured": measured is not None,
-        "c0": base["c0_pcu_h"], "c0_method": base["method"],
-        "f_op_declared": hcm.lookup_factor(hcm.PARKING_FACTORS, road_config.get("on_street_parking"), "on_street_parking"),
-        "parking_key": road_config.get("on_street_parking") or "none",
-        "f_bs": hcm.lookup_factor(hcm.BUS_STOP_FACTORS, road_config.get("bus_stop"), "bus_stop"),
-        "f_ac": hcm.lookup_factor(hcm.ACCESS_FACTORS, road_config.get("access_points"), "access_points"),
-        "observed_volume": (float(road_config["observed_volume_pcu_h"])
-                            if road_config.get("observed_volume_pcu_h") not in (None, "", 0, 0.0) else None),
-        "warnings": warnings,
+        "road_type": road_type, "road": rt, "total_width_m": width, "lanes": rt["lanes"],
+        "divided": rt["divided"], "base": base, "c0": base["c0_pcu_h"],
+        "v_ref": v_ref, "v_ref_source": v_src,
+        "parking": road_config.get("on_street_parking") or "none",
+        "bus_stop": road_config.get("bus_stop") or "none",
+        "access_points": road_config.get("access_points") or "none",
+        "iri": _opt(road_config.get("iri_m_per_km")),
+        "width_method": width_method,
+        "observed_volume": _opt(road_config.get("observed_volume_pcu_h")),
+        "notes": notes,
     }
 
 
 def compute_capacity(inputs: dict, width_intervals: List[Tuple[float, float]],
-                     pothole_class: Optional[str], parking_detected: bool) -> dict:
-    """Apply the Indo-HCM factor chain. Pure function — unit-testable without YOLO."""
-    W = inputs["total_width_m"]
+                     parking_detected: bool) -> dict:
+    """Indo-HCM capacity, then the extended capacity. Pure function."""
     c0 = inputs["c0"]
+    notes = []
+    parking = inputs["parking"]
+    if parking_detected and parking == "none":
+        parking = "len_lt25"
+        notes.append("Parking was detected but its intensity was not surveyed; the mildest Indo-HCM "
+                     "class (Table 5.9, < 25% of length, 0.70) is assumed. Measure it on site.")
+    hcm_cap = hcm.actual_capacity(c0, parking, inputs["bus_stop"], inputs["access_points"])
+    c_hcm = hcm_cap["c_pcu_h"]
 
-    shy_ivs = add_shy_distance(width_intervals, W)
-    blocked_raw = min(union_of_intervals(width_intervals), W)
-    blocked = min(union_of_intervals(shy_ivs), W)
-    eff_w = max(W - blocked, 0.0)
-    f_w = eff_w / W
-
-    f_p = hcm.pothole_capacity_factor(pothole_class, inputs["operating_speed_kmh"])
-
-    parking_key = inputs["parking_key"]
-    if parking_detected and parking_key == "none":
-        parking_key = hcm.PARKING_WHEN_DETECTED   # parking is visible: mildest Table 5.9 class
-    f_op = hcm.PARKING_FACTORS[parking_key]["factor"]
-
-    f_bs, f_ac = inputs["f_bs"], inputs["f_ac"]
-    c = c0 * f_w * f_p * f_op * f_bs * f_ac
+    fw = ext.width_factor(width_intervals, inputs["total_width_m"], c0, inputs["divided"],
+                          inputs["width_method"])
+    fr = ext.roughness_factor(inputs["iri"], inputs["v_ref"])
+    for n in (fw.get("note"), fr.get("note")):
+        if n:
+            notes.append(n)
+    c_ext = c_hcm * fw["F_W"] * fr["F_R"]
 
     out = {
-        "c0": c0, "c": c, "loss": c0 - c,
-        "loss_pct": (c0 - c) / c0 * 100 if c0 > 0 else 0.0,
-        "blocked_raw_m": blocked_raw, "blocked_m": blocked, "effective_width_m": eff_w,
-        "factors": {"F_W": f_w, "F_P": f_p, "F_OP": f_op, "F_BS": f_bs, "F_AC": f_ac},
-        "parking_class_used": parking_key,
-        "dsv_ideal": c0 * hcm.DSV_VC_RATIO, "dsv_reduced": c * hcm.DSV_VC_RATIO,
+        "c0": c0, "c_hcm": c_hcm, "c_ext": c_ext,
+        "hcm_factors": hcm_cap["factors"], "ext_factors": {"F_W": fw["F_W"], "F_R": fr["F_R"]},
+        "parking_class_used": parking, "width": fw, "roughness": fr, "notes": notes,
     }
-    if inputs["observed_volume"] is not None:
-        v = inputs["observed_volume"]
-        vc_i, vc_r = v / c0, (v / c if c > 0 else float("inf"))
-        out["los"] = {
-            "observed_volume_pcu_h": v,
-            "vc_ideal": vc_i, "los_ideal": hcm.los_from_vc(vc_i, inputs["divided"]),
-            "vc_reduced": vc_r, "los_reduced": hcm.los_from_vc(vc_r, inputs["divided"]),
-        }
+    v = inputs["observed_volume"]
+    if v is not None:
+        d = inputs["divided"]
+        out["los"] = {"observed_volume_pcu_h": v,
+                      "vc_base": v / c0, "los_base": hcm.los_from_vc(v / c0, d),
+                      "vc_hcm": v / c_hcm, "los_hcm": hcm.los_from_vc(v / c_hcm, d),
+                      "vc_ext": v / c_ext if c_ext > 0 else float("inf"),
+                      "los_ext": hcm.los_from_vc(v / c_ext, d) if c_ext > 0 else "F",
+                      "table": "5.7" if d else "5.6"}
     return out
 
 
@@ -391,183 +366,168 @@ class RoadAnalyzer:
         img = cv2.imread(str(image_path))
         if img is None:
             raise ValueError(f"Cannot read image: {image_path}")
-
         MAX_EDGE = 1600  # YOLO runs at 640 px; larger inputs only cost CPU
         h0, w0 = img.shape[:2]
         if max(h0, w0) > MAX_EDGE:
-            s = MAX_EDGE / max(h0, w0)
-            img = cv2.resize(img, (int(w0 * s), int(h0 * s)), interpolation=cv2.INTER_AREA)
+            sc = MAX_EDGE / max(h0, w0)
+            img = cv2.resize(img, (int(w0 * sc), int(h0 * sc)), interpolation=cv2.INTER_AREA)
         img_h, img_w = img.shape[:2]
 
         inputs = resolve_road_inputs(road_config)
         W = inputs["total_width_m"]
         px_per_m = img_w / W
-
         detections, vetoed = self._detect(img, Path(image_path).name)
 
-        midas_scores: Dict[int, dict] = {}
-        pothole_idx = [i for i, d in enumerate(detections) if d["cls_name"] == "pothole"]
-        if pothole_idx and self.enable_depth:
+        midas: Dict[int, dict] = {}
+        p_idx = [i for i, d in enumerate(detections) if d["cls_name"] == "pothole"]
+        if p_idx and self.enable_depth:
             try:
-                scores = self._get_depth_estimator().estimate_batch(
-                    img, [detections[i]["xyxy"] for i in pothole_idx])
-                midas_scores = dict(zip(pothole_idx, scores))
+                midas = dict(zip(p_idx, self._get_depth_estimator().estimate_batch(
+                    img, [detections[i]["xyxy"] for i in p_idx])))
             except Exception as e:
-                logger.warning("MiDaS failed (%s) — using width-only pothole class.", e)
+                logger.warning("MiDaS failed (%s) — width-only pothole class.", e)
 
-        size_rank = {"small": 0, "medium": 1, "large": 2}
+        rank = {"small": 0, "medium": 1, "large": 2}
         width_intervals: List[Tuple[float, float]] = []
         defect_data: Dict[str, dict] = {}
-        roadrunner_export = []
+        rr_export = []
         worst_pothole: Optional[str] = None
-
         for idx, d in enumerate(detections):
-            cls_name = d["cls_name"]
-            if cls_name not in OBSTRUCTION_CLASSES:
+            name = d["cls_name"]
+            if name not in OBSTRUCTION_CLASSES:
                 continue
             x1, y1, x2, y2 = d["xyxy"]
-            left_m, right_m = max(0.0, x1 / px_per_m), min(W, x2 / px_per_m)
-            if right_m <= left_m:
+            l_m, r_m = max(0.0, x1 / px_per_m), min(W, x2 / px_per_m)
+            if r_m <= l_m:
                 continue
-            w_m = right_m - left_m
+            w_m = r_m - l_m
+            rec = {"conf": round(d["conf"], 2), "width_m": round(w_m, 2), "left_m": round(l_m, 2),
+                   "right_m": round(r_m, 2), "bbox_px": [round(v, 1) for v in d["xyxy"]]}
+            if name in WIDTH_CLASSES:
+                width_intervals.append((l_m, r_m))
+            if name == "pothole":
+                pc = ext.pothole_size_class(w_m)
+                if idx in midas:
+                    rec["relative_depth_score"] = midas[idx]["relative_depth_score"]
+                    if rank.get(midas[idx]["size_class"], -1) > rank[pc]:
+                        pc = midas[idx]["size_class"]
+                rec["size_class"] = pc
+                if worst_pothole is None or rank[pc] > rank[worst_pothole]:
+                    worst_pothole = pc
+            e = defect_data.setdefault(name, {"count": 0, "intervals": [], "detections": []})
+            e["count"] += 1
+            e["intervals"].append((l_m, r_m))
+            e["detections"].append(rec)
+            rr_export.append({"defect_type": name, "left_m": round(l_m, 3), "right_m": round(r_m, 3),
+                              "width_m": round(w_m, 3), "conf": round(d["conf"], 3),
+                              "bbox_px": [round(v, 1) for v in d["xyxy"]]})
 
-            rec = {"conf": round(d["conf"], 2), "width_m": round(w_m, 2),
-                   "left_m": round(left_m, 2), "right_m": round(right_m, 2),
-                   "bbox_px": [round(v, 1) for v in d["xyxy"]]}
+        cap = compute_capacity(inputs, width_intervals, "illegal_parking" in defect_data)
+        c0, c_hcm, c_ext = cap["c0"], cap["c_hcm"], cap["c_ext"]
 
-            if cls_name in WIDTH_CLASSES:
-                width_intervals.append((left_m, right_m))
-            if cls_name == "pothole":
-                pclass = hcm.pothole_class_from_width(w_m)
-                if idx in midas_scores:
-                    rec["relative_depth_score"] = midas_scores[idx]["relative_depth_score"]
-                    mclass = midas_scores[idx]["size_class"]
-                    if size_rank.get(mclass, -1) > size_rank[pclass]:
-                        pclass = mclass
-                rec["size_class"] = pclass
-                if worst_pothole is None or size_rank[pclass] > size_rank[worst_pothole]:
-                    worst_pothole = pclass
-
-            entry = defect_data.setdefault(cls_name, {"count": 0, "intervals": [], "detections": []})
-            entry["count"] += 1
-            entry["intervals"].append((left_m, right_m))
-            entry["detections"].append(rec)
-            roadrunner_export.append({"defect_type": cls_name, "left_m": round(left_m, 3),
-                                      "right_m": round(right_m, 3), "width_m": round(w_m, 3),
-                                      "conf": round(d["conf"], 3),
-                                      "bbox_px": [round(v, 1) for v in d["xyxy"]]})
-
-        parking_detected = "illegal_parking" in defect_data
-        cap = compute_capacity(inputs, width_intervals, worst_pothole, parking_detected)
-        c0, c = cap["c0"], cap["c"]
-        f = cap["factors"]
-
-        # ---- per-defect: capacity loss if that class were the only obstruction
+        # Per class: the factor that class alone would produce.
         per_defect: dict = {}
         for name, info in defect_data.items():
             if name in WIDTH_CLASSES:
-                ivs = add_shy_distance(info["intervals"], W)
-                blocked = min(union_of_intervals(ivs), W)
-                factor = max(W - blocked, 0.0) / W
-            elif name == "pothole":
-                blocked = 0.0
-                factor = f["F_P"]
+                fw = ext.width_factor(info["intervals"], W, c0, inputs["divided"], inputs["width_method"])
+                factor, blocked = fw["F_W"], fw["blocked_with_shy_m"]
+                mech, basis = "F_W usable width (project extension)", "extension"
             elif name == "illegal_parking":
-                blocked = min(union_of_intervals(info["intervals"]), W)
                 factor = hcm.PARKING_FACTORS[cap["parking_class_used"]]["factor"]
+                blocked = min(ext.union_length(info["intervals"]), W)
+                mech = f"F_OP Indo-HCM Table {hcm.PARKING_FACTORS[cap['parking_class_used']]['table']}"
+                basis = "Indo-HCM"
             else:
-                blocked, factor = 0.0, 1.0
-            loss_pct = (1 - factor) * 100
-            irc = get_irc_action(name, loss_pct, worst_pothole if name == "pothole" else None)
+                factor, blocked, mech, basis = 1.0, 0.0, "none", "-"
+            loss = (1 - factor) * 100
+            irc = get_irc_action(name, loss, worst_pothole if name == "pothole" else None)
             per_defect[name] = {
-                "count": info["count"],
-                "blocked_m": round(blocked, 2),
-                "factor": round(factor, 3),
-                "mechanism": {"pothole": "F_P (speed reduction)",
-                              "illegal_parking": "F_OP (Indo-HCM Table 5.9/5.10)"
-                              }.get(name, "F_W (usable width)"),
-                "capacity_loss_pcu": round(c0 * (1 - factor), 1),
-                "capacity_loss_pct": round(loss_pct, 1),
+                "count": info["count"], "blocked_m": round(blocked, 2), "factor": round(factor, 3),
+                "mechanism": mech, "factor_basis": basis,
+                "capacity_loss_pcu": round(c0 * (1 - factor), 1), "capacity_loss_pct": round(loss, 1),
                 "severity": irc["severity"], "severity_basis": irc["severity_basis"],
-                "code_ref": irc["code_ref"], "action": irc["action"],
-                "detections": info["detections"],
+                "code_ref": irc["code_ref"], "action": irc["action"], "detections": info["detections"],
             }
             if name == "pothole":
-                classes = [det["size_class"] for det in info["detections"]]
+                cls = [x["size_class"] for x in info["detections"]]
                 per_defect[name]["size_summary"] = {
                     "worst_size_class": worst_pothole,
-                    "counts": {k: classes.count(k) for k in ("small", "medium", "large")},
-                    "assumed_speed_reduction_pct": hcm.POTHOLE_SPEED_REDUCTION[worst_pothole] * 100,
-                    "classification": "IRC:82-2015 cl. 7.5.3.4 width thresholds (depth not measured)",
+                    "counts": {k: cls.count(k) for k in ("small", "medium", "large")},
+                    "classification": "IRC:82-2015 cl. 7.5.3.4 width thresholds (depth not measured); "
+                                      "used for repair priority only",
                 }
 
-        # ---- indicative vehicles/h (assumed composition; PCU/h is the real output)
-        avg_pcu = hcm.avg_pcu_per_vehicle(inputs["road_type"])
         rt = inputs["road"]
-        factor_str = " x ".join(f"{k} {v:.3f}" for k, v in f.items())
-
+        f_all = {**cap["hcm_factors"], **cap["ext_factors"]}
+        fstr = lambda fs: " x ".join(f"{k} {v:.3f}" for k, v in fs.items())
+        avg_pcu = ext.avg_pcu_per_vehicle(inputs["road_type"])
         result = {
             "image": Path(image_path).name,
             "image_size_px": {"width": img_w, "height": img_h},
             "road_config": {**road_config, "num_lanes": inputs["lanes"]},
             "capacity_basis": {
-                "standard": hcm.SOURCE_NOTE,
+                "standard": hcm.SOURCE,
                 "road_type": inputs["road_type"], "road_type_label": rt["label"],
                 "direction_basis": rt["basis"], "divided": rt["divided"],
-                "functional_class": inputs["functional_class"],
-                "operating_speed_kmh": inputs["operating_speed_kmh"],
-                "operating_speed_source": "measured on site" if inputs["speed_measured"]
-                                          else "project default for functional class (not measured; C0 from Table 5.4)",
-                "base_capacity_method": inputs["c0_method"],
-                "warnings": inputs["warnings"],
+                "base_capacity_method": inputs["base"]["method"],
+                "base_capacity_detail": inputs["base"]["detail"],
+                "operating_speed_kmh": round(inputs["v_ref"], 1),
+                "operating_speed_source": inputs["v_ref_source"],
+                "width_method": cap["width"]["method"],
+                "warnings": inputs["notes"] + cap["notes"],
             },
             "capacity_calculation": {
                 "base_capacity_pcu_h": round(c0, 1),
-                "factors": {k: round(v, 3) for k, v in f.items()},
+                "indo_hcm_factors": {k: round(v, 3) for k, v in cap["hcm_factors"].items()},
+                "extension_factors": {k: round(v, 3) for k, v in cap["ext_factors"].items()},
+                "factors": {k: round(v, 3) for k, v in f_all.items()},
                 "parking_class_used": cap["parking_class_used"],
+                "roughness": {k: (round(v, 3) if isinstance(v, float) else v)
+                              for k, v in cap["roughness"].items()},
                 "worst_pothole_size": worst_pothole,
                 "total_width_m": round(W, 2),
-                "obstruction_width_m": round(cap["blocked_raw_m"], 2),
-                "blocked_incl_shy_m": round(cap["blocked_m"], 2),
-                "effective_width_m": round(cap["effective_width_m"], 2),
-                "formula": f"C = {c0:.0f} PCU/h x {factor_str} = {c:.0f} PCU/h",
+                "obstruction_width_m": round(cap["width"]["obstruction_width_m"], 2),
+                "blocked_incl_shy_m": round(cap["width"]["blocked_with_shy_m"], 2),
+                "effective_width_m": round(cap["width"]["usable_width_m"], 2),
+                "formula_indo_hcm": f"C_HCM = {c0:.0f} x {fstr(cap['hcm_factors'])} = {c_hcm:.0f} PCU/h (Eq. 5.5)",
+                "formula": f"C = {c_hcm:.0f} x {fstr(cap['ext_factors'])} = {c_ext:.0f} PCU/h (with extensions)",
             },
             "base_capacity_pcu_h": round(c0, 1),
-            "reduced_capacity_pcu_h": round(c, 1),
-            "capacity_loss_pcu_h": round(cap["loss"], 1),
-            "capacity_loss_pct": round(cap["loss_pct"], 1),
-            "dsv_los_c_ideal_pcu_h": round(cap["dsv_ideal"], 0),
-            "dsv_los_c_reduced_pcu_h": round(cap["dsv_reduced"], 0),
+            "indo_hcm_capacity_pcu_h": round(c_hcm, 1),
+            "reduced_capacity_pcu_h": round(c_ext, 1),
+            "capacity_loss_pcu_h": round(c0 - c_ext, 1),
+            "capacity_loss_pct": round((c0 - c_ext) / c0 * 100, 1),
+            "indo_hcm_loss_pct": round((c0 - c_hcm) / c0 * 100, 1),
+            "dsv_los_c_ideal_pcu_h": round(c0 * hcm.DSV_VC_RATIO, 0),
+            "dsv_los_c_reduced_pcu_h": round(c_ext * hcm.DSV_VC_RATIO, 0),
             "indicative_vehicles": {
                 "avg_pcu_per_vehicle": round(avg_pcu, 3),
                 "base_capacity_veh_h": round(c0 / avg_pcu, 0),
-                "reduced_capacity_veh_h": round(c / avg_pcu, 0),
-                "note": "ASSUMED traffic mix (indo_hcm.DEFAULT_COMPOSITION) with Indo-HCM "
-                        "Table 5.2/5.3 median PCUs. Replace with a classified count.",
+                "reduced_capacity_veh_h": round(c_ext / avg_pcu, 0),
+                "note": "ASSUMED traffic mix (extensions.ASSUMED_COMPOSITION) with Indo-HCM Table 5.3 "
+                        "PCUs. Replace with a classified count.",
             },
             "level_of_service": ({k: (round(v, 3) if isinstance(v, float) else v)
                                   for k, v in cap["los"].items()} if "los" in cap else None),
-            "operating_speed_kmh": inputs["operating_speed_kmh"],
-            "overall_guidance": get_overall_guidance(cap["loss_pct"]),
-            "effective_width_m": round(cap["effective_width_m"], 2),
+            "operating_speed_kmh": round(inputs["v_ref"], 1),
+            "overall_guidance": get_overall_guidance((c0 - c_ext) / c0 * 100),
+            "effective_width_m": round(cap["width"]["usable_width_m"], 2),
             "vehicle_veto_suppressed": vetoed,
             "per_defect": per_defect,
-            "roadrunner_obstacles": roadrunner_export,
+            "roadrunner_obstacles": rr_export,
         }
-
         if save_outputs:
             out_dir = Path(output_dir) if output_dir else Path(image_path).parent
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = Path(image_path).stem
-            json_path = out_dir / f"{stem}_analysis.json"
-            json_path.write_text(json.dumps(result, indent=2))
-            csv_path = out_dir / f"{stem}_roadrunner.csv"
-            with open(csv_path, "w") as fh:
+            jp = out_dir / f"{stem}_analysis.json"
+            jp.write_text(json.dumps(result, indent=2))
+            cp = out_dir / f"{stem}_roadrunner.csv"
+            with open(cp, "w") as fh:
                 fh.write("defect_type,left_m,right_m,width_m,conf\n")
-                for o in roadrunner_export:
+                for o in rr_export:
                     fh.write(f"{o['defect_type']},{o['left_m']},{o['right_m']},{o['width_m']},{o['conf']}\n")
-            result["_json_path"] = str(json_path)
-            result["_csv_path"] = str(csv_path)
+            result["_json_path"], result["_csv_path"] = str(jp), str(cp)
         return result
 
     def annotated_frame(self, image_path: str):

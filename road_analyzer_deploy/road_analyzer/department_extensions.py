@@ -183,19 +183,20 @@ def generate_department_report_pdf(result: dict, output_path: str,
         ["Date of data collection", _format_survey_date(road_config.get("data_collection_date"))],
         ["Date of analysis", survey_date],
         ["Road type", f"{basis.get('road_type_label', '-')} — capacity basis: {basis.get('direction_basis', '-')}"],
-        ["Functional class", str(basis.get("functional_class", "-")).replace("_", "-").title()],
         ["Carriageway width (measured)", f"{road_config.get('total_width_m', '-')} m"],
         ["Operating speed", f"{basis.get('operating_speed_kmh', '-')} km/h "
                             f"({basis.get('operating_speed_source', '-')})"],
-        ["Base capacity C0", f"{result.get('base_capacity_pcu_h', '-')} PCU/h — {basis.get('base_capacity_method', '')}"],
-        ["Adjustment factors", ", ".join(f"{k} = {v}" for k, v in factors.items()) or "-"],
-        ["Reduced capacity C", f"{result.get('reduced_capacity_pcu_h', '-')} PCU/h"],
+        ["Base capacity C0", f"{result.get('base_capacity_pcu_h', '-')} PCU/h — {basis.get('base_capacity_detail', '')}"],
+        ["Indo-HCM factors (Eq. 5.5)", ", ".join(f"{k} = {v}" for k, v in (calc.get("indo_hcm_factors") or {}).items()) or "-"],
+        ["Indo-HCM capacity", f"{result.get('indo_hcm_capacity_pcu_h', '-')} PCU/h"],
+        ["Project extension factors", ", ".join(f"{k} = {v}" for k, v in (calc.get("extension_factors") or {}).items()) or "-"],
+        ["Capacity incl. extensions", f"{result.get('reduced_capacity_pcu_h', '-')} PCU/h"],
         ["Capacity loss", f"{result.get('capacity_loss_pct', '-')}%"],
         ["Service volume at LOS-C (0.70 C)",
          f"{result.get('dsv_los_c_ideal_pcu_h', '-')} → {result.get('dsv_los_c_reduced_pcu_h', '-')} PCU/h"],
         ["Level of service",
-         (f"V = {los['observed_volume_pcu_h']} PCU/h: LOS {los['los_ideal']} (ideal) → "
-          f"LOS {los['los_reduced']} (current)") if los else
+         (f"V = {los['observed_volume_pcu_h']} PCU/h (Table {los['table']}): base LOS {los['los_base']}, "
+          f"Indo-HCM LOS {los['los_hcm']}, with extensions LOS {los['los_ext']}") if los else
          "Not computed — no traffic volume was entered (LOS needs V/C)."],
         ["Overall guidance", str(guidance)],
     ]

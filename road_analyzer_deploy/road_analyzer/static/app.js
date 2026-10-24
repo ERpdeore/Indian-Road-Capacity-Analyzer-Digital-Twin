@@ -15,7 +15,7 @@
 
   const roadTypeSel   = document.getElementById("road_type");
   const roadTypeHint  = document.getElementById("road-type-hint");
-  const classSel      = document.getElementById("functional_class");
+  const widthMethodSel = document.getElementById("width_method");
   const speedInput    = document.getElementById("operating_speed_kmh");
   const widthInput    = document.getElementById("total_width_m");
   const widthHint     = document.getElementById("width-hint");
@@ -216,29 +216,24 @@
   // Offline fallback (Render free tier can take ~60 s to wake). Must match
   // road_analyzer/indo_hcm.py — the server copy replaces it when it loads.
   // ----------------------------------------------------------------
-  const FALLBACK_CONFIG = {
+  const FALLBACK_CONFIG = {   // must match road_analyzer/indo_hcm.py
     road_types: [   // Indo-HCM Table 5.4
-      { key: "undivided_2lane", label: "Two-lane undivided (both directions)", lanes: 2, divided: false, basis: "both directions", ref_width_m: 7.5,  base_capacity_pcu_h: 2400 },
-      { key: "divided_4lane",   label: "Four-lane divided — one direction (2 lanes)",  lanes: 2, divided: true, basis: "one direction", ref_width_m: 7.5,  base_capacity_pcu_h: 2700 },
-      { key: "divided_6lane",   label: "Six-lane divided — one direction (3 lanes)",   lanes: 3, divided: true, basis: "one direction", ref_width_m: 11.0, base_capacity_pcu_h: 4200 },
-      { key: "divided_8lane",   label: "Eight-lane divided — one direction (4 lanes)", lanes: 4, divided: true, basis: "one direction", ref_width_m: 14.5, base_capacity_pcu_h: 6800,
-        note: "Table 5.4 value applies where signal spacing is 1-3 km (Section 5.4.4.2)." },
-      { key: "divided_10lane",  label: "Ten-lane divided — one direction (5 lanes)",   lanes: 5, divided: true, basis: "one direction", ref_width_m: 18.0, base_capacity_pcu_h: 10000,
-        note: "Table 5.4 value applies where signal spacing is 1-3 km (Section 5.4.4.2)." },
-    ],
-    functional_classes: [
-      { key: "arterial",     label: "Arterial",     operating_speed_kmh: 50 },
-      { key: "sub_arterial", label: "Sub-arterial", operating_speed_kmh: 40 },
-      { key: "collector",    label: "Collector",    operating_speed_kmh: 30 },
+      { key: "undivided_2lane", label: "Two-lane undivided", lanes: 2, divided: false, basis: "both directions", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2400, dsv_pcu_h: 1680 },
+      { key: "divided_4lane", label: "Four-lane divided", lanes: 2, divided: true, basis: "one direction", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2700, dsv_pcu_h: 1890 },
+      { key: "divided_6lane", label: "Six-lane divided", lanes: 3, divided: true, basis: "one direction", paved_width_m: 10.5, ref_width_m: 11.0, capacity_pcu_h: 4200, dsv_pcu_h: 2940 },
+      { key: "divided_8lane", label: "Eight-lane divided", lanes: 4, divided: true, basis: "one direction", paved_width_m: 14.0, ref_width_m: 14.5, capacity_pcu_h: 6800, dsv_pcu_h: 4760,
+        condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
+      { key: "divided_10lane", label: "Ten-lane divided", lanes: 5, divided: true, basis: "one direction", paved_width_m: 17.5, ref_width_m: 18.0, capacity_pcu_h: 10000, dsv_pcu_h: 7000,
+        condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
     ],
     speed_model: { a: 20.11, b: 210.8, range_kmh: [40, 80] },
-    on_street_parking: [   // Tables 5.9 / 5.10
+    on_street_parking: [
       { key: "none", label: "No on-street parking", factor: 1.0 },
-      { key: "len_lt25", label: "Long-term, < 25% of segment length (T5.9)", factor: 0.70 },
-      { key: "len_25_50", label: "Long-term, 25 – 50% of length (T5.9)", factor: 0.65 },
-      { key: "len_gt50", label: "Long-term, > 50% of length (T5.9)", factor: 0.40 },
-      { key: "man_le500", label: "Short-term, ≤ 500 manoeuvres/km/h (T5.10)", factor: 0.65 },
-      { key: "man_gt500", label: "Short-term, > 500 manoeuvres/km/h (T5.10)", factor: 0.40 },
+      { key: "len_lt25", label: "Long-term parking, < 25% of segment length", factor: 0.70 },
+      { key: "len_25_50", label: "Long-term parking, 25–50% of segment length", factor: 0.65 },
+      { key: "len_gt50", label: "Long-term parking, > 50% of segment length", factor: 0.40 },
+      { key: "man_le500", label: "Short-term parking, ≤ 500 manoeuvres/km/h", factor: 0.65 },
+      { key: "man_gt500", label: "Short-term parking, > 500 manoeuvres/km/h", factor: 0.40 },
     ],
     bus_stop: [
       { key: "none", label: "No bus stop on segment", factor: 1.0 },
@@ -249,9 +244,13 @@
     ],
     access_points: [
       { key: "none", label: "No access points", factor: 1.0 },
-      { key: "lt200", label: "< 200 veh/h entering/leaving", factor: 0.90 },
-      { key: "200_500", label: "200 – 500 veh/h", factor: 0.80 },
-      { key: "gt500", label: "> 500 veh/h", factor: 0.70 },
+      { key: "lt200", label: "Access traffic < 200 veh/h (entry + exit)", factor: 0.90 },
+      { key: "200_500", label: "Access traffic 200–500 veh/h", factor: 0.80 },
+      { key: "gt500", label: "Access traffic > 500 veh/h", factor: 0.70 },
+    ],
+    width_methods: [
+      { key: "proportional", label: "Usable width / total width (capacity proportional to width)" },
+      { key: "table_slope", label: "Loss = blocked width x 428.6 PCU/h/m (slope of Indo-HCM Table 5.4, divided roads)" },
     ],
     dsv_vc_ratio: 0.70,
     model_loaded: true,
@@ -274,12 +273,11 @@
       roadTypeSel.value = "divided_4lane";
       roadTypeSel.dataset.init = "1";
     }
-    fillSelect(classSel, data.functional_classes || [],
-      (o) => `${o.label} (default ${o.operating_speed_kmh} km/h)`);
+    fillSelect(widthMethodSel, data.width_methods || [], (o) => o.label);
     FACTOR_FIELDS.forEach((f) =>
       fillSelect(document.getElementById(f), data[f] || [], (o) => `${o.label} — ${o.factor.toFixed(2)}`));
 
-    [roadTypeSel, classSel, speedInput, widthInput, ...FACTOR_FIELDS.map((f) => document.getElementById(f))]
+    [roadTypeSel, speedInput, widthInput, ...FACTOR_FIELDS.map((f) => document.getElementById(f))]
       .forEach((el) => {
         if (!el) return;
         el.oninput = el.onchange = () => { userTouchedConfig = true; updateDsvPreview(); };
@@ -301,29 +299,44 @@
     const rt = (configData.road_types || []).find((o) => o.key === roadTypeSel.value);
     if (!rt) { dsvPreview.style.display = "none"; return; }
     const sm = configData.speed_model || { a: 20.11, b: 210.8, range_kmh: [40, 80] };
+
+    // Eq. 5.4 exists only for divided roads
+    if (speedInput) {
+      speedInput.disabled = !rt.divided;
+      if (!rt.divided) speedInput.value = "";
+      const sh = document.getElementById("speed-hint");
+      if (sh) sh.textContent = rt.divided
+        ? "≥ 100 cars with headway > 8 s, on a friction-free stretch of this road (Eq. 5.4, valid 40–80 km/h)"
+        : "Not used: Indo-HCM Eq. 5.4 applies to divided roads only. Two-lane undivided uses Table 5.4 (2400 PCU/h).";
+    }
     const v = parseFloat(speedInput && speedInput.value);
-    let c0 = rt.base_capacity_pcu_h, how = "Indo-HCM Table 5.4";
+    let c0 = rt.capacity_pcu_h, how = "Indo-HCM Table 5.4";
     if (rt.divided && v > 0) {
       const lane = sm.a * v + sm.b;
       c0 = Math.round(lane * rt.lanes);
       how = `Indo-HCM Eq. 5.4: ${sm.a} × ${v} + ${sm.b} = ${Math.round(lane)} PCU/h/lane × ${rt.lanes}`;
-      if (v < sm.range_kmh[0] || v > sm.range_kmh[1]) how += " (outside 40–80 km/h validity — extrapolated)";
+      if (v < sm.range_kmh[0] || v > sm.range_kmh[1]) how += " (outside 40–80 km/h — extrapolated)";
     }
     dsvValueEl.textContent = Math.round(c0).toLocaleString("en-IN");
     document.getElementById("dsv-unit").textContent = `PCU/h, ${rt.basis}`;
     const dsv = Math.round(c0 * (configData.dsv_vc_ratio || 0.7));
     document.getElementById("dsv-note").textContent =
-      `${how} · LOS-C service volume ${dsv.toLocaleString("en-IN")} PCU/h · before obstructions and side-friction factors`;
+      `${how} · Design Service Volume (LOS-C, 0.70 C) ${dsv.toLocaleString("en-IN")} PCU/h`;
     if (roadTypeHint) {
-      roadTypeHint.textContent = `${rt.lanes} lanes, ${rt.basis}; reference width ${rt.ref_width_m} m` +
-        (rt.note ? ` · ${rt.note}` : "");
+      roadTypeHint.textContent = `${rt.lanes} lanes, ${rt.basis}; Indo-HCM paved width ${rt.paved_width_m} m ± 0.5 m (Table 5B.1)` +
+        (rt.condition ? ` · ${rt.condition}` : "");
     }
     const w = parseFloat(widthInput && widthInput.value);
     if (widthHint && w > 0) {
-      const perLane = w / rt.lanes;
-      const ok = perLane >= 2.75 && perLane <= 4.25;
-      widthHint.textContent = `${perLane.toFixed(2)} m per lane` +
-        (ok ? " — consistent with Indo-HCM 3.5 m lanes" : " — check road type or width (Indo-HCM: 3.5 m lanes + 0.25 m shyness)");
+      let ok, msg;
+      if (rt.divided) {
+        ok = Math.abs(w - rt.paved_width_m) <= 0.5;
+        msg = ok ? "fits this Indo-HCM road class" : `outside ${rt.paved_width_m - 0.5}–${rt.paved_width_m + 0.5} m — check road type`;
+      } else {
+        ok = w >= 6.0 && w <= 11.0;
+        msg = ok ? (w < 7 ? "within 6–11 m, but Indo-HCM studied > 7 m only" : "fits two-lane undivided (6–11 m)") : "outside 6–11 m — check road type";
+      }
+      widthHint.textContent = `${w} m: ${msg}`;
       widthHint.classList.toggle("warn", !ok);
     }
     dsvPreview.style.display = "";
@@ -528,23 +541,23 @@
       ["Analysed",        formatDateDisplay(cfg.analysis_date)],
       ["Road type",       basis.road_type_label],
       ["Basis",           basis.direction_basis],
-      ["Class",           basis.functional_class ? titleCase(basis.functional_class) : null],
+      ["C0 method",       basis.base_capacity_detail],
       ["Width",           cfg.total_width_m != null ? cfg.total_width_m + " m" : null],
       ["Lanes",           cfg.num_lanes],
       ["Operating speed", basis.operating_speed_kmh != null
                             ? `${basis.operating_speed_kmh} km/h (${basis.operating_speed_source})` : null],
     ].filter((p) => p[1] !== null && p[1] !== undefined && p[1] !== "");
 
-    const factors = calc.factors || {};
-    const factorChips = Object.entries(factors)
-      .map(([k, v]) => `<span class="${v < 1 ? "factor-active" : ""}"><b>${k.replace("F_", "F<sub>")}</sub></b> ${fmt(v, 3)}</span>`)
-      .join("");
+    const chip = ([k, v]) => `<span class="${v < 1 ? "factor-active" : ""}"><b>${k.replace("F_", "F<sub>")}</sub></b> ${fmt(v, 3)}</span>`;
+    const factorChips =
+      `<span><b>Indo-HCM:</b></span>` + Object.entries(calc.indo_hcm_factors || {}).map(chip).join("") +
+      `<span><b>Extensions:</b></span>` + Object.entries(calc.extension_factors || {}).map(chip).join("");
 
     const warnings = (basis.warnings || []).concat((data.digital_twin || {}).warnings || []);
     const losHTML = los
-      ? `<div class="item"><div class="label">LOS at ${fmt(los.observed_volume_pcu_h, 0)} PCU/h</div>
-           <div class="val">${los.los_ideal} → <span class="red">${los.los_reduced}</span></div>
-           <div class="val-sub">V/C ${fmt(los.vc_ideal, 2)} → ${fmt(los.vc_reduced, 2)}</div></div>`
+      ? `<div class="item"><div class="label">LOS at ${fmt(los.observed_volume_pcu_h, 0)} PCU/h (Table ${los.table})</div>
+           <div class="val">${los.los_base} → ${los.los_hcm} → <span class="red">${los.los_ext}</span></div>
+           <div class="val-sub">V/C ${fmt(los.vc_base, 2)} base · ${fmt(los.vc_hcm, 2)} Indo-HCM · ${fmt(los.vc_ext, 2)} with extensions</div></div>`
       : `<div class="item"><div class="label">Level of service</div>
            <div class="val-sub">Enter an observed volume to get V/C and LOS</div></div>`;
 
@@ -560,7 +573,12 @@
               <div class="val-sub">≈ ${fmt(iv.base_capacity_veh_h, 0)} veh/h (assumed mix)</div>
             </div>
             <div class="item">
-              <div class="label">Reduced capacity C</div>
+              <div class="label">Indo-HCM capacity (Eq. 5.5)</div>
+              <div class="val">${fmt(data.indo_hcm_capacity_pcu_h, 0)} PCU/h</div>
+              <div class="val-sub">parking, bus stop, access points only (${fmt(data.indo_hcm_loss_pct, 1)}% loss)</div>
+            </div>
+            <div class="item">
+              <div class="label">Capacity incl. extensions</div>
               <div class="val red">${fmt(data.reduced_capacity_pcu_h, 0)} PCU/h</div>
               <div class="val-sub">≈ ${fmt(iv.reduced_capacity_veh_h, 0)} veh/h (assumed mix)</div>
             </div>
@@ -571,7 +589,7 @@
             </div>
             ${losHTML}
           </div>
-          ${calc.formula ? `<div class="formula-box mono">${calc.formula}</div>` : ""}
+          ${calc.formula_indo_hcm ? `<div class="formula-box mono">${calc.formula_indo_hcm}<br>${calc.formula}</div>` : ""}
           <div class="config-strip">${factorChips}</div>
           <div class="config-strip">${stripParts.map(([l, v]) => `<span><b>${l}:</b> ${v}</span>`).join("")}</div>
           ${warnings.map((w) => `<div class="veto-note">⚠ ${w}</div>`).join("")}

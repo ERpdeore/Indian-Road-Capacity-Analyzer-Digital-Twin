@@ -34,20 +34,20 @@ end
 %% ============================================================
 % Demo defaults (used only when no capacity JSON is given). PCU/h.
 BASE_CAP        = 2700;     % Indo-HCM Table 5.4, four-lane divided, one direction
-REDUCED_CAP     = 1957;
-CAP_LOSS_PCT    = 27.5;
-TOTAL_WIDTH_M   = 7.5;
-BLOCKED_M       = 1.6;
-FACTORS         = struct('F_W',0.79,'F_P',0.917,'F_OP',1,'F_BS',1,'F_AC',1);
+REDUCED_CAP     = 2133;     % x F_W 0.79 (vendor), no Indo-HCM friction
+CAP_LOSS_PCT    = 21.0;
+TOTAL_WIDTH_M   = 7.0;
+BLOCKED_M       = 1.5;
+FACTORS         = struct('F_OP',1,'F_BS',1,'F_AC',1,'F_W',0.79,'F_R',1);
 NUM_LANES       = 2;
-DEFECTS         = 'pothole + street vendor';
-FREE_SPD        = 50;       % operating speed, km/h
-DEMAND          = 1890;     % LOS-C design service volume (Table 5.4)
-IDEAL_SPD       = 38.7;     % twin: speed at demand, ideal road
-CONG_SPD        = 26.7;     % twin: speed at the obstruction
-QUEUE_SPD       = 26.7;     % twin: speed in the upstream queue (= CONG_SPD if no queue)
-K_IDEAL_LANE    = 24.4;     % twin densities, PCU/km/lane
-K_QUEUE_LANE    = 35.5;
+DEFECTS         = 'street vendor';
+FREE_SPD        = 56.6;     % speed Eq. 5.4 implies for 1350 PCU/h/lane
+DEMAND          = 1890;     % Design Service Volume, LOS-C (Table 5.4)
+IDEAL_SPD       = 43.8;     % twin: speed at demand, ideal road
+CONG_SPD        = 37.9;     % twin: speed at the obstruction
+QUEUE_SPD       = 37.9;     % twin: speed in the upstream queue (= CONG_SPD if no queue)
+K_IDEAL_LANE    = 21.6;     % twin densities, PCU/km/lane
+K_QUEUE_LANE    = 24.9;
 AVG_PCU         = 0.80;
 
 HAS_POTHOLE   = true;
@@ -266,7 +266,7 @@ annotation(fig,'textbox',[0.01 0.01 0.48 0.17],'String',s1,...
 s2 = ['DEFECT ROAD (current state)' NL ...
       sprintf('Reduced capacity : %d PCU/h  (-%.1f%%)',round(REDUCED_CAP),CAP_LOSS_PCT) NL ...
       sprintf('Speed at obstruction %.1f km/h | in queue %.1f km/h',CONG_SPD,QUEUE_SPD) NL ...
-      sprintf('F_W %.3f  F_P %.3f  F_OP %.2f  F_BS %.2f',FACTORS.F_W,FACTORS.F_P,FACTORS.F_OP,FACTORS.F_BS)];
+      sprintf('Indo-HCM F_OP %.2f F_BS %.2f F_AC %.2f | ext F_W %.3f F_R %.3f',getf(FACTORS,'F_OP',1),getf(FACTORS,'F_BS',1),getf(FACTORS,'F_AC',1),getf(FACTORS,'F_W',1),getf(FACTORS,'F_R',1))];
 annotation(fig,'textbox',[0.51 0.01 0.48 0.17],'String',s2,...
     'Color',[0.98 0.78 0.78],'FontSize',10,'FontName','Courier New',...
     'EdgeColor','none','VerticalAlignment','middle','HorizontalAlignment','center');

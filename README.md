@@ -16,42 +16,37 @@ MATLAB/RoadRunner: `road_analyzer_deploy/matlab_twin/DIGITAL_TWIN_README.md`
 2. **Geometry** — the photo looks along the road with both carriageway edges at
    the frame borders, so lateral position = x-pixel × (width / image width).
    Perspective is not corrected; widths are estimates.
-3. **Capacity** — Indo-HCM 2017 Chapter 5 (all values in `road_analyzer/indo_hcm.py`)
+3. **Capacity** — two results, never mixed (full method: `road_analyzer_deploy/docs/METHODOLOGY.md`)
 
    ```
-   C = C0 × F_OP × F_BS × F_AC        Indo-HCM Eq. 5.5
-         × F_W × F_P                  project extensions
+   Indo-HCM:   C_HCM = C0 × F_OP × F_BS × F_AC      Eq. 5.5, Tables 5.4, 5.9–5.12
+   Extended:   C     = C_HCM × F_W × F_R            project extensions (validate!)
    ```
 
-   | Term | Source | Input |
-   |---|---|---|
-   | `C0` base capacity | Table 5.4 (2400 two-lane undivided; 2700 / 4200 / 6800 / 10000 PCU/h per direction for 4/6/8/10-lane divided); or Eq. 5.4 `C_lane = 20.11 V + 210.8` × lanes when the car operating speed `V` is measured on a divided road | road type, optional speed |
-   | `F_OP` on-street parking | Table 5.9 (long-term, by length occupied) / Table 5.10 (short-term, by manoeuvres) | detected parking or user input |
-   | `F_BS` bus stops, `F_AC` access points | Tables 5.11, 5.12 | user input |
-   | `F_W` usable width | **extension** — usable ÷ total width, obstructions widened by the 0.25 m shyness of §5.1.2, overlaps merged | vendors, carts, garbage, barricades |
-   | `F_P` potholes | **extension** — assumed speed drop per IRC:82 size class, converted to capacity with Eq. 5.4 | detected potholes |
-
-   DSV at LOS-C = 0.70 C (Table 5.4). LOS from V/C per Tables 5.6 / 5.7, only
-   when an observed volume (PCU/h, Table 5.2/5.3 PCUs or Se Eq. 5.2/5.3) is entered.
-   Indo-HCM has no one-way road class; a one-way street is analysed as one
-   direction of the divided road with the same number of lanes (assumption).
+   - `C0`: Table 5.4, or Eq. 5.4 `C_lane = 20.11 V + 210.8` from the operating speed
+     measured at a base section (divided roads, 40–80 km/h).
+   - `F_W`: usable width for vendors, carts, garbage, barricades, potholes
+     (0.25 m shy distance, overlaps merged). `F_R`: optional roughness from IRI.
+   - Parked vehicles act only through Indo-HCM `F_OP`, never through `F_W`.
+   - LOS (Tables 5.6/5.7) only when an observed volume is entered; DSV = 0.70 C.
 4. **Digital twin** — the same demand is run through a Greenshields fundamental
    diagram calibrated to `C0` and to `C`; when demand exceeds `C` a deterministic
    queue and LWR shockwave give queue size, queue length and delay.
 5. **Outputs** — department-routed PDF, OpenDRIVE `.xodr` (ideal and current),
    capacity JSON for MATLAB/RoadRunner, Excel defect log.
 
-## What still needs field data
+## Field validation
 
-Indo-HCM values are empirical averages from 32 base and 36 non-base
-sections in 10 metro cities (Table 5.1), and the manual lets the analyst
-either adopt them or establish site values from field studies (§5.4).
-For this project:
-- measure the operating speed of ≥ 100 cars per site (§5.4.6) so C0 comes
-  from Eq. 5.4 instead of the national table;
-- validate F_W and F_P (not in Indo-HCM) with counts and speeds at
-  obstructed vs clear sections; the pothole speed drops (5 / 10 / 20 %) and
-  the vehicle mix are placeholders until then.
+`road_analyzer/field_validation.py` turns a survey video (vehicle type + trap
+entry/exit times) into field capacity by the manual's methods — operating speed
++ Eq. 5.4, Greenshields speed–flow fit (Annex 5E.4) or queue discharge — and
+compares it with the dashboard (MAPE, RMSE, bias). A volume count alone is
+demand, not capacity. Template: `docs/field_templates/vehicles_template.csv`.
+
+## Tests
+
+`cd road_analyzer_deploy && python -m pytest -q` — reproduces Indo-HCM Tables
+5.4/5.5 and Examples 5.5.1–5.5.4.
 
 ## Run locally
 

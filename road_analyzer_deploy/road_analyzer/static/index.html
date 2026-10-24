@@ -94,82 +94,87 @@
 
         <!-- RIGHT: road parameters form -->
         <form class="config-col" id="config-form">
-          <div class="config-title mono">ROAD PARAMETERS — MEASURED ON SITE</div>
-
+          <div class="config-title mono">1 · REQUIRED</div>
           <div class="field-grid">
-
             <div class="field">
               <label for="data_collection_date">Date of data collection</label>
               <input type="date" id="data_collection_date" name="data_collection_date" required>
               <div class="field-hint" id="collection-date-hint">Date the photo/video was taken — today or earlier</div>
             </div>
-
             <div class="field">
               <label for="analysis_date">Date of analysis</label>
               <input type="date" id="analysis_date" name="analysis_date" required>
               <div class="field-hint">Not in the future, not before the collection date</div>
             </div>
-
             <div class="field field-wide">
-              <label for="road_type">Road type — carriageway in the photo (Indo-HCM Table 5.4)</label>
+              <label for="road_type">Road type (Indo-HCM Table 5.4)</label>
               <select id="road_type" name="road_type" required></select>
               <div class="field-hint" id="road-type-hint"></div>
             </div>
-
             <div class="field">
-              <label for="total_width_m">Carriageway width, kerb to kerb (m)</label>
+              <label for="total_width_m">Paved carriageway width, kerb to kerb (m)</label>
               <input type="number" id="total_width_m" name="total_width_m"
                      step="0.1" min="2" max="25" value="7.0" required>
-              <div class="field-hint" id="width-hint">Measure at 3 points and average. Divided road: one carriageway only</div>
+              <div class="field-hint" id="width-hint">Divided road: one direction only</div>
             </div>
-
-            <div class="field">
-              <label for="functional_class">Functional class</label>
-              <select id="functional_class" name="functional_class" required></select>
-              <div class="field-hint">Only used by the pothole speed model when no speed is measured (not an Indo-HCM table)</div>
-            </div>
-
-            <div class="field">
-              <label for="operating_speed_kmh">Operating speed, measured (km/h) — optional</label>
-              <input type="number" id="operating_speed_kmh" name="operating_speed_kmh"
-                     step="1" min="10" max="100" placeholder="85th %ile car free speed">
-              <div class="field-hint">Spot-speed survey, ≥ 100 cars. Divided roads: Indo-HCM Eq. 5.4, C<sub>lane</sub> = 20.11 V + 210.8 (valid 40–80 km/h)</div>
-            </div>
-
-            <div class="field">
-              <label for="observed_volume_pcu_h">Observed volume (PCU/h) — optional</label>
-              <input type="number" id="observed_volume_pcu_h" name="observed_volume_pcu_h"
-                     step="1" min="1" placeholder="Classified count × PCU">
-              <div class="field-hint">Same direction basis as the road type. Needed for V/C and LOS</div>
-            </div>
-
-            <div class="field">
-              <label for="on_street_parking">On-street parking (F<sub>OP</sub>, Tables 5.9/5.10)</label>
-              <select id="on_street_parking" name="on_street_parking"></select>
-            </div>
-
-            <div class="field">
-              <label for="bus_stop">Bus stop on segment (F<sub>BS</sub>, Table 5.11)</label>
-              <select id="bus_stop" name="bus_stop"></select>
-            </div>
-
-            <div class="field">
-              <label for="access_points">Access points (F<sub>AC</sub>, Table 5.12)</label>
-              <select id="access_points" name="access_points"></select>
-            </div>
-
-
             <div class="field">
               <label for="chainage_m">Chainage from survey start (m)</label>
               <input type="number" id="chainage_m" name="chainage_m" step="1" min="0" value="0">
-              <div class="field-hint">Orders photos in the corridor export; not used in capacity</div>
+              <div class="field-hint">Orders photos in the RoadRunner corridor; not used for capacity</div>
             </div>
+          </div>
 
+          <div class="config-title mono">2 · INDO-HCM SIDE FRICTION (Eq. 5.5) — leave "none" if absent</div>
+          <div class="field-grid">
+            <div class="field field-wide">
+              <label for="on_street_parking">On-street parking F<sub>OP</sub> (Tables 5.9 / 5.10)</label>
+              <select id="on_street_parking" name="on_street_parking"></select>
+              <div class="field-hint">Long-term: kerb length occupied ÷ segment length. Short-term: park-in + park-out per km per hour</div>
+            </div>
+            <div class="field">
+              <label for="bus_stop">Bus stop F<sub>BS</sub> (Table 5.11)</label>
+              <select id="bus_stop" name="bus_stop"></select>
+            </div>
+            <div class="field">
+              <label for="access_points">Access points F<sub>AC</sub> (Table 5.12)</label>
+              <select id="access_points" name="access_points"></select>
+            </div>
+          </div>
+
+          <div class="config-title mono">3 · FIELD DATA (optional)</div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="operating_speed_kmh">Operating speed at a base section (km/h)</label>
+              <input type="number" id="operating_speed_kmh" name="operating_speed_kmh"
+                     step="0.1" min="10" max="100" placeholder="85th %ile free car speed">
+              <div class="field-hint" id="speed-hint">≥ 100 cars with headway > 8 s, on a friction-free stretch of this road. Divided roads only (Eq. 5.4, 40–80 km/h)</div>
+            </div>
+            <div class="field">
+              <label for="observed_volume_pcu_h">Observed volume (PCU/h)</label>
+              <input type="number" id="observed_volume_pcu_h" name="observed_volume_pcu_h"
+                     step="1" min="1" placeholder="Peak 5-min count × 12, Table 5.3 PCUs">
+              <div class="field-hint">Same direction basis as the road type. Gives V/C and LOS (Tables 5.6 / 5.7)</div>
+            </div>
+          </div>
+
+          <div class="config-title mono">4 · PROJECT EXTENSIONS (not Indo-HCM)</div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="width_method">Width-loss method (F<sub>W</sub>)</label>
+              <select id="width_method" name="width_method"></select>
+              <div class="field-hint">For vendors, carts, garbage, barricades, potholes</div>
+            </div>
+            <div class="field">
+              <label for="iri_m_per_km">Roughness IRI (m/km) — optional (F<sub>R</sub>)</label>
+              <input type="number" id="iri_m_per_km" name="iri_m_per_km" step="0.1" min="0" max="20"
+                     placeholder="Section average, e.g. phone app">
+              <div class="field-hint">Applied only above IRI 3 (Indo-HCM base limit, Table 5B.1)</div>
+            </div>
           </div>
 
           <!-- Live base-capacity preview -->
           <div class="dsv-preview" id="dsv-preview" style="display:none;">
-            <span class="dsv-label mono">BASE CAPACITY C0 (Indo-HCM)</span>
+            <span class="dsv-label mono">BASE CAPACITY C0 — Indo-HCM, before side friction</span>
             <div class="dsv-row">
               <span class="dsv-value" id="dsv-value">—</span>
               <span class="dsv-unit" id="dsv-unit">PCU / h</span>
@@ -219,7 +224,7 @@
         </div>
         <div class="dt-road-card defect">
           <div class="dt-road-label">CURRENT ROAD — detected obstructions</div>
-          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-cap">—</span><span class="dt-stat-unit">PCU/h</span><span class="dt-stat-label">Reduced capacity C</span></div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-cap">—</span><span class="dt-stat-unit">PCU/h</span><span class="dt-stat-label">Capacity incl. extensions</span></div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-vc">—</span><span class="dt-stat-unit"></span><span class="dt-stat-label">Demand / capacity</span></div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-speed">—</span><span class="dt-stat-unit">km/h</span><span class="dt-stat-label" id="dt-defect-speed-label">Speed at the section</span></div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-queue">—</span><span class="dt-stat-unit">m</span><span class="dt-stat-label">Queue after horizon</span></div>
@@ -243,8 +248,8 @@
   </div>
 
   <footer class="mono">
-    Capacity: Indo-HCM 2017 Ch. 5, C = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), C0 from Table 5.4 or Eq. 5.4 ·
-    F<sub>W</sub> (usable width) and F<sub>P</sub> (pothole speed effect) are project extensions, not Indo-HCM factors ·
+    Indo-HCM capacity: C<sub>HCM</sub> = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), C0 from Table 5.4 or Eq. 5.4 ·
+    Extended: C = C<sub>HCM</sub> × F<sub>W</sub> × F<sub>R</sub> — project extensions for obstructions Indo-HCM does not cover; field validation required ·
     Pothole size per IRC:82-2015, width only ·
     LOS is shown only when a traffic volume is entered ·
     Pilot-study tool — not a substitute for a full traffic survey.
