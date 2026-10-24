@@ -42,10 +42,22 @@ not as fewer vehicles on the road.
 ## Use
 
 1. Analyse a photo on the dashboard and download the **Digital Twin Bundle (.zip)**.
-2. Extract it; keep the `.xodr`, `_roadrunner_capacity.json` and scripts together.
-3. Double-click `run_ideal_digital_twin.bat`, then `run_nonideal_digital_twin.bat`.
-4. Optional Simulink check: in MATLAB, `run_digital_twin('<photo>_roadrunner_capacity.json')`.
-   The queue it reports after 60 min must match the dashboard twin.
+2. Extract it into an **empty folder**; keep every file together.
+3. Double-click **`run_2d_digital_twin.bat`** first. It needs only MATLAB and
+   proves the setup works.
+4. For RoadRunner: **`run_ideal_digital_twin.bat`**, then **`run_nonideal_digital_twin.bat`**.
+   The first run asks for your RoadRunner project folder and saves it in
+   `roadrunner_project.txt`.
+5. Optional Simulink check: in MATLAB, `run_digital_twin('<photo>_roadrunner_capacity.json')`.
+
+| Setting | How it is found |
+|---|---|
+| MATLAB | `MATLAB_EXE` env var → `matlab` on PATH → newest `C:\Program Files\MATLAB\R20*` |
+| RoadRunner project | `RR_PROJECT_FOLDER` env var → `roadrunner_project.txt` → folder picker |
+| RoadRunner install | `RR_INSTALL_FOLDER` env var → newest `C:\Program Files\RoadRunner R20*` → `roadrunnerSetup` default |
+
+**If nothing seems to happen:** every run writes `twin_log.txt` in the same
+folder and shows a popup on error. Send that file when asking for help.
 
 ## Limits
 

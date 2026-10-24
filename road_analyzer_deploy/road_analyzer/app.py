@@ -687,11 +687,24 @@ def get_roadrunner_ideal_xodr(job_id: str):
 # whatever the job actually generated. Listed by filename, not glob,
 # since these are fixed helper scripts, not per-job output.
 _BUNDLE_STATIC_FILES = [
+    # entry point + launchers
+    "run_twin_safely.m",
+    "run_ideal_digital_twin.bat",
+    "run_nonideal_digital_twin.bat",
+    "run_2d_digital_twin.bat",
+    # RoadRunner 3D twin and everything it calls
     "auto_import_roadrunner.m",
     "add_vehicles_ideal.m",
     "add_vehicles_nonideal.m",
-    "run_ideal_digital_twin.bat",
-    "run_nonideal_digital_twin.bat",
+    "build_traffic.m",
+    "add_defects_to_scene.m",
+    "twin_config.m",
+    "twin_assets.m",
+    # MATLAB-only 2D twin and Simulink queue model
+    "roadtwin.m",
+    "create_digital_twin_model.m",
+    "run_digital_twin.m",
+    "DIGITAL_TWIN_README.md",
 ]
 
 
@@ -747,16 +760,14 @@ def get_digital_twin_bundle(job_id: str):
                 zf.write(src, arcname=name)
         zf.writestr(
             "HOW_TO_USE.txt",
-            "1. Extract this zip anywhere on your machine.\n"
-            "2. Set the MATLAB_EXE environment variable to your matlab.exe "
-            "path (see the .bat files for the default location they try "
-            "first).\n"
-            "3. Double-click run_ideal_digital_twin.bat to open the "
-            "defect-free version of this road in RoadRunner.\n"
-            "4. Double-click run_nonideal_digital_twin.bat to open the "
-            "version with the detected defects placed on it.\n"
-            "5. Both scripts read the matching .xodr/.json in this same "
-            "folder automatically — keep everything together.\n",
+            "1. Extract this zip into an empty folder. Keep every file together.\r\n"
+            "2. Double-click run_2d_digital_twin.bat first: it needs only MATLAB\r\n"
+            "   and shows the ideal vs current road animation.\r\n"
+            "3. For RoadRunner: double-click run_ideal_digital_twin.bat, then\r\n"
+            "   run_nonideal_digital_twin.bat. The first run asks for your RoadRunner\r\n"
+            "   project folder and remembers it (roadrunner_project.txt).\r\n"
+            "4. If MATLAB is not found, set MATLAB_EXE to your matlab.exe path.\r\n"
+            "5. If anything fails, a popup appears and the details are in twin_log.txt.\r\n",
         )
     buf.seek(0)
 

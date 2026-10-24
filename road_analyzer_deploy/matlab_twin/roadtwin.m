@@ -5,7 +5,7 @@ function roadtwin(jsonPath)
 %%
 %% USAGE (with your REAL analysis data -- recommended):
 %%   roadtwin('C:\Users\Admin\Downloads\images (1)_roadrunner_capacity.json')
-%%   (or just run 3_run_2D_digital_twin.bat, which finds this automatically)
+%%   (or double-click run_2d_digital_twin.bat, which finds the newest JSON here)
 %%
 %% USAGE (with placeholder demo numbers, no real data):
 %%   roadtwin()
