@@ -33,21 +33,21 @@ end
 %% so this always runs even with no data.
 %% ============================================================
 % Demo defaults (used only when no capacity JSON is given). PCU/h.
-BASE_CAP        = 3400;     % Indo-HCM base capacity, 4-lane divided, one direction
-REDUCED_CAP     = 2300;
-CAP_LOSS_PCT    = 32.4;
-TOTAL_WIDTH_M   = 7.0;
-BLOCKED_M       = 1.5;
-FACTORS         = struct('F_W',0.79,'F_P',0.92,'F_OP',1,'F_BS',1,'F_AC',1,'F_PD',0.93);
+BASE_CAP        = 2700;     % Indo-HCM Table 5.4, four-lane divided, one direction
+REDUCED_CAP     = 1957;
+CAP_LOSS_PCT    = 27.5;
+TOTAL_WIDTH_M   = 7.5;
+BLOCKED_M       = 1.6;
+FACTORS         = struct('F_W',0.79,'F_P',0.917,'F_OP',1,'F_BS',1,'F_AC',1);
 NUM_LANES       = 2;
 DEFECTS         = 'pothole + street vendor';
 FREE_SPD        = 50;       % operating speed, km/h
-DEMAND          = 2380;     % LOS-C service volume of the ideal road
+DEMAND          = 1890;     % LOS-C design service volume (Table 5.4)
 IDEAL_SPD       = 38.7;     % twin: speed at demand, ideal road
-CONG_SPD        = 22.5;     % twin: speed at the obstruction
-QUEUE_SPD       = 22.5;     % twin: speed in the upstream queue (= CONG_SPD if no queue)
-K_IDEAL_LANE    = 30.8;     % twin densities, PCU/km/lane
-K_QUEUE_LANE    = 30.8;
+CONG_SPD        = 26.7;     % twin: speed at the obstruction
+QUEUE_SPD       = 26.7;     % twin: speed in the upstream queue (= CONG_SPD if no queue)
+K_IDEAL_LANE    = 24.4;     % twin densities, PCU/km/lane
+K_QUEUE_LANE    = 35.5;
 AVG_PCU         = 0.80;
 
 HAS_POTHOLE   = true;

@@ -21,7 +21,7 @@
   const widthHint     = document.getElementById("width-hint");
   const dsvPreview    = document.getElementById("dsv-preview");
   const dsvValueEl    = document.getElementById("dsv-value");
-  const FACTOR_FIELDS = ["on_street_parking", "bus_stop", "access_points", "pedestrian_crossing"];
+  const FACTOR_FIELDS = ["on_street_parking", "bus_stop", "access_points"];
 
   const configForm    = document.getElementById("config-form");
   const runBtn        = document.getElementById("run-btn");
@@ -217,25 +217,28 @@
   // road_analyzer/indo_hcm.py — the server copy replaces it when it loads.
   // ----------------------------------------------------------------
   const FALLBACK_CONFIG = {
-    road_types: [
-      { key: "undivided_2lane",   label: "2-lane undivided (two-way)", lanes: 2, divided: false, basis: "both directions", ref_width_m: 7.0,  base_capacity_pcu_h: 2200 },
-      { key: "undivided_4lane",   label: "4-lane undivided (two-way)", lanes: 4, divided: false, basis: "both directions", ref_width_m: 14.0, base_capacity_pcu_h: 5000,
-        note: "IRC:106 (2022 draft) row; Indo-HCM Ch.5 base sections cover 2-lane undivided and 4-10 lane divided only." },
-      { key: "divided_2lane_dir", label: "4-lane divided — one carriageway (2 lanes, one direction)", lanes: 2, divided: true, basis: "one direction", ref_width_m: 7.0,  base_capacity_pcu_h: 3400 },
-      { key: "divided_3lane_dir", label: "6-lane divided — one carriageway (3 lanes, one direction)", lanes: 3, divided: true, basis: "one direction", ref_width_m: 10.5, base_capacity_pcu_h: 5100 },
-      { key: "divided_4lane_dir", label: "8-lane divided — one carriageway (4 lanes, one direction)", lanes: 4, divided: true, basis: "one direction", ref_width_m: 14.0, base_capacity_pcu_h: 6800 },
+    road_types: [   // Indo-HCM Table 5.4
+      { key: "undivided_2lane", label: "Two-lane undivided (both directions)", lanes: 2, divided: false, basis: "both directions", ref_width_m: 7.5,  base_capacity_pcu_h: 2400 },
+      { key: "divided_4lane",   label: "Four-lane divided — one direction (2 lanes)",  lanes: 2, divided: true, basis: "one direction", ref_width_m: 7.5,  base_capacity_pcu_h: 2700 },
+      { key: "divided_6lane",   label: "Six-lane divided — one direction (3 lanes)",   lanes: 3, divided: true, basis: "one direction", ref_width_m: 11.0, base_capacity_pcu_h: 4200 },
+      { key: "divided_8lane",   label: "Eight-lane divided — one direction (4 lanes)", lanes: 4, divided: true, basis: "one direction", ref_width_m: 14.5, base_capacity_pcu_h: 6800,
+        note: "Table 5.4 value applies where signal spacing is 1-3 km (Section 5.4.4.2)." },
+      { key: "divided_10lane",  label: "Ten-lane divided — one direction (5 lanes)",   lanes: 5, divided: true, basis: "one direction", ref_width_m: 18.0, base_capacity_pcu_h: 10000,
+        note: "Table 5.4 value applies where signal spacing is 1-3 km (Section 5.4.4.2)." },
     ],
     functional_classes: [
       { key: "arterial",     label: "Arterial",     operating_speed_kmh: 50 },
       { key: "sub_arterial", label: "Sub-arterial", operating_speed_kmh: 40 },
       { key: "collector",    label: "Collector",    operating_speed_kmh: 30 },
     ],
-    speed_model: { a: 20.11, b: 210.8, range_kmh: [40, 60] },
-    on_street_parking: [
+    speed_model: { a: 20.11, b: 210.8, range_kmh: [40, 80] },
+    on_street_parking: [   // Tables 5.9 / 5.10
       { key: "none", label: "No on-street parking", factor: 1.0 },
-      { key: "lt25", label: "< 25% of segment length", factor: 0.70 },
-      { key: "25_50", label: "25 – 50% of segment length", factor: 0.65 },
-      { key: "gt50", label: "> 50% of segment length", factor: 0.40 },
+      { key: "len_lt25", label: "Long-term, < 25% of segment length (T5.9)", factor: 0.70 },
+      { key: "len_25_50", label: "Long-term, 25 – 50% of length (T5.9)", factor: 0.65 },
+      { key: "len_gt50", label: "Long-term, > 50% of length (T5.9)", factor: 0.40 },
+      { key: "man_le500", label: "Short-term, ≤ 500 manoeuvres/km/h (T5.10)", factor: 0.65 },
+      { key: "man_gt500", label: "Short-term, > 500 manoeuvres/km/h (T5.10)", factor: 0.40 },
     ],
     bus_stop: [
       { key: "none", label: "No bus stop on segment", factor: 1.0 },
@@ -249,13 +252,6 @@
       { key: "lt200", label: "< 200 veh/h entering/leaving", factor: 0.90 },
       { key: "200_500", label: "200 – 500 veh/h", factor: 0.80 },
       { key: "gt500", label: "> 500 veh/h", factor: 0.70 },
-    ],
-    pedestrian_crossing: [
-      { key: "none", label: "No mid-block crossing", factor: 1.0 },
-      { key: "lt250", label: "< 250 ped/h", factor: 0.90 },
-      { key: "250_500", label: "250 – 500 ped/h", factor: 0.78 },
-      { key: "500_1000", label: "500 – 1000 ped/h", factor: 0.72 },
-      { key: "1000_1500", label: "1000 – 1500 ped/h", factor: 0.68 },
     ],
     dsv_vc_ratio: 0.70,
     model_loaded: true,
@@ -275,7 +271,7 @@
     if (userTouchedConfig) return;   // never overwrite a selection in progress
     fillSelect(roadTypeSel, data.road_types || [], (o) => o.label);
     if (roadTypeSel && !roadTypeSel.dataset.init) {
-      roadTypeSel.value = "divided_2lane_dir";
+      roadTypeSel.value = "divided_4lane";
       roadTypeSel.dataset.init = "1";
     }
     fillSelect(classSel, data.functional_classes || [],
@@ -304,14 +300,14 @@
     if (!configData || !roadTypeSel) return;
     const rt = (configData.road_types || []).find((o) => o.key === roadTypeSel.value);
     if (!rt) { dsvPreview.style.display = "none"; return; }
-    const sm = configData.speed_model || { a: 20.11, b: 210.8, range_kmh: [40, 60] };
+    const sm = configData.speed_model || { a: 20.11, b: 210.8, range_kmh: [40, 80] };
     const v = parseFloat(speedInput && speedInput.value);
-    let c0 = rt.base_capacity_pcu_h, how = "Table 5 base capacity";
+    let c0 = rt.base_capacity_pcu_h, how = "Indo-HCM Table 5.4";
     if (rt.divided && v > 0) {
       const lane = sm.a * v + sm.b;
       c0 = Math.round(lane * rt.lanes);
-      how = `Eq. 5: ${sm.a} × ${v} + ${sm.b} = ${Math.round(lane)} PCU/h/lane × ${rt.lanes}`;
-      if (v < sm.range_kmh[0] || v > sm.range_kmh[1]) how += " (outside 40–60 km/h — extrapolated)";
+      how = `Indo-HCM Eq. 5.4: ${sm.a} × ${v} + ${sm.b} = ${Math.round(lane)} PCU/h/lane × ${rt.lanes}`;
+      if (v < sm.range_kmh[0] || v > sm.range_kmh[1]) how += " (outside 40–80 km/h validity — extrapolated)";
     }
     dsvValueEl.textContent = Math.round(c0).toLocaleString("en-IN");
     document.getElementById("dsv-unit").textContent = `PCU/h, ${rt.basis}`;
@@ -327,7 +323,7 @@
       const perLane = w / rt.lanes;
       const ok = perLane >= 2.75 && perLane <= 4.25;
       widthHint.textContent = `${perLane.toFixed(2)} m per lane` +
-        (ok ? " — consistent with 3.5 m lanes" : " — check road type or width (Indo-HCM assumes 3.5 m lanes)");
+        (ok ? " — consistent with Indo-HCM 3.5 m lanes" : " — check road type or width (Indo-HCM: 3.5 m lanes + 0.25 m shyness)");
       widthHint.classList.toggle("warn", !ok);
     }
     dsvPreview.style.display = "";

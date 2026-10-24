@@ -6,7 +6,7 @@ Detection + capacity engine for the Indian Road Capacity Analyzer.
 Capacity basis: Indo-HCM 2017 Chapter 5 (urban roads). All tables and
 factors are in road_analyzer/indo_hcm.py; this module only applies them.
 
-    C_reduced = C0 x F_W x F_P x F_OP x F_BS x F_AC x F_PD
+    C_reduced = C0 x F_W x F_P x F_OP x F_BS x F_AC     (Indo-HCM Eq. 5.5 + two extensions)
 
     C0    base capacity of the carriageway in the photo (indo_hcm.base_capacity)
     F_W   usable-width factor for vendors, carts, garbage, barricades
@@ -15,8 +15,8 @@ factors are in road_analyzer/indo_hcm.py; this module only applies them.
     F_OP  on-street parking factor. Applied when parking is detected or
           declared; parked vehicles are NOT also subtracted from width,
           because the Indo-HCM parking factor already includes that loss.
-    F_BS, F_AC, F_PD  bus stop, access point, pedestrian crossing factors
-          (site inputs - cannot be seen reliably in one photo)
+    F_BS, F_AC  bus stop and access point factors (site inputs - not
+          reliably visible in one photo)
 
 Design Service Volume = 0.70 x C (LOS-C). LOS is reported ONLY when the user
 supplies an observed volume, because LOS needs V/C and a photo carries no
@@ -292,7 +292,6 @@ def resolve_road_inputs(road_config: dict) -> dict:
         "parking_key": road_config.get("on_street_parking") or "none",
         "f_bs": hcm.lookup_factor(hcm.BUS_STOP_FACTORS, road_config.get("bus_stop"), "bus_stop"),
         "f_ac": hcm.lookup_factor(hcm.ACCESS_FACTORS, road_config.get("access_points"), "access_points"),
-        "f_pd": hcm.lookup_factor(hcm.PEDESTRIAN_FACTORS, road_config.get("pedestrian_crossing"), "pedestrian_crossing"),
         "observed_volume": (float(road_config["observed_volume_pcu_h"])
                             if road_config.get("observed_volume_pcu_h") not in (None, "", 0, 0.0) else None),
         "warnings": warnings,
@@ -315,17 +314,17 @@ def compute_capacity(inputs: dict, width_intervals: List[Tuple[float, float]],
 
     parking_key = inputs["parking_key"]
     if parking_detected and parking_key == "none":
-        parking_key = "lt25"   # parking is visibly present: use the mildest parking class
+        parking_key = hcm.PARKING_WHEN_DETECTED   # parking is visible: mildest Table 5.9 class
     f_op = hcm.PARKING_FACTORS[parking_key]["factor"]
 
-    f_bs, f_ac, f_pd = inputs["f_bs"], inputs["f_ac"], inputs["f_pd"]
-    c = c0 * f_w * f_p * f_op * f_bs * f_ac * f_pd
+    f_bs, f_ac = inputs["f_bs"], inputs["f_ac"]
+    c = c0 * f_w * f_p * f_op * f_bs * f_ac
 
     out = {
         "c0": c0, "c": c, "loss": c0 - c,
         "loss_pct": (c0 - c) / c0 * 100 if c0 > 0 else 0.0,
         "blocked_raw_m": blocked_raw, "blocked_m": blocked, "effective_width_m": eff_w,
-        "factors": {"F_W": f_w, "F_P": f_p, "F_OP": f_op, "F_BS": f_bs, "F_AC": f_ac, "F_PD": f_pd},
+        "factors": {"F_W": f_w, "F_P": f_p, "F_OP": f_op, "F_BS": f_bs, "F_AC": f_ac},
         "parking_class_used": parking_key,
         "dsv_ideal": c0 * hcm.DSV_VC_RATIO, "dsv_reduced": c * hcm.DSV_VC_RATIO,
     }
@@ -485,7 +484,7 @@ class RoadAnalyzer:
                 "blocked_m": round(blocked, 2),
                 "factor": round(factor, 3),
                 "mechanism": {"pothole": "F_P (speed reduction)",
-                              "illegal_parking": "F_OP (Indo-HCM on-street parking factor)"
+                              "illegal_parking": "F_OP (Indo-HCM Table 5.9/5.10)"
                               }.get(name, "F_W (usable width)"),
                 "capacity_loss_pcu": round(c0 * (1 - factor), 1),
                 "capacity_loss_pct": round(loss_pct, 1),
@@ -503,7 +502,7 @@ class RoadAnalyzer:
                 }
 
         # ---- indicative vehicles/h (assumed composition; PCU/h is the real output)
-        avg_pcu = hcm.avg_pcu_per_vehicle(inputs["divided"])
+        avg_pcu = hcm.avg_pcu_per_vehicle(inputs["road_type"])
         rt = inputs["road"]
         factor_str = " x ".join(f"{k} {v:.3f}" for k, v in f.items())
 
@@ -518,7 +517,7 @@ class RoadAnalyzer:
                 "functional_class": inputs["functional_class"],
                 "operating_speed_kmh": inputs["operating_speed_kmh"],
                 "operating_speed_source": "measured on site" if inputs["speed_measured"]
-                                          else "default for functional class (draft Table 3)",
+                                          else "project default for functional class (not measured; C0 from Table 5.4)",
                 "base_capacity_method": inputs["c0_method"],
                 "warnings": inputs["warnings"],
             },
@@ -543,8 +542,8 @@ class RoadAnalyzer:
                 "avg_pcu_per_vehicle": round(avg_pcu, 3),
                 "base_capacity_veh_h": round(c0 / avg_pcu, 0),
                 "reduced_capacity_veh_h": round(c / avg_pcu, 0),
-                "note": "Uses an ASSUMED urban traffic mix (indo_hcm.DEFAULT_COMPOSITION) "
-                        "with Indo-HCM PCU values. Replace with a classified count.",
+                "note": "ASSUMED traffic mix (indo_hcm.DEFAULT_COMPOSITION) with Indo-HCM "
+                        "Table 5.2/5.3 median PCUs. Replace with a classified count.",
             },
             "level_of_service": ({k: (round(v, 3) if isinstance(v, float) else v)
                                   for k, v in cap["los"].items()} if "los" in cap else None),

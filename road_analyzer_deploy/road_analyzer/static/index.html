@@ -111,7 +111,7 @@
             </div>
 
             <div class="field field-wide">
-              <label for="road_type">Road type — carriageway in the photo (Indo-HCM)</label>
+              <label for="road_type">Road type — carriageway in the photo (Indo-HCM Table 5.4)</label>
               <select id="road_type" name="road_type" required></select>
               <div class="field-hint" id="road-type-hint"></div>
             </div>
@@ -126,14 +126,14 @@
             <div class="field">
               <label for="functional_class">Functional class</label>
               <select id="functional_class" name="functional_class" required></select>
-              <div class="field-hint">Sets the default operating speed if none is measured</div>
+              <div class="field-hint">Only used by the pothole speed model when no speed is measured (not an Indo-HCM table)</div>
             </div>
 
             <div class="field">
               <label for="operating_speed_kmh">Operating speed, measured (km/h) — optional</label>
               <input type="number" id="operating_speed_kmh" name="operating_speed_kmh"
                      step="1" min="10" max="100" placeholder="85th %ile car free speed">
-              <div class="field-hint">Spot-speed survey, ≥ 100 cars. Divided roads: used in C<sub>lane</sub> = 20.11 V + 210.8</div>
+              <div class="field-hint">Spot-speed survey, ≥ 100 cars. Divided roads: Indo-HCM Eq. 5.4, C<sub>lane</sub> = 20.11 V + 210.8 (valid 40–80 km/h)</div>
             </div>
 
             <div class="field">
@@ -144,24 +144,20 @@
             </div>
 
             <div class="field">
-              <label for="on_street_parking">On-street parking (F<sub>OP</sub>)</label>
+              <label for="on_street_parking">On-street parking (F<sub>OP</sub>, Tables 5.9/5.10)</label>
               <select id="on_street_parking" name="on_street_parking"></select>
             </div>
 
             <div class="field">
-              <label for="bus_stop">Bus stop on segment (F<sub>BS</sub>)</label>
+              <label for="bus_stop">Bus stop on segment (F<sub>BS</sub>, Table 5.11)</label>
               <select id="bus_stop" name="bus_stop"></select>
             </div>
 
             <div class="field">
-              <label for="access_points">Access points (F<sub>AC</sub>)</label>
+              <label for="access_points">Access points (F<sub>AC</sub>, Table 5.12)</label>
               <select id="access_points" name="access_points"></select>
             </div>
 
-            <div class="field">
-              <label for="pedestrian_crossing">Mid-block pedestrian crossing (F<sub>PD</sub>)</label>
-              <select id="pedestrian_crossing" name="pedestrian_crossing"></select>
-            </div>
 
             <div class="field">
               <label for="chainage_m">Chainage from survey start (m)</label>
@@ -247,8 +243,7 @@
   </div>
 
   <footer class="mono">
-    Capacity: Indo-HCM 2017 Ch. 5 urban framework, C = C0 × F<sub>W</sub> × F<sub>P</sub> × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> × F<sub>PD</sub>
-    (values as tabulated in IRC:106 draft 2022 — verify against the manual) ·
+    Capacity: Indo-HCM 2017 Ch. 5, C = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), C0 from Table 5.4 or Eq. 5.4 ·
     F<sub>W</sub> (usable width) and F<sub>P</sub> (pothole speed effect) are project extensions, not Indo-HCM factors ·
     Pothole size per IRC:82-2015, width only ·
     LOS is shown only when a traffic volume is entered ·
