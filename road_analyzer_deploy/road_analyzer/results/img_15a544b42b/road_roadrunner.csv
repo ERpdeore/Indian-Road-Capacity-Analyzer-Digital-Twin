@@ -1,4 +1,0 @@
-defect_type,left_m,right_m,width_m,conf
-street_vendor,0.0,0.87,0.87,0.9
-pothole,2.486,2.817,0.331,0.8
-illegal_parking,4.806,5.8,0.994,0.9
