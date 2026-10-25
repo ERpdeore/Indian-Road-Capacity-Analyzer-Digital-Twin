@@ -474,7 +474,8 @@ class RoadAnalyzer:
             "image_size_px": {"width": img_w, "height": img_h},
             "road_config": {**road_config, "num_lanes": inputs["lanes"]},
             "capacity_basis": {
-                "standard": hcm.SOURCE,
+                "standard": (hcm.SOURCE if rt["chapter"] == 5 else
+                             "Indo-HCM 2017 (CSIR-CRRI), Chapter 2 road values with the Chapter 5 procedure"),
                 "road_type": inputs["road_type"], "road_type_label": rt["label"],
                 "direction_basis": rt["basis"], "divided": rt["divided"],
                 "indo_hcm_chapter": rt["chapter"], "dsv_vc_ratio": rt["dsv_vc_ratio"],
