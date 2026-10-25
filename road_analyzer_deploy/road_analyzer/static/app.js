@@ -1,230 +1,97 @@
+/* =====================================================================
+   Road Capacity Analyzer — dashboard
+   All engineering numbers come from the server (road_analyzer/*.py).
+   This file only draws them and sends what-if requests to /api/whatif.
+   ===================================================================== */
 (function () {
   "use strict";
 
-  // ----------------------------------------------------------------
-  // Element refs
-  // ----------------------------------------------------------------
-  const modeBtns      = document.querySelectorAll(".mode-btn");
-  const dropEl        = document.getElementById("drop");
-  const fileInput     = document.getElementById("file-input");
-  const dropTitle     = document.getElementById("drop-title");
-  const dropHint      = document.getElementById("drop-hint");
-  const dropFilelist  = document.getElementById("drop-filelist");
-  const videoSampleRow = document.getElementById("video-sample-row");
-  const sampleEverySec = document.getElementById("sample-every-sec");
+  const $ = (id) => document.getElementById(id);
+  const SVG = "http://www.w3.org/2000/svg";
 
-  const roadTypeSel   = document.getElementById("road_type");
-  const roadTypeHint  = document.getElementById("road-type-hint");
-  const widthMethodSel = document.getElementById("width_method");
-  const speedInput    = document.getElementById("operating_speed_kmh");
-  const widthInput    = document.getElementById("total_width_m");
-  const widthHint     = document.getElementById("width-hint");
-  const dsvPreview    = document.getElementById("dsv-preview");
-  const dsvValueEl    = document.getElementById("dsv-value");
-  const FACTOR_FIELDS = ["on_street_parking", "bus_stop", "access_points"];
+  // ------------------------------------------------------------------ refs
+  const form          = $("config-form");
+  const fileInput     = $("file-input");
+  const dropEl        = $("drop");
+  const runBtn        = $("run-btn");
+  const runLabel      = $("run-btn-label");
+  const modelStatusEl = $("model-status");
+  const roadTypeSel   = $("road_type");
+  const widthInput    = $("total_width_m");
+  const speedInput    = $("operating_speed_kmh");
+  const volumeInput   = $("observed_volume_pcu_h");
+  const collectionDate = $("data_collection_date");
+  const analysisDate   = $("analysis_date");
+  const xsection      = $("xsection");
+  const photoImg      = $("photo");
+  const photoBoxes    = $("photo-boxes");
+  const slider        = $("demand-slider");
 
-  const configForm    = document.getElementById("config-form");
-  const runBtn        = document.getElementById("run-btn");
-  const runBtnLabel   = document.getElementById("run-btn-label");
-  const modelStatusEl = document.getElementById("model-status");
-  const analysisDateEl   = document.getElementById("analysis_date");
-  const collectionDateEl = document.getElementById("data_collection_date"); // NEW
-
-  // Local-time "today" as YYYY-MM-DD (avoids UTC off-by-one near midnight)
-  function todayLocalISO() {
-    const now = new Date();
-    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 10);
-  }
-  function addDaysISO(iso, days) {
-    const d = new Date(iso + "T00:00:00");
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
-  }
-
-  const TODAY_ISO = todayLocalISO();
-
-  // Data collection date: today or earlier allowed — only future dates
-  // are blocked in the date picker itself via max = today. Defaults to
-  // today too, same as analysis date below, so the user only has to
-  // change it if the photo/video was actually taken on an earlier day.
-  if (collectionDateEl) {
-    if (!collectionDateEl.value) collectionDateEl.value = TODAY_ISO;
-    collectionDateEl.max = TODAY_ISO;
-  }
-
-  // Visible, on-page proof of what "today" resolved to -- so this can be
-  // checked just by looking at the page, no dev tools required.
-  const collectionHintEl = document.getElementById("collection-date-hint");
-  if (collectionHintEl) {
-    const todayDisplay = formatDateDisplay(TODAY_ISO);
-    collectionHintEl.textContent =
-      `Date the photo/video was actually taken on site — today (${todayDisplay}) or earlier`;
-  }
-
-  // Analysis date: a normal <input type="date"> inside #config-form, so
-  // FormData(configForm) already picks it up for every mode (image/batch/
-  // video) with no extra wiring below — same field, same name, sent
-  // through to every endpoint. Defaults to today, can't be in the future.
-  if (analysisDateEl) {
-    if (!analysisDateEl.value) analysisDateEl.value = TODAY_ISO;
-    analysisDateEl.max = TODAY_ISO;
-  }
-
-  const statusPanel = document.getElementById("status-panel");
-  const statusText  = document.getElementById("status-text");
-  const errorBox    = document.getElementById("error-box");
-  const resultsRoot = document.getElementById("results-root");
-
-  let mode = "image";
-  let selectedFiles = [];
-  let configData = null;   // cached /api/config-options response
-
-  // ----------------------------------------------------------------
-  // Mode switching
-  // ----------------------------------------------------------------
+  const LABEL = {
+    street_vendor: "Street vendor", cart: "Handcart", garbage: "Garbage",
+    barricade: "Barricade", pothole: "Pothole", illegal_parking: "Parked vehicle",
+  };
+  const WIDTH_CLASSES = ["street_vendor", "cart", "garbage", "barricade", "pothole"];
+  const SHY_M = 0.25;               // Indo-HCM 5.1.2 kerb shyness, used for drawing only
   const MODE_COPY = {
-    image: {
-      title:    "Drop a road image here, or click to browse",
-      hint:     "JPG / PNG · Perpendicular shot of the full carriageway works best",
-      runLabel: "Run Analysis",
-      accept:   "image/*",
-      multiple: false,
-    },
-    batch: {
-      title:    "Drop multiple road images here, or click to browse",
-      hint:     "Select every photo taken along the same stretch - they share the road parameters",
-      runLabel: "Run Batch Analysis",
-      accept:   "image/*",
-      multiple: true,
-    },
-    video: {
-      title:    "Drop a road video here, or click to browse",
-      hint:     "MP4 / MOV / AVI · Frames are sampled at the interval shown below",
-      runLabel: "Analyse Video",
-      accept:   "video/*,video/mp4,video/quicktime,video/avi,video/x-msvideo",
-      multiple: false,
-    },
+    image: { title: "Choose a road photo", hint: "or drop it here", run: "Analyse photo", accept: "image/*", multiple: false },
+    batch: { title: "Choose photos along one road", hint: "they share the road details on the left", run: "Analyse photos", accept: "image/*", multiple: true },
+    video: { title: "Choose a road video", hint: "MP4, MOV or AVI", run: "Analyse video",
+             accept: "video/*,video/mp4,video/quicktime,video/avi,video/x-msvideo", multiple: false },
   };
 
-  function setMode(newMode) {
-    mode = newMode;
-    modeBtns.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-    const copy = MODE_COPY[mode];
-    dropTitle.textContent    = copy.title;
-    dropHint.textContent     = copy.hint;
-    runBtnLabel.textContent  = copy.runLabel;
-    fileInput.accept         = copy.accept;
-    fileInput.multiple       = copy.multiple;
-    videoSampleRow.style.display = mode === "video" ? "flex" : "none";
-    selectedFiles = [];
-    dropFilelist.textContent = "";
-    fileInput.value          = "";
-    clearResults();
+  // ------------------------------------------------------------------ state
+  let mode = "image";
+  let selectedFiles = [];
+  let config = null;
+  const sessionResults = [];        // single-photo results, for the corridor export
+  const S = {                       // what is on screen
+    result: null,                   // full single-section result from the server
+    photoUrl: null,
+    obstacles: [],                  // [{defect_type, left_m, right_m, bbox_px, on}]
+    off: { on_street_parking: false, bus_stop: false, access_points: false, iri: false },
+    view: null,                     // latest /api/whatif response (or derived from result)
+    demand: null,
+    whatifTimer: null, whatifSeq: 0,
+  };
+
+  // ------------------------------------------------------------------ helpers
+  const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(+n)) ? "–"
+    : Number(n).toLocaleString("en-IN", { maximumFractionDigits: d, minimumFractionDigits: d });
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const metres = (m) => m >= 1000 ? `${fmt(m / 1000, 1)} km` : `${fmt(m)} m`;
+  function el(tag, attrs = {}, parent) {
+    const n = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) if (v !== undefined && v !== null) n.setAttribute(k, v);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const colorOf = (t) => cssVar(`--c-${t}`) || "#666";
+  const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function todayISO() {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  }
+  const TODAY = todayISO();
+  for (const inp of [collectionDate, analysisDate]) { inp.value = inp.value || TODAY; inp.max = TODAY; }
+  function prettyDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    if (!m) return iso || "–";
+    return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   }
 
-  modeBtns.forEach((btn) =>
-    btn.addEventListener("click", () => setMode(btn.dataset.mode))
-  );
-
-  // ----------------------------------------------------------------
-  // File picking / drag-drop
-  // ----------------------------------------------------------------
-  fileInput.addEventListener("change", (e) => handleFiles(e.target.files));
-
-  // ---------------------------------------------------------------
-  // Camera capture -- opens the device camera, lets you snap a photo,
-  // and feeds it through the exact same handleFiles() pipeline as a
-  // normal drag-and-drop upload. Requires https:// (or localhost) --
-  // browsers block camera access on plain http:// otherwise.
-  // ---------------------------------------------------------------
-  const cameraBtn        = document.getElementById("camera-btn");
-  const cameraModal      = document.getElementById("camera-modal");
-  const cameraVideo      = document.getElementById("camera-video");
-  const cameraCanvas     = document.getElementById("camera-canvas");
-  const cameraCaptureBtn = document.getElementById("camera-capture-btn");
-  const cameraCancelBtn  = document.getElementById("camera-cancel-btn");
-  let cameraStream = null;
-
-  async function openCamera() {
-    try {
-      cameraStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false,
-      });
-      cameraVideo.srcObject = cameraStream;
-      cameraModal.style.display = "flex";
-    } catch (err) {
-      alert("Could not access camera: " + err.message +
-            "\nCheck your browser's camera permission for this site.");
-    }
-  }
-
-  function closeCamera() {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach((t) => t.stop());
-      cameraStream = null;
-    }
-    cameraModal.style.display = "none";
-  }
-
-  function captureFromCamera() {
-    const w = cameraVideo.videoWidth;
-    const h = cameraVideo.videoHeight;
-    cameraCanvas.width = w;
-    cameraCanvas.height = h;
-    cameraCanvas.getContext("2d").drawImage(cameraVideo, 0, 0, w, h);
-
-    cameraCanvas.toBlob((blob) => {
-      const filename = `camera_${Date.now()}.jpg`;
-      const file = new File([blob], filename, { type: "image/jpeg" });
-
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      fileInput.files = dt.files;
-      handleFiles(dt.files);
-
-      closeCamera();
-    }, "image/jpeg", 0.92);
-  }
-
-  cameraBtn.addEventListener("click", openCamera);
-  cameraCaptureBtn.addEventListener("click", captureFromCamera);
-  cameraCancelBtn.addEventListener("click", closeCamera);
-
-  dropEl.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    dropEl.classList.add("drag");
-  });
-  dropEl.addEventListener("dragleave", () => dropEl.classList.remove("drag"));
-  dropEl.addEventListener("drop", (e) => {
-    e.preventDefault();
-    dropEl.classList.remove("drag");
-    handleFiles(e.dataTransfer.files);
-  });
-
-  function handleFiles(fileList) {
-    const files = Array.from(fileList || []);
-    if (files.length === 0) return;
-    selectedFiles = mode === "batch" ? files : [files[0]];
-    dropFilelist.innerHTML = selectedFiles
-      .map((f) => `&#10003; ${f.name}`)
-      .join("<br>");
-  }
-
-  // ----------------------------------------------------------------
-  // Offline fallback (Render free tier can take ~60 s to wake). Must match
-  // road_analyzer/indo_hcm.py — the server copy replaces it when it loads.
-  // ----------------------------------------------------------------
+  // ------------------------------------------------------------------ config
   const FALLBACK_CONFIG = {   // must match road_analyzer/indo_hcm.py
-    road_types: [   // Indo-HCM Table 5.4
-      { key: "undivided_2lane", label: "Two-lane undivided", lanes: 2, divided: false, basis: "both directions", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2400, dsv_pcu_h: 1680 },
-      { key: "divided_4lane", label: "Four-lane divided", lanes: 2, divided: true, basis: "one direction", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2700, dsv_pcu_h: 1890 },
-      { key: "divided_6lane", label: "Six-lane divided", lanes: 3, divided: true, basis: "one direction", paved_width_m: 10.5, ref_width_m: 11.0, capacity_pcu_h: 4200, dsv_pcu_h: 2940 },
-      { key: "divided_8lane", label: "Eight-lane divided", lanes: 4, divided: true, basis: "one direction", paved_width_m: 14.0, ref_width_m: 14.5, capacity_pcu_h: 6800, dsv_pcu_h: 4760,
-        condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
-      { key: "divided_10lane", label: "Ten-lane divided", lanes: 5, divided: true, basis: "one direction", paved_width_m: 17.5, ref_width_m: 18.0, capacity_pcu_h: 10000, dsv_pcu_h: 7000,
-        condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
+    road_types: [
+      { key: "undivided_2lane", label: "Two-lane undivided", lanes: 2, divided: false, basis: "both directions", paved_width_m: 7.0, capacity_pcu_h: 2400, dsv_pcu_h: 1680 },
+      { key: "divided_4lane", label: "Four-lane divided", lanes: 2, divided: true, basis: "one direction", paved_width_m: 7.0, capacity_pcu_h: 2700, dsv_pcu_h: 1890 },
+      { key: "divided_6lane", label: "Six-lane divided", lanes: 3, divided: true, basis: "one direction", paved_width_m: 10.5, capacity_pcu_h: 4200, dsv_pcu_h: 2940 },
+      { key: "divided_8lane", label: "Eight-lane divided", lanes: 4, divided: true, basis: "one direction", paved_width_m: 14.0, capacity_pcu_h: 6800, dsv_pcu_h: 4760,
+        condition: "Derived from sections with 1-3 km signal spacing; applies to similar site conditions (Section 5.4.4.2)." },
+      { key: "divided_10lane", label: "Ten-lane divided", lanes: 5, divided: true, basis: "one direction", paved_width_m: 17.5, capacity_pcu_h: 10000, dsv_pcu_h: 7000,
+        condition: "Derived from sections with 1-3 km signal spacing; applies to similar site conditions (Section 5.4.4.2)." },
     ],
     speed_model: { a: 20.11, b: 210.8, range_kmh: [40, 80] },
     on_street_parking: [
@@ -249,190 +116,224 @@
       { key: "gt500", label: "Access traffic > 500 veh/h", factor: 0.70 },
     ],
     width_methods: [
-      { key: "proportional", label: "Usable width / total width (capacity proportional to width)" },
-      { key: "table_slope", label: "Loss = blocked width x 428.6 PCU/h/m (slope of Indo-HCM Table 5.4, divided roads)" },
+      { key: "proportional", label: "In proportion to usable width" },
+      { key: "table_slope", label: "Capacity per metre from Indo-HCM Table 5.4" },
     ],
     dsv_vc_ratio: 0.70,
+    los_tables: {
+      undivided: [{ letter: "A", vc_max: 0.35 }, { letter: "B", vc_max: 0.55 }, { letter: "C", vc_max: 0.70 }, { letter: "D", vc_max: 0.85 }, { letter: "E", vc_max: 1.00 }],
+      divided:   [{ letter: "A", vc_max: 0.15 }, { letter: "B", vc_max: 0.45 }, { letter: "C", vc_max: 0.75 }, { letter: "D", vc_max: 0.85 }, { letter: "E", vc_max: 1.00 }],
+    },
     model_loaded: true,
   };
+  const WIDTH_METHOD_LABEL = { proportional: "In proportion to usable width", table_slope: "Capacity per metre from Indo-HCM Table 5.4" };
 
-  let userTouchedConfig = false;
-
+  let userTouched = false;
   function fillSelect(sel, items, render) {
-    if (!sel) return;
     const prev = sel.value;
-    sel.innerHTML = items.map((o) => `<option value="${o.key}">${render(o)}</option>`).join("");
+    sel.innerHTML = items.map((o) => `<option value="${esc(o.key)}">${esc(render(o))}</option>`).join("");
     if (prev && items.some((o) => o.key === prev)) sel.value = prev;
   }
-
-  function populateDropdowns(data) {
-    configData = data;
-    if (userTouchedConfig) return;   // never overwrite a selection in progress
-    fillSelect(roadTypeSel, data.road_types || [], (o) => o.label);
-    if (roadTypeSel && !roadTypeSel.dataset.init) {
-      roadTypeSel.value = "divided_4lane";
-      roadTypeSel.dataset.init = "1";
+  function applyConfig(data) {
+    config = data;
+    if (!userTouched) {
+      fillSelect(roadTypeSel, data.road_types, (o) => `${o.label}${o.divided ? ", one direction" : ""}`);
+      if (!roadTypeSel.dataset.init) { roadTypeSel.value = "divided_4lane"; roadTypeSel.dataset.init = "1"; }
+      for (const f of ["on_street_parking", "bus_stop", "access_points"])
+        fillSelect($(f), data[f], (o) => o.factor < 1 ? `${o.label}  (× ${o.factor.toFixed(2)})` : o.label);
+      fillSelect($("width_method"), data.width_methods, (o) => WIDTH_METHOD_LABEL[o.key] || o.label);
     }
-    fillSelect(widthMethodSel, data.width_methods || [], (o) => o.label);
-    FACTOR_FIELDS.forEach((f) =>
-      fillSelect(document.getElementById(f), data[f] || [], (o) => `${o.label} — ${o.factor.toFixed(2)}`));
-
-    [roadTypeSel, speedInput, widthInput, ...FACTOR_FIELDS.map((f) => document.getElementById(f))]
-      .forEach((el) => {
-        if (!el) return;
-        el.oninput = el.onchange = () => { userTouchedConfig = true; updateDsvPreview(); };
-      });
-    updateDsvPreview();
-
-    if (!data.model_loaded) {
-      modelStatusEl.textContent = "⚠ Model not found — copy best.pt into road_analyzer/models/";
-      modelStatusEl.classList.add("warn");
-    } else {
-      modelStatusEl.textContent = "✓ Model loaded and ready.";
-      modelStatusEl.classList.remove("warn");
-    }
+    modelStatusEl.textContent = data.model_loaded ? "Detection model ready." : "The detection model file is missing on the server (models/best.pt).";
+    modelStatusEl.classList.toggle("warn", !data.model_loaded);
+    updatePreview();
   }
+  async function loadConfig() {
+    applyConfig(FALLBACK_CONFIG);
+    modelStatusEl.textContent = "Connecting to the server…";
+    for (let i = 1; i <= 6; i++) {
+      try {
+        const r = await fetch("/api/config-options");
+        if (!r.ok) throw new Error(r.status);
+        applyConfig(await r.json());
+        return;
+      } catch (e) {
+        modelStatusEl.textContent = `The server is starting up (try ${i} of 6). The free host sleeps when idle.`;
+        await new Promise((res) => setTimeout(res, 4000));
+      }
+    }
+    modelStatusEl.textContent = "Could not reach the server. Showing offline values.";
+    modelStatusEl.classList.add("warn");
+  }
+  const roadType = () => (config.road_types || []).find((o) => o.key === roadTypeSel.value);
 
-  // Mirrors indo_hcm.base_capacity() so the user sees C0 before uploading.
-  function updateDsvPreview() {
-    if (!configData || !roadTypeSel) return;
-    const rt = (configData.road_types || []).find((o) => o.key === roadTypeSel.value);
-    if (!rt) { dsvPreview.style.display = "none"; return; }
-    const sm = configData.speed_model || { a: 20.11, b: 210.8, range_kmh: [40, 80] };
+  // ------------------------------------------------------------------ live preview (before analysis)
+  function updatePreview() {
+    if (!config) return;
+    const rt = roadType();
+    if (!rt) return;
+    const w = parseFloat(widthInput.value);
 
-    // Eq. 5.4 exists only for divided roads
-    if (speedInput) {
-      speedInput.disabled = !rt.divided;
-      if (!rt.divided) speedInput.value = "";
-      const sh = document.getElementById("speed-hint");
-      if (sh) sh.textContent = rt.divided
-        ? "≥ 100 cars with headway > 8 s, on a friction-free stretch of this road (Eq. 5.4, valid 40–80 km/h)"
-        : "Not used: Indo-HCM Eq. 5.4 applies to divided roads only. Two-lane undivided uses Table 5.4 (2400 PCU/h).";
-    }
-    const v = parseFloat(speedInput && speedInput.value);
-    let c0 = rt.capacity_pcu_h, how = "Indo-HCM Table 5.4";
-    if (rt.divided && v > 0) {
-      const lane = sm.a * v + sm.b;
-      c0 = Math.round(lane * rt.lanes);
-      how = `Indo-HCM Eq. 5.4: ${sm.a} × ${v} + ${sm.b} = ${Math.round(lane)} PCU/h/lane × ${rt.lanes}`;
-      if (v < sm.range_kmh[0] || v > sm.range_kmh[1]) how += " (outside 40–80 km/h — extrapolated)";
-    }
-    dsvValueEl.textContent = Math.round(c0).toLocaleString("en-IN");
-    document.getElementById("dsv-unit").textContent = `PCU/h, ${rt.basis}`;
-    const dsv = Math.round(c0 * (configData.dsv_vc_ratio || 0.7));
-    document.getElementById("dsv-note").textContent =
-      `${how} · Design Service Volume (LOS-C, 0.70 C) ${dsv.toLocaleString("en-IN")} PCU/h`;
-    if (roadTypeHint) {
-      roadTypeHint.textContent = `${rt.lanes} lanes, ${rt.basis}; Indo-HCM paved width ${rt.paved_width_m} m ± 0.5 m (Table 5B.1)` +
-        (rt.condition ? ` · ${rt.condition}` : "");
-    }
-    const w = parseFloat(widthInput && widthInput.value);
-    if (widthHint && w > 0) {
-      let ok, msg;
+    speedInput.disabled = !rt.divided;
+    if (!rt.divided) speedInput.value = "";
+    $("speed-hint").textContent = rt.divided
+      ? "At least 100 cars with a gap of more than 8 s, on a clear stretch. Gives a capacity specific to this road."
+      : "Not used for two-lane undivided roads: Indo-HCM's speed model covers divided roads only.";
+
+    $("road-type-hint").textContent =
+      `${rt.lanes} lanes, ${rt.basis}. Indo-HCM width ${rt.paved_width_m} m.` + (rt.condition ? ` ${rt.condition}` : "");
+
+    const hint = $("width-hint");
+    if (w > 0) {
+      let ok = true, msg;
       if (rt.divided) {
         ok = Math.abs(w - rt.paved_width_m) <= 0.5;
-        msg = ok ? "fits this Indo-HCM road class" : `outside ${rt.paved_width_m - 0.5}–${rt.paved_width_m + 0.5} m — check road type`;
+        msg = ok ? "Matches this road type." : `Indo-HCM expects ${rt.paved_width_m - 0.5}–${rt.paved_width_m + 0.5} m for this road type. Check the road type.`;
       } else {
-        ok = w >= 6.0 && w <= 11.0;
-        msg = ok ? (w < 7 ? "within 6–11 m, but Indo-HCM studied > 7 m only" : "fits two-lane undivided (6–11 m)") : "outside 6–11 m — check road type";
+        ok = w >= 6 && w <= 11;
+        msg = !ok ? "Indo-HCM expects 6–11 m for a two-lane undivided road." : (w < 7 ? "Indo-HCM studied widths above 7 m only." : "Matches this road type.");
       }
-      widthHint.textContent = `${w} m: ${msg}`;
-      widthHint.classList.toggle("warn", !ok);
+      hint.textContent = msg;
+      hint.classList.toggle("warn", !ok);
     }
-    dsvPreview.style.display = "";
+
+    if (S.result) return;     // results on screen: the form no longer drives the drawing
+    const v = parseFloat(speedInput.value);
+    let c0 = rt.capacity_pcu_h, how = "Indo-HCM Table 5.4";
+    if (rt.divided && v > 0) {
+      const lane = config.speed_model.a * v + config.speed_model.b;
+      c0 = lane * rt.lanes;
+      how = `Speed model, ${fmt(lane)} PCU/h per lane`;
+    }
+    const preview = {
+      width: w > 0 ? w : rt.paved_width_m, lanes: rt.lanes, divided: rt.divided,
+      c0, c0How: how, basis: rt.basis,
+    };
+    drawRoad(preview, [], { preview: true });
+    renderChainPreview(preview);
   }
 
-  async function loadConfigOptions() {
-    populateDropdowns(FALLBACK_CONFIG);
-    modelStatusEl.textContent = "⟳ Connecting to server…";
-    let retries = 0;
-    async function tryFetch() {
-      try {
-        const res = await fetch("/api/config-options");
-        if (!res.ok) throw new Error("Server returned " + res.status);
-        populateDropdowns(await res.json());
-      } catch (e) {
-        retries++;
-        if (retries < 6) {
-          modelStatusEl.textContent = "⟳ Server waking up… (" + retries + "/5 attempts)";
-          setTimeout(tryFetch, 4000);
-        } else {
-          modelStatusEl.textContent = "⚠ Could not reach server — using offline defaults.";
-          modelStatusEl.classList.add("warn");
-        }
-      }
-    }
-    tryFetch();
+  // ------------------------------------------------------------------ mode + files
+  function setMode(m) {
+    mode = m;
+    const c = MODE_COPY[m];
+    $("drop-title").textContent = c.title;
+    $("drop-hint").textContent = c.hint;
+    runLabel.textContent = c.run;
+    fileInput.accept = c.accept;
+    fileInput.multiple = c.multiple;
+    $("video-sample-row").hidden = m !== "video";
+    $("camera-btn").hidden = m === "video";
+    selectedFiles = [];
+    fileInput.value = "";
+    $("drop-filelist").textContent = "";
+  }
+  document.querySelectorAll('#mode-switch input[name="mode"]').forEach((r) =>
+    r.addEventListener("change", () => setMode(r.value)));
+
+  function handleFiles(list) {
+    const files = Array.from(list || []);
+    if (!files.length) return;
+    selectedFiles = mode === "batch" ? files : [files[0]];
+    $("drop-filelist").textContent = selectedFiles.length > 1
+      ? `${selectedFiles.length} photos selected` : selectedFiles[0].name;
+    if (mode === "image" && selectedFiles[0].type.startsWith("image/")) showPhoto(selectedFiles[0]);
+  }
+  fileInput.addEventListener("change", (e) => handleFiles(e.target.files));
+  dropEl.addEventListener("dragover", (e) => { e.preventDefault(); dropEl.classList.add("drag"); });
+  dropEl.addEventListener("dragleave", () => dropEl.classList.remove("drag"));
+  dropEl.addEventListener("drop", (e) => { e.preventDefault(); dropEl.classList.remove("drag"); handleFiles(e.dataTransfer.files); });
+
+  function showPhoto(file) {
+    if (S.photoUrl) URL.revokeObjectURL(S.photoUrl);
+    if (!file) { S.photoUrl = null; photoImg.hidden = true; $("photo-empty").hidden = false; photoBoxes.innerHTML = ""; return; }
+    S.photoUrl = URL.createObjectURL(file);
+    photoImg.src = S.photoUrl;
+    photoImg.alt = `Road photo ${file.name}`;
+    photoImg.hidden = false;
+    $("photo-empty").hidden = true;
+    photoBoxes.innerHTML = "";
   }
 
-  // ----------------------------------------------------------------
-  // Submit
-  // ----------------------------------------------------------------
-  configForm.addEventListener("submit", async (e) => {
+  // camera
+  let camStream = null;
+  $("camera-btn").addEventListener("click", async () => {
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      $("camera-video").srcObject = camStream;
+      $("camera-modal").hidden = false;
+      $("camera-capture-btn").focus();
+    } catch (err) {
+      showError(`The camera could not be opened (${err.message}). Allow camera access for this site, or choose a photo file.`);
+    }
+  });
+  function closeCamera() {
+    if (camStream) camStream.getTracks().forEach((t) => t.stop());
+    camStream = null;
+    $("camera-modal").hidden = true;
+  }
+  $("camera-cancel-btn").addEventListener("click", closeCamera);
+  $("camera-capture-btn").addEventListener("click", () => {
+    const v = $("camera-video"), c = $("camera-canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    c.toBlob((blob) => {
+      const file = new File([blob], `camera_${Date.now()}.jpg`, { type: "image/jpeg" });
+      const dt = new DataTransfer(); dt.items.add(file);
+      fileInput.files = dt.files;
+      handleFiles(dt.files);
+      closeCamera();
+    }, "image/jpeg", 0.92);
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("camera-modal").hidden) closeCamera(); });
+
+  form.addEventListener("input", (e) => {
+    if (["road_type", "total_width_m", "operating_speed_kmh", "on_street_parking", "bus_stop", "access_points", "width_method"].includes(e.target.id)) userTouched = true;
+    updatePreview();
+  });
+
+  // ------------------------------------------------------------------ status
+  function showStatus(t) { $("status-text").textContent = t; $("status-panel").hidden = false; $("error-box").hidden = true; }
+  function hideStatus() { $("status-panel").hidden = true; }
+  function showError(t) { $("error-box").textContent = t; $("error-box").hidden = false; }
+
+  // ------------------------------------------------------------------ submit
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    clearResults();
-
-    // ---- Date validation (NEW) ----
-    // Collection date: today or earlier — future not allowed.
-    if (collectionDateEl && collectionDateEl.value > TODAY_ISO) {
-      showError("Data collection date cannot be in the future.");
-      return;
+    $("error-box").hidden = true;
+    if (collectionDate.value > TODAY) return showError("The photo date cannot be in the future.");
+    if (analysisDate.value > TODAY) return showError("The analysis date cannot be in the future.");
+    if (analysisDate.value < collectionDate.value) return showError("The analysis date cannot be before the photo date.");
+    if (!selectedFiles.length) {
+      return showError(mode === "batch" ? "Choose at least one photo first." : mode === "video" ? "Choose a video first." : "Choose a photo first.");
     }
-    // Analysis date: cannot be in the future.
-    if (analysisDateEl && analysisDateEl.value > TODAY_ISO) {
-      showError("Data analysis date cannot be in the future.");
-      return;
-    }
-    // Analysis date cannot be earlier than the collection date.
-    if (collectionDateEl && analysisDateEl &&
-        collectionDateEl.value && analysisDateEl.value &&
-        analysisDateEl.value < collectionDateEl.value) {
-      showError("Data analysis date cannot be before the data collection date.");
-      return;
-    }
-
-    if (selectedFiles.length === 0) {
-      showError(
-        mode === "batch"   ? "Select at least one image first."
-        : mode === "video" ? "Select a video file first."
-        :                    "Select an image first."
-      );
-      return;
-    }
-
-    const fd = new FormData(configForm);
-
+    const fd = new FormData(form);
+    fd.delete("mode");
     runBtn.disabled = true;
-
     try {
       if (mode === "image") {
         fd.append("file", selectedFiles[0]);
-        showStatus("Running AI defect detection and Indo-HCM capacity analysis…");
-        const res = await postJSON("/api/analyze/image", fd);
+        showStatus("Finding obstructions and working out the capacity…");
+        const res = await postForm("/api/analyze/image", fd);
         hideStatus();
-        renderImageResult(res);
-        dtShow(res.digital_twin);
-
+        sessionResults.push(res);
+        showSingle(res, { photo: selectedFiles[0] });
       } else if (mode === "batch") {
         selectedFiles.forEach((f) => fd.append("files", f));
-        showStatus(`Uploading ${selectedFiles.length} images…`);
-        const startRes = await postJSON("/api/analyze/batch", fd);
-        showStatus(`Analysing ${startRes.num_images} images in background… please wait.`);
-        const result = await pollJob(startRes.job_id);
+        showStatus(`Uploading ${selectedFiles.length} photos…`);
+        const start = await postForm("/api/analyze/batch", fd);
+        showStatus(`Analysing ${start.num_images} photos. This takes a while on the free server.`);
+        const res = await pollJob(start.job_id);
         hideStatus();
-        renderBatchResult(result);
-
-      } else if (mode === "video") {
+        showMulti(res);
+      } else {
         fd.append("file", selectedFiles[0]);
-        fd.append("sample_every_sec", sampleEverySec.value);
-        showStatus("Uploading video…");
-        const startRes = await postJSON("/api/analyze/video", fd);
-        showStatus(
-          `Sampling every ${sampleEverySec.value}s and analysing frames… this takes time for longer clips.`
-        );
-        const result = await pollJob(startRes.job_id);
+        fd.append("sample_every_sec", $("sample-every-sec").value);
+        showStatus("Uploading the video…");
+        const start = await postForm("/api/analyze/video", fd);
+        showStatus(`Analysing one frame every ${$("sample-every-sec").value} s. Long videos take several minutes.`);
+        const res = await pollJob(start.job_id);
         hideStatus();
-        renderVideoResult(result);
+        showMulti(res);
       }
     } catch (err) {
       hideStatus();
@@ -442,759 +343,634 @@
     }
   });
 
-  async function postJSON(url, formData) {
-    const res  = await fetch(url, { method: "POST", body: formData });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.detail || `Request failed (${res.status})`);
-    }
+  async function postForm(url, fd) {
+    const r = await fetch(url, { method: "POST", body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : `The server returned ${r.status}.`);
     return data;
   }
-
-  // pollJob - waits for batch/video background job to complete
-  // FIX: was previously broken on second upload because JOBS dict
-  // in old code shared state. Now each job gets a unique ID so
-  // polling never picks up a stale result.
-  async function pollJob(jobId, intervalMs = 1500, maxWaitMs = 15 * 60 * 1000) {
-    const started = Date.now();
-    while (Date.now() - started < maxWaitMs) {
-      const res  = await fetch(`/api/jobs/${jobId}`);
-      const data = await res.json();
-      if (data.status === "done")  return data.result;
-      if (data.status === "error") throw new Error(data.error || "Job failed.");
-      await new Promise((r) => setTimeout(r, intervalMs));
+  async function pollJob(id) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 15 * 60 * 1000) {
+      const r = await fetch(`/api/jobs/${encodeURIComponent(id)}`);
+      const d = await r.json();
+      if (d.status === "done") return d.result;
+      if (d.status === "error") throw new Error(d.error || "The analysis failed.");
+      await new Promise((res) => setTimeout(res, 1500));
     }
-    throw new Error("Timed out waiting for the analysis job to finish.");
+    throw new Error("The analysis took longer than 15 minutes. Try a shorter video or fewer photos.");
   }
 
-  // ----------------------------------------------------------------
-  // Status / error helpers
-  // ----------------------------------------------------------------
-  function showStatus(text) {
-    statusText.textContent       = text;
-    statusPanel.style.display    = "flex";
-    errorBox.style.display       = "none";
-  }
-  function hideStatus() { statusPanel.style.display = "none"; }
-  function showError(msg) {
-    errorBox.textContent      = "⚠ " + msg;
-    errorBox.style.display    = "block";
-  }
-  function clearResults() {
-    resultsRoot.innerHTML      = "";
-    errorBox.style.display     = "none";
-    const dtPanel = document.getElementById("dt-panel");
-    if (dtPanel) dtPanel.style.display = "none";
+  // ------------------------------------------------------------------ show one section
+  function showSingle(res, { photo = null, drop = true } = {}) {
+    S.result = res;
+    S.obstacles = (res.roadrunner_obstacles || []).map((o) => ({ ...o, on: true }));
+    S.off = { on_street_parking: false, bus_stop: false, access_points: false, iri: false };
+    S.view = viewFromResult(res);
+    const lv = res.level_of_service;
+    S.demand = lv && lv.observed_volume_pcu_h ? lv.observed_volume_pcu_h : (res.digital_twin ? res.digital_twin.demand_pcu_h : Math.round(res.base_capacity_pcu_h * 0.7));
+    if (photo) showPhoto(photo); else showPhoto(null);
+    renderAll({ drop });
+    $("demand").hidden = false;
+    $("defects").hidden = false;
+    renderDownloads(res);
+    renderWarnings(res);
+    if (!res.level_of_service) requestWhatIf(0);   // fills LOS for the assumed design volume
+    if (photo) $("road-figure").scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
   }
 
-  // ----------------------------------------------------------------
-  // Formatting helpers
-  // ----------------------------------------------------------------
-  function fmt(n, decimals) {
-    if (n === null || n === undefined || isNaN(n)) return "-";
-    return Number(n).toLocaleString("en-IN", {
-      maximumFractionDigits: decimals ?? 1,
-      minimumFractionDigits: 0,
-    });
-  }
-  function titleCase(s) {
-    return String(s).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  }
-
-  // "2026-09-23" -> "23 Sep 2026". Falls back to the raw string (or "—")
-  // if it isn't a plain YYYY-MM-DD value, rather than showing "Invalid Date".
-  function formatDateDisplay(isoDate) {
-    if (!isoDate) return "—";
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
-    if (!m) return isoDate;
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    if (isNaN(d.getTime())) return isoDate;
-    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-  }
-
-  const DEFECT_COLORS = {
-    barricade:       "#D9534F",
-    pothole:         "#C97A3D",
-    illegal_parking: "#D9534F",
-    street_vendor:   "#D9B84A",
-    cart:            "#B58A52",
-    garbage:         "#7E8A6B",
-  };
-  const FALLBACK_COLORS = ["#D9534F","#D9B84A","#C97A3D","#B58A52","#7E8A6B","#9B6B9E"];
-  function colorFor(name, idx) {
-    return DEFECT_COLORS[name] || FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
-  }
-
-  // ----------------------------------------------------------------
-  // HTML builders
-  // ----------------------------------------------------------------
-
-  function heroHTML(data) {
-    const cfg   = data.road_config || {};
-    const basis = data.capacity_basis || {};
-    const calc  = data.capacity_calculation || {};
-    const iv    = data.indicative_vehicles || {};
-    const los   = data.level_of_service;
-
-    const stripParts = [
-      ["Collected",       formatDateDisplay(cfg.data_collection_date)],
-      ["Analysed",        formatDateDisplay(cfg.analysis_date)],
-      ["Road type",       basis.road_type_label],
-      ["Basis",           basis.direction_basis],
-      ["C0 method",       basis.base_capacity_detail],
-      ["Width",           cfg.total_width_m != null ? cfg.total_width_m + " m" : null],
-      ["Lanes",           cfg.num_lanes],
-      ["Operating speed", basis.operating_speed_kmh != null
-                            ? `${basis.operating_speed_kmh} km/h (${basis.operating_speed_source})` : null],
-    ].filter((p) => p[1] !== null && p[1] !== undefined && p[1] !== "");
-
-    const chip = ([k, v]) => `<span class="${v < 1 ? "factor-active" : ""}"><b>${k.replace("F_", "F<sub>")}</sub></b> ${fmt(v, 3)}</span>`;
-    const factorChips =
-      `<span><b>Indo-HCM:</b></span>` + Object.entries(calc.indo_hcm_factors || {}).map(chip).join("") +
-      `<span><b>Extensions:</b></span>` + Object.entries(calc.extension_factors || {}).map(chip).join("");
-
-    const warnings = (basis.warnings || []).concat((data.digital_twin || {}).warnings || []);
-    const losHTML = los
-      ? `<div class="item"><div class="label">LOS at ${fmt(los.observed_volume_pcu_h, 0)} PCU/h (Table ${los.table})</div>
-           <div class="val">${los.los_base} → ${los.los_hcm} → <span class="red">${los.los_ext}</span></div>
-           <div class="val-sub">V/C ${fmt(los.vc_base, 2)} base · ${fmt(los.vc_hcm, 2)} Indo-HCM · ${fmt(los.vc_ext, 2)} with extensions</div></div>`
-      : `<div class="item"><div class="label">Level of service</div>
-           <div class="val-sub">Enter an observed volume to get V/C and LOS</div></div>`;
-
-    return `
-      <div class="hero">
-        <div class="card hero-main">
-          <div class="eyebrow">${basis.standard || "Indo-HCM 2017"} · <span class="image-name">${data.image || "untitled"}</span></div>
-          <div class="big-number">${fmt(data.reduced_capacity_pcu_h, 0)} <small>PCU/h capacity now (${basis.direction_basis || ""})</small></div>
-          <div class="compare">
-            <div class="item">
-              <div class="label">Base capacity C0</div>
-              <div class="val orig">${fmt(data.base_capacity_pcu_h, 0)} PCU/h</div>
-              <div class="val-sub">≈ ${fmt(iv.base_capacity_veh_h, 0)} veh/h (assumed mix)</div>
-            </div>
-            <div class="item">
-              <div class="label">Indo-HCM capacity (Eq. 5.5)</div>
-              <div class="val">${fmt(data.indo_hcm_capacity_pcu_h, 0)} PCU/h</div>
-              <div class="val-sub">parking, bus stop, access points only (${fmt(data.indo_hcm_loss_pct, 1)}% loss)</div>
-            </div>
-            <div class="item">
-              <div class="label">Capacity incl. extensions</div>
-              <div class="val red">${fmt(data.reduced_capacity_pcu_h, 0)} PCU/h</div>
-              <div class="val-sub">≈ ${fmt(iv.reduced_capacity_veh_h, 0)} veh/h (assumed mix)</div>
-            </div>
-            <div class="item">
-              <div class="label">Capacity lost</div>
-              <div class="val loss">${fmt(data.capacity_loss_pcu_h, 0)} PCU/h (${fmt(data.capacity_loss_pct, 1)}%)</div>
-              <div class="val-sub">LOS-C service volume ${fmt(data.dsv_los_c_ideal_pcu_h, 0)} → ${fmt(data.dsv_los_c_reduced_pcu_h, 0)}</div>
-            </div>
-            ${losHTML}
-          </div>
-          ${calc.formula_indo_hcm ? `<div class="formula-box mono">${calc.formula_indo_hcm}<br>${calc.formula}</div>` : ""}
-          <div class="config-strip">${factorChips}</div>
-          <div class="config-strip">${stripParts.map(([l, v]) => `<span><b>${l}:</b> ${v}</span>`).join("")}</div>
-          ${warnings.map((w) => `<div class="veto-note">⚠ ${w}</div>`).join("")}
-          ${data.vehicle_veto_suppressed
-            ? `<div class="veto-note">${data.vehicle_veto_suppressed} vendor/cart detection(s) suppressed because they overlapped a vehicle box (likely auto-rickshaws).</div>`
-            : ""}
-        </div>
-        <div class="card capacity-band-card">
-          <div class="eyebrow">Overall capacity loss</div>
-          ${overallBandHTML(data)}
-        </div>
-      </div>`;
-  }
-
-  function overallBandHTML(data) {
-    const g   = data.overall_guidance || {};
-    const pct = data.capacity_loss_pct || 0;
-    const bandColors = {
-      Minor:       { bg: "#0d2b1a", fg: "#4ade80", border: "#22c55e" },
-      Moderate:    { bg: "#2d2600", fg: "#fbbf24", border: "#f59e0b" },
-      Significant: { bg: "#2d2600", fg: "#fbbf24", border: "#f59e0b" },
-      Severe:      { bg: "#2d0a0a", fg: "#f87171", border: "#ef4444" },
-      Critical:    { bg: "#2d0a0a", fg: "#f87171", border: "#ef4444" },
+  function viewFromResult(res) {
+    const calc = res.capacity_calculation || {};
+    return {
+      base_capacity_pcu_h: res.base_capacity_pcu_h,
+      indo_hcm_capacity_pcu_h: res.indo_hcm_capacity_pcu_h,
+      reduced_capacity_pcu_h: res.reduced_capacity_pcu_h,
+      capacity_loss_pct: res.capacity_loss_pct,
+      indo_hcm_factors: calc.indo_hcm_factors || {},
+      extension_factors: calc.extension_factors || {},
+      parking_class_used: calc.parking_class_used,
+      width: { usable_width_m: calc.effective_width_m, clear_effective_width_m: (calc.total_width_m || 0) - 2 * SHY_M },
+      level_of_service: res.level_of_service,
+      overall_guidance: res.overall_guidance,
+      digital_twin: res.digital_twin,
     };
-    const c = bandColors[g.band] || bandColors.Moderate;
-    return `
-      <div style="border-left:3px solid ${c.border};padding-left:14px;margin-top:8px;">
-        <div style="font-family:'Oswald',sans-serif;font-size:2rem;color:${c.fg};font-weight:700;">${fmt(pct, 1)}%</div>
-        <div style="display:inline-block;background:${c.bg};color:${c.fg};padding:2px 10px;border-radius:4px;font-size:11px;font-family:monospace;margin:6px 0;">${(g.band || "").toUpperCase()}</div>
-        <div style="font-size:13px;color:#94a3b8;line-height:1.5;margin-top:6px;">${g.action || ""}</div>
-      </div>`;
   }
 
-  function overallGuidanceHTML(data) { return ""; }  // merged into heroHTML above
+  function sectionGeometry() {
+    const res = S.result, cfg = res.road_config || {}, basis = res.capacity_basis || {};
+    return { width: +cfg.total_width_m, lanes: +cfg.num_lanes || 2, divided: !!basis.divided, basis: basis.direction_basis };
+  }
 
-  function roadbarHTML(data) {
-    const cfg  = data.road_config || {};
-    const calc = data.capacity_calculation || {};
-    const perDefect = data.per_defect || {};
-    const totalWidth = cfg.total_width_m || 0;
-    const segments = Object.keys(perDefect)
-      .map((name, i) => ({ name, blocked_m: perDefect[name].blocked_m || 0, color: colorFor(name, i),
-                           mech: perDefect[name].mechanism }))
-      .filter((s) => s.blocked_m > 0.001)
-      .sort((a, b) => b.blocked_m - a.blocked_m);
-    const blockedTotal = segments.reduce((s, seg) => s + seg.blocked_m, 0);
-    const scale  = (blockedTotal > totalWidth && totalWidth > 0) ? totalWidth / blockedTotal : 1;
-    const usable = calc.effective_width_m != null ? calc.effective_width_m : Math.max(totalWidth - blockedTotal, 0);
+  function renderAll({ drop = false } = {}) {
+    drawRoad(sectionGeometry(), S.obstacles, { drop });
+    drawPhotoBoxes();
+    renderChain();
+    renderDemand();
+    renderDefectTable();
+  }
 
-    let barHTML = "";
-    if (totalWidth > 0) {
-      segments.forEach((seg) => {
-        const pct = ((seg.blocked_m * scale) / totalWidth) * 100;
-        barHTML += `<div class="seg" style="width:${pct}%;background:${seg.color}" title="${titleCase(seg.name)}: ${fmt(seg.blocked_m,2)} m">${pct > 6 ? `<span class="seg-label">${titleCase(seg.name)}</span>` : ""}</div>`;
-      });
-      const restPct = Math.max(0, 100 - segments.reduce((s, seg) => s + (seg.blocked_m * scale / totalWidth) * 100, 0));
-      barHTML += `<div class="seg usable" style="width:${restPct}%">${restPct > 10 ? `<span class="seg-label">Open</span>` : ""}</div>`;
+  // ------------------------------------------------------------------ the road drawing
+  // Plan view of a short slice of carriageway. The horizontal axis is across
+  // the road and is the SAME scale as the photo above (photo width = road width).
+  function drawRoad(geo, obstacles, { drop = false, preview = false } = {}) {
+    const W = 1000, top = 22, sliceH = 132, dimY = top + sliceH + 30, useY = dimY + 34;
+    const H = useY + 26;
+    const k = W / geo.width;                 // svg units per metre
+    xsection.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    xsection.innerHTML = '<title id="xsection-title">Plan of the carriageway</title>';
+    const defs = el("defs", {}, xsection);
+    const hatch = el("pattern", { id: "hatch", width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+    el("rect", { width: 6, height: 6, fill: "rgba(242,194,48,.18)" }, hatch);
+    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: "rgba(242,194,48,.75)", "stroke-width": 1.4 }, hatch);
+    const barr = el("pattern", { id: "barricade-stripes", width: 16, height: 16, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+    el("rect", { width: 16, height: 16, fill: "#fff" }, barr);
+    el("rect", { width: 8, height: 16, fill: colorOf("barricade") }, barr);
+    const dots = el("pattern", { id: "garbage-dots", width: 8, height: 8, patternUnits: "userSpaceOnUse" }, defs);
+    el("rect", { width: 8, height: 8, fill: colorOf("garbage") }, dots);
+    el("circle", { cx: 4, cy: 4, r: 1.4, fill: "rgba(255,255,255,.45)" }, dots);
+
+    // asphalt + kerbs (black-and-yellow stripes outside the carriageway)
+    el("rect", { x: 0, y: top, width: W, height: sliceH, fill: cssVar("--asphalt") }, xsection);
+    for (const x0 of [-12, W]) {
+      for (let y = top, i = 0; y < top + sliceH; y += 11, i++)
+        el("rect", { x: x0, y, width: 12, height: Math.min(11, top + sliceH - y), fill: i % 2 ? cssVar("--ink") : cssVar("--kerb") }, xsection);
     }
-    const legendHTML =
-      segments.map((seg) => `<div class="leg"><span class="dot" style="background:${seg.color}"></span>${titleCase(seg.name)} · ${fmt(seg.blocked_m,2)} m · ${seg.mech}</div>`).join("") +
-      `<div class="leg"><span class="dot" style="background:var(--green)"></span>Usable width after 0.25 m shy bands at kerbs and obstructions · ${fmt(usable,2)} m</div>`;
-
-    return `
-      <div class="card roadbar-card">
-        <div class="card-title">Carriageway Width</div>
-        <div class="card-sub">Physical occupation across the carriageway. Vendors, carts, garbage, barricades and potholes act through the width factor F<sub>W</sub>; parked vehicles are shown but act only through the Indo-HCM parking factor F<sub>OP</sub>.</div>
-        <div class="roadbar">${barHTML}</div>
-        <div class="roadbar-meta"><span>Total: ${fmt(totalWidth,2)} m</span><span>Width-class obstructions: ${fmt(calc.obstruction_width_m,2)} m</span><span>Usable: ${fmt(usable,2)} m</span></div>
-        <div class="roadbar-legend">${legendHTML}</div>
-      </div>`;
-  }
-
-  // ----------------------------------------------------------------
-  // DEFECT ALERT BANNER
-  // Shows a bold count summary + urgent alert chips at top of results
-  // ----------------------------------------------------------------
-  const DEFECT_ICONS = {
-    pothole:         "🕳️",
-    illegal_parking: "🚗",
-    street_vendor:   "🛒",
-    cart:            "🛺",
-    garbage:         "🗑️",
-    barricade:       "🚧",
-  };
-
-  const DEFECT_ALERT_MESSAGES = {
-    pothole: {
-      URGENT:  "Medium/large potholes — rectify straightaway (IRC:82-2015 cl. 5.3); verify depth on site.",
-      ROUTINE: "Small potholes — fill with premix at the next maintenance round (IRC:82 cl. 7.5.3.5).",
-    },
-    illegal_parking: {
-      URGENT:  "Illegal parking is critically blocking road - immediate towing required (MV Act Sec.122).",
-      ROUTINE: "Illegal parking detected - deploy wardens and install No-Parking signage.",
-      MONITOR: "Occasional parking noted - repaint road markings (IRC:35).",
-    },
-    street_vendor: {
-      URGENT:  "Roadside vendors severely blocking carriageway - immediate relocation required.",
-      ROUTINE: "Vendors occupying road space - coordinate relocation with Town Vending Committee.",
-      MONITOR: "Vendor activity recorded - flag for Town Vending Committee review.",
-    },
-    cart: {
-      URGENT:  "Carts blocking road - immediate removal required, designate loading bay.",
-      ROUTINE: "Carts detected - restrict to designated off-peak zones.",
-      MONITOR: "Cart movement noted - no immediate action needed.",
-    },
-    garbage: {
-      URGENT:  "Garbage severely blocking road - immediate clearance (SWM Rules 2016).",
-      ROUTINE: "Garbage dump detected - request priority clearance from the SWM department.",
-      MONITOR: "Minor garbage noted - schedule at next municipal collection.",
-    },
-    barricade: {
-      URGENT:  "Barricade severely restricting road - coordinate immediate removal (IRC:SP:55).",
-      ROUTINE: "Work zone barricade - ensure proper signage and reduce width to minimum.",
-      MONITOR: "Barricade detected - verify valid permit and signage per IRC:SP:55.",
-    },
-  };
-
-  function defectAlertBannerHTML(perDefect) {
-    const entries = Object.entries(perDefect || {});
-    if (entries.length === 0) return "";
-
-    // Sort: URGENT first, then ROUTINE, then MONITOR
-    const sevOrder = { URGENT: 0, ROUTINE: 1, MONITOR: 2, NONE: 3, INVESTIGATE: 4 };
-    const sorted   = entries
-      .map(([name, d]) => ({ name, ...d }))
-      .filter((d) => d.severity !== "NONE")
-      .sort((a, b) => (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9));
-
-    if (sorted.length === 0) return "";
-
-    // Count summary row
-    const countChips = sorted.map((d) => `
-      <div class="alert-count-chip sev-bg-${d.severity}">
-        <span class="alert-chip-icon">${DEFECT_ICONS[d.name] || "⚠️"}</span>
-        <span class="alert-chip-num">${d.count}</span>
-        <span class="alert-chip-name">${titleCase(d.name)}</span>
-      </div>`).join("");
-
-    // Alert messages
-    const alerts = sorted.map((d) => {
-      const msg = (DEFECT_ALERT_MESSAGES[d.name] || {})[d.severity]
-        || d.action
-        || "Defect detected - take appropriate action.";
-      return `
-        <div class="alert-row sev-row-${d.severity}">
-          <div class="alert-row-left">
-            <span class="alert-sev-dot sev-dot-${d.severity}"></span>
-            <span class="alert-sev-label">${d.severity}</span>
-            <span class="alert-defect-name">${DEFECT_ICONS[d.name] || ""} ${titleCase(d.name)}</span>
-          </div>
-          <div class="alert-row-msg">${msg}</div>
-          <div class="alert-row-stats">
-            <span>${d.count} detected</span>
-            <span>${d.blocked_m ? fmt(d.blocked_m, 2) + " m wide" : d.mechanism}</span>
-            <span>${fmt(d.capacity_loss_pct, 1)}% capacity lost</span>
-          </div>
-        </div>`;
-    }).join("");
-
-    const hasUrgent = sorted.some((d) => d.severity === "URGENT");
-
-    return `
-      <div class="alert-panel ${hasUrgent ? "has-urgent" : ""}">
-        <div class="alert-panel-header">
-          <div class="alert-panel-title">
-            ${hasUrgent ? "🚨" : "⚠️"} Road Defect Alerts
-          </div>
-          <div class="alert-panel-sub">${sorted.length} defect type${sorted.length > 1 ? "s" : ""} detected - action required</div>
-        </div>
-        <div class="alert-count-row">${countChips}</div>
-        <div class="alert-rows">${alerts}</div>
-      </div>`;
-  }
-
-  function defectGridHTML(perDefect) {
-    const names = Object.keys(perDefect || {});
-    if (names.length === 0) {
-      return `<div class="empty-state">No obstructions detected - road operating at full geometric width.</div>`;
+    // lane lines
+    for (let i = 1; i < geo.lanes; i++) {
+      const x = (W / geo.lanes) * i;
+      el("line", { x1: x, y1: top + 6, x2: x, y2: top + sliceH - 6, stroke: "#F4F6F6", "stroke-width": 3, "stroke-dasharray": "18 14" }, xsection);
     }
-    const sorted = names
-      .map((name) => ({ name, ...perDefect[name] }))
-      .sort((a, b) => (b.capacity_loss_pct || 0) - (a.capacity_loss_pct || 0));
+    if (geo.divided) {
+      el("text", { x: 8, y: top - 7, "font-size": 13, fill: cssVar("--ink-2") }, xsection).textContent = "Median side";
+      const t = el("text", { x: W - 8, y: top - 7, "font-size": 13, fill: cssVar("--ink-2"), "text-anchor": "end" }, xsection);
+      t.textContent = "Footpath side";
+    }
 
-    return `<div class="defect-grid">${sorted.map((d) => {
-      const sev   = d.severity || "INVESTIGATE";
-      const size = d.size_summary;
-      const depthHTML = size ? `
-        <div class="depth-summary">
-          <span class="depth-sev depth-${size.worst_size_class}">${size.worst_size_class.toUpperCase()} POTHOLE</span>
-          <span class="depth-detail">small ${size.counts.small} · medium ${size.counts.medium} · large ${size.counts.large}
-            · ${size.classification}</span>
-        </div>` : "";
-      const rec = d.rectification;
-      const rectHTML = rec ? `
-        <div class="defect-action" style="border-top:1px solid #333;margin-top:8px;padding-top:8px;">
-          <strong>${rec.rectification_category}</strong> — ${rec.priority}
-          ${rec.escalation_note ? `<div style="font-size:0.8em;opacity:0.8;margin-top:4px;">${rec.escalation_note}</div>` : ""}
-          <div style="font-size:0.85em;opacity:0.85;margin-top:4px;">${rec.method}</div>
-          <div style="font-size:0.8em;opacity:0.7;">${rec.materials}</div>
-          <div style="font-size:0.8em;opacity:0.7;">${rec.work_zone_note}</div>
-        </div>` : "";
-      return `
-        <div class="defect-card sev-${sev}">
-          <div class="defect-head">
-            <div>
-              <div class="defect-name">${titleCase(d.name)}</div>
-              <div class="defect-count">${d.count} detected · ${d.mechanism}${d.blocked_m ? ` · ${fmt(d.blocked_m,2)} m` : ""}</div>
-            </div>
-            <div class="sev-chip sev-${sev}">${sev}</div>
-          </div>
-          <div class="defect-metrics">
-            <div class="m"><div class="v">${fmt(d.capacity_loss_pcu,0)}</div><div class="l">PCU/hr lost</div></div>
-            <div class="m"><div class="v">${fmt(d.capacity_loss_pct,1)}%</div><div class="l">of C0 if alone</div></div>
-            <div class="m"><div class="v">${fmt(d.factor,3)}</div><div class="l">factor alone</div></div>
-          </div>
-          ${depthHTML}
-          ${rectHTML}
-          <div class="defect-action">${d.action || "No specific action mapped - flag for manual inspection."}</div>
-          <div class="defect-code">${d.code_ref || ""}</div>
-          <div class="defect-code">Severity basis: ${d.severity_basis || "-"}</div>
-        </div>`;
-    }).join("")}</div>`;
-  }
+    // shy bands: 0.25 m at each kerb and around every obstruction still on the road
+    const active = obstacles.filter((o) => o.on && WIDTH_CLASSES.includes(o.defect_type));
+    const shy = [[0, SHY_M], [geo.width - SHY_M, geo.width]];
+    for (const o of active) {
+      shy.push([Math.max(0, o.left_m - SHY_M), o.left_m], [o.right_m, Math.min(geo.width, o.right_m + SHY_M)]);
+    }
+    for (const [a, b] of shy) if (b > a) el("rect", { x: a * k, y: top, width: (b - a) * k, height: sliceH, fill: "url(#hatch)" }, xsection);
 
-  function xodrButtonHTML(data) {
-    if (!data.roadrunner_xodr_available || !data.job_id) return "";
-    return `
-      <div class="action-bar">
-        <div class="action-bar-info">
-          <span class="action-bar-icon">🛣️</span>
-          <div>
-            <div class="action-bar-title">Digital Twin Bundle (.zip)</div>
-            <div class="action-bar-sub">Everything for the 3D RoadRunner simulation in one download: the ideal
-            road, the non-ideal (defect) road, the capacity numbers, and the MATLAB scripts + one-click launchers.
-            Extract this straight into your Downloads folder, then double-click
-            <code>run_ideal_digital_twin.bat</code> and <code>run_nonideal_digital_twin.bat</code> to see each
-            simulation — open both to compare side by side.</div>
-          </div>
-        </div>
-        <a class="action-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/bundle.zip"
-           download>
-          ↓ Download Everything (.zip)
-        </a>
-      </div>`;
-  }
-
-
-  // Results from every image analysed THIS BROWSER SESSION — used only
-  // to build the multi-photo corridor export below. Not sent anywhere
-  // until the user explicitly clicks the corridor download button.
-  const _sessionAnalyses = [];
-
-  function corridorButtonHTML() {
-    if (_sessionAnalyses.length < 2) return "";
-    return `
-      <div class="action-bar">
-        <div class="action-bar-info">
-          <span class="action-bar-icon">🛣️</span>
-          <div>
-            <div class="action-bar-title">Full Corridor (.xodr) — ${_sessionAnalyses.length} photos</div>
-            <div class="action-bar-sub">Combines every photo you've analysed this session into one continuous
-            RoadRunner road, ordered by the chainage you entered for each. Segments with no chainage entered
-            fall back to a fixed spacing, in upload order.</div>
-          </div>
-        </div>
-        <button class="action-dl-btn" id="corridor-dl-btn">
-          ↓ Download Corridor (${_sessionAnalyses.length})
-        </button>
-      </div>
-      <div class="action-bar">
-        <div class="action-bar-info">
-          <span class="action-bar-icon">✨</span>
-          <div>
-            <div class="action-bar-title">Ideal Corridor (.xodr)</div>
-            <div class="action-bar-sub">Same combined road, same lengths and lanes, with every detected defect
-            removed -- the "what it could look like" comparison version.</div>
-          </div>
-        </div>
-        <button class="action-dl-btn" id="corridor-ideal-dl-btn">
-          ↓ Download Ideal Corridor
-        </button>
-      </div>
-      <div class="action-bar">
-        <div class="action-bar-info">
-          <span class="action-bar-icon">📊</span>
-          <div>
-            <div class="action-bar-title">Corridor Capacity Summary (.json)</div>
-            <div class="action-bar-sub">Combines every photo's capacity numbers into one real ideal-vs-reduced
-            figure for the whole stretch (weakest-segment rule) -- used to size traffic in the RoadRunner demo.</div>
-          </div>
-        </div>
-        <button class="action-dl-btn" id="corridor-capacity-dl-btn">
-          ↓ Download Capacity Summary
-        </button>
-      </div>`;
-  }
-
-  function _downloadCorridorVariant(endpoint, filename, btnId, busyLabel, idleLabel) {
-    const btn = document.getElementById(btnId);
-    if (!btn) return;
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      btn.textContent = busyLabel;
-      try {
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ results: _sessionAnalyses }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `Server returned ${res.status}`);
-        }
-        const blob = await res.blob();
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        alert(`Could not build export: ${e.message}`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = idleLabel;
+    // obstructions
+    obstacles.forEach((o, i) => {
+      const x = o.left_m * k, w = Math.max((o.right_m - o.left_m) * k, 4);
+      const isParking = o.defect_type === "illegal_parking";
+      const g = el("g", {
+        class: `obstacle${o.on ? "" : " off"}${drop ? " drop-in" : ""}`,
+        tabindex: preview ? null : 0, role: "button",
+        "aria-pressed": String(o.on),
+        "aria-label": `${LABEL[o.defect_type] || o.defect_type}, ${fmt(o.left_m, 1)} to ${fmt(o.right_m, 1)} m from the left. ${o.on ? "On the road. Press to remove." : "Removed. Press to put back."}`,
+        style: drop ? `animation-delay:${i * 90}ms` : null,
+      }, xsection);
+      const y = top + 16 + (i % 3) * 8, h = sliceH - 32 - (i % 3) * 16;
+      let fill = colorOf(o.defect_type);
+      if (o.defect_type === "barricade") fill = "url(#barricade-stripes)";
+      if (o.defect_type === "garbage") fill = "url(#garbage-dots)";
+      const rx = o.defect_type === "pothole" ? Math.min(w, h) / 2 : 3;
+      el("rect", { class: "obstacle-body", x, y, width: w, height: h, rx, fill }, g);
+      el("rect", { class: "obstacle-outline", x, y, width: w, height: h, rx, fill: "none",
+                   stroke: isParking ? "#fff" : "rgba(255,255,255,.7)", "stroke-width": 1.5,
+                   "stroke-dasharray": isParking ? "6 4" : null }, g);
+      if (w > 70) {
+        const t = el("text", { x: x + w / 2, y: y + h / 2 + 5, "text-anchor": "middle", "font-size": 15, fill: "#fff", "font-weight": 600, "pointer-events": "none" }, g);
+        t.textContent = LABEL[o.defect_type] || o.defect_type;
       }
-    });
-  }
-
-  function attachCorridorButton() {
-    const btn = document.getElementById('corridor-dl-btn');
-    if (!btn) return;
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      btn.textContent = 'Building…';
-      try {
-        const res = await fetch('/api/export/roadrunner-corridor.xodr', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ results: _sessionAnalyses }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `Server returned ${res.status}`);
-        }
-        const blob = await res.blob();
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        a.download = 'roadrunner_corridor.xodr';
-        a.click();
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        alert(`Could not build corridor export: ${e.message}`);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = `↓ Download Corridor (${_sessionAnalyses.length})`;
+      if (S.photoUrl && !preview) {
+        for (const xx of [x, x + w])
+          el("line", { x1: xx, y1: 0, x2: xx, y2: y, stroke: "rgba(34,41,46,.45)", "stroke-dasharray": "3 4" }, xsection);
+      }
+      if (!preview) {
+        const toggle = () => toggleObstacle(i);
+        g.addEventListener("click", toggle);
+        g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
       }
     });
 
-    _downloadCorridorVariant(
-      '/api/export/roadrunner-corridor-ideal.xodr',
-      'roadrunner_corridor_ideal.xodr',
-      'corridor-ideal-dl-btn',
-      'Building…',
-      '↓ Download Ideal Corridor'
-    );
+    // dimension line: whole carriageway
+    dimension(0, W, dimY, `${fmt(geo.width, 1)} m carriageway`, cssVar("--ink"));
+    // usable segments: complement of shy bands + active obstructions
+    const blocked = shy.concat(active.map((o) => [o.left_m, o.right_m])).sort((a, b) => a[0] - b[0]);
+    const segs = []; let cur = 0;
+    for (const [a, b] of blocked) { if (a > cur + 1e-6) segs.push([cur, a]); cur = Math.max(cur, b); }
+    if (cur < geo.width - 1e-6) segs.push([cur, geo.width]);
+    const sign = cssVar("--sign");
+    for (const [a, b] of segs) {
+      el("rect", { class: "usable-seg", x: a * k, y: useY - 3, width: (b - a) * k, height: 6, fill: sign }, xsection);
+    }
+    const usable = S.view && S.view.width && S.view.width.usable_width_m != null && !preview
+      ? S.view.width.usable_width_m : segs.reduce((s, [a, b]) => s + b - a, 0);
+    const lab = el("text", { x: W / 2, y: useY + 22, "text-anchor": "middle", "font-size": 15, fill: sign, "font-weight": 600 }, xsection);
+    lab.textContent = `${fmt(usable, 2)} m usable by moving traffic`;
 
-    _downloadCorridorVariant(
-      '/api/export/roadrunner-corridor-capacity.json',
-      'roadrunner_corridor_capacity.json',
-      'corridor-capacity-dl-btn',
-      'Building…',
-      '↓ Download Capacity Summary'
-    );
-  }
+    function dimension(x1, x2, y, text, color) {
+      el("line", { x1, y1: y, x2, y2: y, stroke: color, "stroke-width": 1.2 }, xsection);
+      for (const x of [x1, x2]) el("line", { x1: x, y1: y - 7, x2: x, y2: y + 7, stroke: color, "stroke-width": 1.2 }, xsection);
+      const t = el("text", { x: (x1 + x2) / 2, y: y - 6, "text-anchor": "middle", "font-size": 15, fill: color }, xsection);
+      t.textContent = text;
+    }
 
-  function departmentReportButtonHTML(data) {
-    if (!data.department_report_available || !data.job_id) return "";
-    return `
-      <div class="action-bar">
-        <div class="action-bar-info">
-          <span class="action-bar-icon">📄</span>
-          <div>
-            <div class="action-bar-title">Department Action Report</div>
-            <div class="action-bar-sub">Defects grouped by the civic department responsible for each —
-            PWD, Traffic Police, or Municipal Corporation — with IRC code references, verify on site before dispatch.</div>
-          </div>
-        </div>
-        <a class="action-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/department-report.pdf"
-           download>
-          ↓ Download PDF Report
-        </a>
-      </div>`;
-  }
-
-  // ----------------------------------------------------------------
-  // Render: single image
-  // ----------------------------------------------------------------
-  function renderImageResult(data) {
-    resultsRoot.innerHTML =
-      heroHTML(data) +
-      defectAlertBannerHTML(data.per_defect) +
-      xodrButtonHTML(data) +
-      departmentReportButtonHTML(data) +
-      corridorButtonHTML() +
-      roadbarHTML(data) +
-      `<div class="section-title">Defects Detected — each factor shown as if it were the only obstruction (factors combine by multiplication)</div>` +
-      defectGridHTML(data.per_defect);
-
-    // Track this analysis for the "combine into one corridor" export —
-    // session-only (in browser memory), not persisted server-side.
-    _sessionAnalyses.push(data);
-    attachCorridorButton();
-  }
-
-  // ----------------------------------------------------------------
-  // Render: batch
-  // ----------------------------------------------------------------
-  function renderBatchResult(data) {
-    const perImage = (data.per_image || []).slice()
-      .sort((a, b) => b.capacity_loss_pct - a.capacity_loss_pct);
-
-    const rows = perImage.map((r, i) => `
-      <tr>
-        <td class="rank">${i + 1}</td>
-        <td>${r.image}</td>
-        <td>${fmt(r.reduced_capacity_pcu_h,0)}</td>
-        <td>${fmt(r.capacity_loss_pct,1)}%</td>
-        <td class="defects-list">${r.defects_found.length ? r.defects_found.map(titleCase).join(", ") : "-"}</td>
-      </tr>`).join("");
-
-    const errorsHTML = (data.errors && data.errors.length)
-      ? `<div class="error-box" style="margin-top:18px;">${data.errors.length} image(s) failed: ${data.errors.map((e) => `${e.image} (${e.error})`).join("; ")}</div>`
-      : "";
-
-    resultsRoot.innerHTML = `
-      <div class="card" style="margin-bottom:24px;">
-        <div class="card-title">Batch Summary - ${data.num_succeeded}/${data.num_images} images analysed</div>
-        <div class="card-sub">Date of analysis: ${formatDateDisplay((data.road_config || {}).analysis_date)}</div>
-        <div class="batch-summary-row">
-          <div class="batch-stat"><div class="l">Worst capacity loss</div><div class="v loss">${fmt(data.worst_capacity_loss_pct,1)}%</div></div>
-          <div class="batch-stat"><div class="l">Bottleneck capacity</div><div class="v">${fmt(data.bottleneck_capacity_pcu_h,0)} PCU/h</div></div>
-          <div class="batch-stat"><div class="l">Median loss</div><div class="v">${fmt(data.median_capacity_loss_pct,1)}%</div></div>
-          <div class="batch-stat"><div class="l">Worst image</div><div class="v" style="font-size:13px;font-family:monospace;">${data.worst_image_or_frame || "-"}</div></div>
-        </div>
-      </div>
-      ${departmentReportButtonHTML(data)}
-      <div class="section-title">Images Ranked by Capacity Loss (Worst First)</div>
-      <div class="card">
-        <table class="stretch-table">
-          <thead><tr><th>#</th><th>Image</th><th>Capacity now (PCU/h)</th><th>Capacity Lost</th><th>Defects Found</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-      ${errorsHTML}`;
-
-    // The department report / digital twin are both built from the worst
-    // photo in the batch (see app.py's _run_batch_job) — trigger the same
-    // twin panel + polling the single-image flow uses.
-    dtShow(data.digital_twin);
-  }
-
-  // ----------------------------------------------------------------
-  // Render: video
-  // ----------------------------------------------------------------
-  function renderVideoResult(data) {
-    const frames = data.frame_by_frame || [];
-    const maxLoss = Math.max(1, ...frames.map((f) => f.capacity_loss_pct || 0));
-
-    const barsHTML = frames.map((f) => {
-      const h = Math.max(4, (f.capacity_loss_pct / maxLoss) * 86);
-      return `<div class="tbar" style="height:${h}px;background:${lossToColor(f.capacity_loss_pct)}" title="t=${f.timestamp_sec}s · ${fmt(f.capacity_loss_pct,1)}% lost"></div>`;
-    }).join("");
-
-    const uniqueRows = (data.unique_defect_instances || [])
-      .slice().sort((a, b) => b.times_seen - a.times_seen)
-      .map((d) => `
-        <div class="unique-defect-row">
-          <span class="udr-name">${titleCase(d.cls_name)}</span>
-          <span class="udr-meta">seen ${d.times_seen}× · ${fmt(d.first_seen_sec,1)}s–${fmt(d.last_seen_sec,1)}s · max ${fmt(d.max_width_m,2)} m wide</span>
-        </div>`).join("");
-
-    resultsRoot.innerHTML = `
-      <div class="card" style="margin-bottom:24px;">
-        <div class="card-title">Video Summary - ${data.video}</div>
-        <div class="card-sub">Date of analysis: ${formatDateDisplay((data.road_config || {}).analysis_date)}</div>
-        <div class="batch-summary-row">
-          <div class="batch-stat"><div class="l">Worst moment</div><div class="v loss">${fmt(data.worst_capacity_loss_pct,1)}%</div></div>
-          <div class="batch-stat"><div class="l">Bottleneck capacity</div><div class="v">${fmt(data.bottleneck_capacity_pcu_h,0)} PCU/h</div></div>
-          <div class="batch-stat"><div class="l">Median loss</div><div class="v">${fmt(data.median_capacity_loss_pct,1)}%</div></div>
-          <div class="batch-stat"><div class="l">Frames analysed</div><div class="v">${data.frames_analysed}</div></div>
-          <div class="batch-stat"><div class="l">Unique defects tracked</div><div class="v">${data.unique_defect_count}</div></div>
-        </div>
-      </div>
-      ${departmentReportButtonHTML(data)}
-      <div class="card timeline-card">
-        <div class="card-title">Capacity Loss Over Time</div>
-        <div class="card-sub">Each bar = one sampled frame. Fixed camera: change over time. Moving camera: change along the road.</div>
-        <div class="timeline-bar">${barsHTML}</div>
-        <div class="timeline-meta"><span>0s</span><span>${frames.length ? frames[frames.length-1].timestamp_sec + "s" : "-"}</span></div>
-      </div>
-      <div class="section-title">Unique Defect Instances (Tracked - Not Double-Counted)</div>
-      <div class="unique-defects-list">${uniqueRows || `<div class="empty-state">No obstructions detected.</div>`}</div>`;
-
-    // Same reasoning as renderBatchResult above — twin data was generated
-    // from the worst sampled frame in _run_video_job.
-    dtShow(data.digital_twin);
-  }
-
-  function lossToColor(pct) {
-    if (pct < 10) return "#22c55e";
-    if (pct < 25) return "#f59e0b";
-    if (pct < 50) return "#f97316";
-    return "#ef4444";
-  }
-
-  // ================================================================
-  // DIGITAL TWIN PANEL — twin data arrives with the analysis response
-  // ================================================================
-  function dtShow(twin) {
-    const panel = document.getElementById("dt-panel");
-    if (!panel || !twin) return;
-    panel.style.display = "";
-    const I = twin.ideal || {}, D = twin.defect || {};
-    setText("dt-demand-line",
-      `Demand ${fmt(twin.demand_pcu_h, 0)} PCU/h — ${twin.demand_source} · horizon ${twin.horizon_min} min`);
-    setText("dt-ideal-cap",   fmt(I.capacity_pcu_h, 0));
-    setText("dt-defect-cap",  fmt(D.capacity_pcu_h, 0));
-    setText("dt-ideal-vc",    fmt(I.vc_ratio, 2));
-    setText("dt-defect-vc",   fmt(D.vc_ratio, 2));
-    setText("dt-ideal-speed", fmt(I.section_speed_kmh, 1));
-    setText("dt-ideal-queue", fmt(I.queue_length_after_horizon_m, 0));
-    setText("dt-defect-queue", fmt(D.queue_length_after_horizon_m, 0));
-    if (D.queue_growth_pcu_h > 0) {
-      setText("dt-defect-speed", `${fmt(D.section_speed_kmh, 1)} / ${fmt(D.upstream_speed_kmh, 1)}`);
-      setText("dt-defect-speed-label", "At bottleneck / in the queue");
+    const cap = $("xsection-caption");
+    if (preview) {
+      cap.textContent = `The clear road. The hatched strips are the 0.25 m drivers keep from each kerb (Indo-HCM 5.1.2). Blue is the width left for moving traffic.`;
     } else {
-      setText("dt-defect-speed", fmt(D.section_speed_kmh, 1));
-      setText("dt-defect-speed-label", "Stream speed at demand");
+      const n = obstacles.length;
+      cap.textContent = n
+        ? `${n} obstruction${n > 1 ? "s" : ""} found. Click one to take it off the road and see the capacity without it. Parked vehicles (dashed) count through the Indo-HCM parking factor, not width.`
+        : "No obstructions were found in this photo.";
     }
-    setText("dt-loss-pct", fmt(twin.capacity_loss_pct, 1) + "%");
-
-    const notes = [];
-    if (D.queue_growth_pcu_h > 0) {
-      notes.push(`Demand exceeds the reduced capacity: the queue grows by ${fmt(D.queue_growth_pcu_h,0)} PCU/h and its tail moves upstream at ${fmt(Math.abs(D.shockwave_kmh),1)} km/h; mean added delay ${fmt(D.mean_queue_delay_min,1)} min per vehicle over the horizon.`);
-    } else {
-      notes.push("Demand is below the reduced capacity: no queue forms; the obstruction only lowers stream speed.");
-    }
-    (twin.warnings || []).forEach((w) => notes.push("⚠ " + w));
-    notes.push("Assumptions: " + (twin.assumptions || []).join(" · "));
-    document.getElementById("dt-notes").innerHTML = notes.map((n) => `<div>${n}</div>`).join("");
-    document.getElementById("dt-notes").style.display = "";
-
-    drawXY(document.getElementById("dt-cap-chart"), [
-      { x: twin.time_min, y: twin.queue_length_m.ideal,  color: "#22c55e", label: "Ideal" },
-      { x: twin.time_min, y: twin.queue_length_m.defect, color: "#ef4444", label: "Current" },
-    ], "min", "m");
-    drawXY(document.getElementById("dt-spd-chart"), [
-      { x: twin.speed_flow.ideal.flow_pcu_h,  y: twin.speed_flow.ideal.speed_kmh,  color: "#22c55e", label: "Ideal" },
-      { x: twin.speed_flow.defect.flow_pcu_h, y: twin.speed_flow.defect.speed_kmh, color: "#ef4444", label: "Current" },
-    ], "PCU/h", "km/h", twin.demand_pcu_h);
   }
 
-  function drawXY(canvas, series, xUnit, yUnit, markX) {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width, H = canvas.height;
-    const P = { top: 14, right: 14, bottom: 28, left: 52 };
-    const pw = W - P.left - P.right, ph = H - P.top - P.bottom;
-    ctx.fillStyle = "#1e293b"; ctx.fillRect(0, 0, W, H);
-    const xs = series.flatMap((s) => s.x), ys = series.flatMap((s) => s.y);
-    const xMax = Math.max(1, ...xs, markX || 0), yMax = Math.max(1, ...ys) * 1.1;
-    const X = (v) => P.left + (v / xMax) * pw, Y = (v) => P.top + ph - (v / yMax) * ph;
-    ctx.font = "10px JetBrains Mono, monospace"; ctx.fillStyle = "#64748b";
-    ctx.strokeStyle = "#334155"; ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-      const yv = (yMax / 4) * i, y = Y(yv);
-      ctx.beginPath(); ctx.moveTo(P.left, y); ctx.lineTo(P.left + pw, y); ctx.stroke();
-      ctx.textAlign = "right"; ctx.fillText(Math.round(yv), P.left - 4, y + 3);
-      const xv = (xMax / 4) * i;
-      ctx.textAlign = "center"; ctx.fillText(Math.round(xv), X(xv), P.top + ph + 14);
-    }
-    ctx.textAlign = "right"; ctx.fillText(xUnit, P.left + pw, P.top + ph + 26);
-    ctx.textAlign = "left";  ctx.fillText(yUnit, 4, P.top + 8);
-    if (markX) {
-      ctx.strokeStyle = "#94a3b8"; ctx.setLineDash([4, 3]);
-      ctx.beginPath(); ctx.moveTo(X(markX), P.top); ctx.lineTo(X(markX), P.top + ph); ctx.stroke();
-      ctx.setLineDash([]); ctx.fillText("demand", X(markX) + 3, P.top + 10);
-    }
-    series.forEach((s, si) => {
-      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.beginPath();
-      s.x.forEach((xv, i) => (i ? ctx.lineTo(X(xv), Y(s.y[i])) : ctx.moveTo(X(xv), Y(s.y[i]))));
-      ctx.stroke();
-      ctx.fillStyle = s.color; ctx.fillText(s.label, P.left + 8 + si * 70, P.top + 10);
+  function drawPhotoBoxes() {
+    photoBoxes.innerHTML = "";
+    if (!S.photoUrl || !S.result) return;
+    const sz = S.result.image_size_px || {};
+    if (!sz.width) return;
+    photoBoxes.setAttribute("viewBox", `0 0 ${sz.width} ${sz.height}`);
+    photoBoxes.setAttribute("preserveAspectRatio", "none");
+    const sw = Math.max(2, sz.width / 400);
+    S.obstacles.forEach((o) => {
+      if (!o.bbox_px) return;
+      const [x1, y1, x2, y2] = o.bbox_px;
+      el("rect", { x: x1, y: y1, width: x2 - x1, height: y2 - y1, fill: "none",
+                   stroke: o.on ? colorOf(o.defect_type) : "rgba(255,255,255,.5)", "stroke-width": sw * 1.5,
+                   "stroke-dasharray": o.on ? null : `${sw * 4} ${sw * 3}` }, photoBoxes);
+      for (const x of [x1, x2])
+        el("line", { x1: x, y1: y2, x2: x, y2: sz.height, stroke: "rgba(255,255,255,.55)", "stroke-width": sw * 0.6, "stroke-dasharray": `${sw * 2} ${sw * 3}` }, photoBoxes);
     });
   }
 
-  function setText(id, val) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = val;
+  // ------------------------------------------------------------------ capacity chain
+  function chainValue(v, label, cls = "") {
+    return `<li><div class="chain-value ${cls}"><strong>${fmt(v)}</strong><small>${label}</small></div></li>`;
+  }
+  function chainFactor(key, value, label, on, togglable, ext = false) {
+    return `<li><button type="button" class="chain-factor" data-factor="${key}" aria-pressed="${on}" ${togglable ? "" : "disabled"}
+      title="${togglable ? (on ? "Switch this off to see the road without it" : "Switch back on") : ""}">
+      <b class="${ext ? "ext" : ""}">× ${fmt(value, 3)}</b><small>${label}</small></button></li>`;
   }
 
-  // ----------------------------------------------------------------
-  // Init
-  // ----------------------------------------------------------------
-  loadConfigOptions();
+  function renderChainPreview(p) {
+    $("chain").innerHTML = chainValue(p.c0, `PCU/h, ${p.basis}.<br>${p.c0How}`, "is-final");
+    $("chain-note").textContent = "This is the capacity of the clear road. Analyse a photo to find what is reducing it.";
+    $("whatif-reset").hidden = true;
+  }
+
+  function renderChain() {
+    const v = S.view, res = S.result;
+    const hf = v.indo_hcm_factors || {}, ef = v.extension_factors || {};
+    const basis = res.capacity_basis || {};
+    const parkTable = (config.on_street_parking || []).find((o) => o.key === v.parking_class_used);
+    const parts = [];
+    parts.push(chainValue(v.base_capacity_pcu_h, `PCU/h, clear road<br>${esc(basis.base_capacity_method || "")}`));
+
+    const cfg = res.road_config || {};
+    const hcmItems = [
+      ["F_OP", "on_street_parking", "Parked vehicles", hf.F_OP, cfg.on_street_parking !== "none" || S.obstacles.some((o) => o.defect_type === "illegal_parking")],
+      ["F_BS", "bus_stop", "Bus stop", hf.F_BS, cfg.bus_stop && cfg.bus_stop !== "none"],
+      ["F_AC", "access_points", "Side roads", hf.F_AC, cfg.access_points && cfg.access_points !== "none"],
+    ];
+    let anyHcm = false;
+    for (const [fk, offKey, label, val, present] of hcmItems) {
+      if (!present) continue;
+      anyHcm = true;
+      const on = !S.off[offKey];
+      const extra = fk === "F_OP" && parkTable && on ? `<br>${esc(parkTable.label.split(",")[0])}` : "";
+      parts.push(chainFactor(offKey, on ? val : 1, `${label}${extra}`, on, true));
+    }
+    if (anyHcm) parts.push(chainValue(v.indo_hcm_capacity_pcu_h, "PCU/h, Indo-HCM", "is-hcm"));
+
+    const widthObs = S.obstacles.filter((o) => WIDTH_CLASSES.includes(o.defect_type));
+    if (widthObs.length) {
+      const on = widthObs.some((o) => o.on);
+      parts.push(chainFactor("width", ef.F_W, "Lost width<br>project extension", on, true, true));
+    }
+    const rough = (res.capacity_calculation || {}).roughness || {};
+    if (rough.applied) parts.push(chainFactor("iri", ef.F_R, "Roughness<br>project extension", !S.off.iri, true, true));
+    parts.push(chainValue(v.reduced_capacity_pcu_h, "PCU/h now", "is-final"));
+    $("chain").innerHTML = parts.join("");
+    $("chain").querySelectorAll(".chain-factor:not([disabled])").forEach((b) =>
+      b.addEventListener("click", () => toggleFactor(b.dataset.factor)));
+
+    const lost = v.base_capacity_pcu_h - v.reduced_capacity_pcu_h;
+    const g = v.overall_guidance || {};
+    const flag = isWhatIf() ? '<span class="whatif-flag">What-if</span>' : "";
+    $("chain-note").innerHTML =
+      `The road has lost <b>${fmt(lost)} PCU/h, ${fmt(v.capacity_loss_pct, 1)}%</b> of its capacity. ${esc(g.action || "")}${flag}`;
+    $("whatif-reset").hidden = !isWhatIf();
+  }
+
+  // ------------------------------------------------------------------ what-if
+  function isWhatIf() {
+    return S.obstacles.some((o) => !o.on) || Object.values(S.off).some(Boolean) || demandDiffers();
+  }
+  function demandDiffers() {
+    const lv = S.result && S.result.level_of_service;
+    const orig = lv && lv.observed_volume_pcu_h ? lv.observed_volume_pcu_h : (S.result && S.result.digital_twin ? S.result.digital_twin.demand_pcu_h : null);
+    return orig != null && Math.abs(S.demand - orig) > 0.5;
+  }
+  function toggleObstacle(i) {
+    const o = S.obstacles[i];
+    o.on = !o.on;
+    if (o.defect_type === "illegal_parking") {
+      const anyOn = S.obstacles.some((x) => x.defect_type === "illegal_parking" && x.on);
+      if (!anyOn && (S.result.road_config || {}).on_street_parking !== "none") S.off.on_street_parking = true;
+      if (anyOn) S.off.on_street_parking = false;
+    }
+    drawRoad(sectionGeometry(), S.obstacles);
+    drawPhotoBoxes();
+    renderDefectTable();
+    requestWhatIf();
+  }
+  function toggleFactor(key) {
+    if (key === "width") {
+      const widthObs = S.obstacles.filter((o) => WIDTH_CLASSES.includes(o.defect_type));
+      const turnOn = !widthObs.some((o) => o.on);
+      widthObs.forEach((o) => { o.on = turnOn; });
+    } else if (key === "iri") {
+      S.off.iri = !S.off.iri;
+    } else {
+      S.off[key] = !S.off[key];
+      if (key === "on_street_parking")
+        S.obstacles.forEach((o) => { if (o.defect_type === "illegal_parking") o.on = !S.off.on_street_parking; });
+    }
+    drawRoad(sectionGeometry(), S.obstacles);
+    drawPhotoBoxes();
+    renderDefectTable();
+    requestWhatIf();
+  }
+  function requestWhatIf(delay = 120) {
+    clearTimeout(S.whatifTimer);
+    S.whatifTimer = setTimeout(sendWhatIf, delay);
+  }
+  async function sendWhatIf() {
+    const seq = ++S.whatifSeq;
+    const cfg = { ...(S.result.road_config || {}) };
+    for (const k of ["on_street_parking", "bus_stop", "access_points"]) if (S.off[k]) cfg[k] = "none";
+    if (S.off.iri) cfg.iri_m_per_km = null;
+    const body = {
+      road_config: cfg,
+      obstacles: S.obstacles.filter((o) => o.on).map(({ defect_type, left_m, right_m }) => ({ defect_type, left_m, right_m })),
+      demand_pcu_h: S.demand,
+    };
+    try {
+      const r = await fetch("/api/whatif", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || r.status);
+      if (seq !== S.whatifSeq) return;          // a newer request is on its way
+      S.view = data;
+      drawRoad(sectionGeometry(), S.obstacles);
+      drawPhotoBoxes();
+      renderChain();
+      renderDemand();
+    } catch (err) {
+      showError(`Could not recalculate: ${err.message}. The server may be asleep; try again in a minute.`);
+    }
+  }
+
+  // ------------------------------------------------------------------ demand, LOS, twin
+  function renderDemand() {
+    const v = S.view, twin = v.digital_twin;
+    const c0 = v.base_capacity_pcu_h;
+    const lv = S.result.level_of_service;
+    const surveyed = lv && lv.observed_volume_pcu_h;
+    const max = Math.ceil(Math.max(c0 * 1.3, (S.demand || 0) * 1.15) / 100) * 100;
+    slider.max = max;
+    slider.value = S.demand;
+    $("demand-out").textContent = fmt(S.demand);
+
+    const marks = [
+      [v.reduced_capacity_pcu_h, "Capacity now"],
+      [c0, "Clear-road capacity"],
+    ];
+    if (surveyed) marks.push([surveyed, "Surveyed"]);
+    marks.sort((a, b) => a[0] - b[0]);
+    $("demand-marks").innerHTML = marks.map(([val, t], i) =>
+      `<span style="left:${(val / max) * 100}%;top:${i % 2 ? 14 : 0}px">${t} ${fmt(val)}</span>`).join("");
+    $("demand-marks").style.height = "48px";
+
+    // LOS rows
+    const divided = !!(S.result.capacity_basis || {}).divided;
+    const table = (config.los_tables || FALLBACK_CONFIG.los_tables)[divided ? "divided" : "undivided"];
+    const L = v.level_of_service;
+    const rows = [["Clear road", "", L && L.vc_base, L && L.los_base]];
+    if (Math.abs(v.indo_hcm_capacity_pcu_h - c0) > 0.5) rows.push(["With side friction", "Indo-HCM", L && L.vc_hcm, L && L.los_hcm]);
+    rows.push(["As found", "with obstructions", L && L.vc_ext, L && L.los_ext]);
+    const VC_MAX = 1.5;
+    const bands = [];
+    let lo = 0;
+    for (const b of table) { bands.push([b.letter, lo, b.vc_max]); lo = b.vc_max; }
+    bands.push(["F", lo, VC_MAX]);
+    const scale = bands.map(([l, a, b]) =>
+      `<span class="los-band" style="width:${((b - a) / VC_MAX) * 100}%;background:var(--los-${l})">${l}</span>`).join("");
+    $("los").innerHTML = rows.map(([label, sub, vc, letter]) => {
+      const pos = vc == null ? 100 : Math.min(vc, VC_MAX) / VC_MAX * 100;
+      return `<div class="los-row">
+        <div class="los-row-label">${label}${sub ? `<small>${sub}</small>` : ""}</div>
+        <div class="los-scale" aria-hidden="true">${scale}<span class="los-pin" style="left:${pos}%"></span></div>
+        <div class="los-letter" style="color:var(--los-${letter || "F"})">${letter || "–"}<small>V/C ${vc == null ? "–" : fmt(vc, 2)}</small></div>
+      </div>`;
+    }).join("") + `<p class="hint">Level of service from Indo-HCM Table ${divided ? "5.7" : "5.6"}, by traffic ÷ capacity.</p>`;
+
+    // twin figures for the road as found
+    if (!twin) { $("twin-figures").innerHTML = ""; return; }
+    const d = twin.defect, i = twin.ideal;
+    const figs = [];
+    if (d.queue_growth_pcu_h > 0) {
+      figs.push([metres(d.queue_length_after_horizon_m), "queue behind the section after one hour"]);
+      figs.push([d.mean_queue_delay_min == null ? "No exit" : `${fmt(d.mean_queue_delay_min, 1)} min`, "extra delay per vehicle, average"]);
+      figs.push([`${fmt(d.upstream_speed_kmh, 1)} km/h`, "speed inside the queue"]);
+      figs.push([`${fmt(d.section_speed_kmh, 1)} km/h`, "speed past the obstruction"]);
+    } else {
+      figs.push(["No queue", "traffic is below the capacity now"]);
+      figs.push([`${fmt(d.section_speed_kmh, 1)} km/h`, "speed past the obstruction"]);
+      figs.push([`${fmt(i.section_speed_kmh, 1)} km/h`, "speed on the clear road"]);
+    }
+    $("twin-figures").innerHTML = figs.map(([a, b]) => `<div class="twin-figure"><strong>${a}</strong><span>${b}</span></div>`).join("");
+    drawSpeedChart(twin);
+    drawQueueChart(twin);
+    $("twin-assumptions").innerHTML = `<summary>How the traffic model works</summary><ul>${
+      (twin.assumptions || []).concat(twin.warnings || []).map((a) => `<li>${esc(a)}</li>`).join("")}</ul>`;
+  }
+
+  slider.addEventListener("input", () => {
+    S.demand = +slider.value;
+    $("demand-out").textContent = fmt(S.demand);
+    requestWhatIf(90);
+  });
+
+  function axes(svg, xMax, yMax, xLabel, yLabel, xTicks, yTicks) {
+    const P = { l: 46, r: 14, t: 14, b: 38 }, Wd = 480 - P.l - P.r, Hd = 260 - P.t - P.b;
+    const X = (x) => P.l + (x / xMax) * Wd, Y = (y) => P.t + Hd - (y / yMax) * Hd;
+    svg.querySelectorAll(":not(title)").forEach((n) => n.remove());
+    for (const t of yTicks) {
+      el("line", { x1: P.l, y1: Y(t), x2: P.l + Wd, y2: Y(t), stroke: cssVar("--rule") }, svg);
+      el("text", { x: P.l - 6, y: Y(t) + 4, "text-anchor": "end" }, svg).textContent = fmt(t);
+    }
+    for (const t of xTicks) el("text", { x: X(t), y: P.t + Hd + 16, "text-anchor": "middle" }, svg).textContent = fmt(t);
+    el("line", { x1: P.l, y1: P.t + Hd, x2: P.l + Wd, y2: P.t + Hd, stroke: cssVar("--ink") }, svg);
+    el("text", { x: P.l + Wd, y: 256, "text-anchor": "end" }, svg).textContent = xLabel;
+    el("text", { x: 4, y: 11 }, svg).textContent = yLabel;
+    return { X, Y };
+  }
+  const niceTicks = (max, n = 4) => {
+    const raw = max / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    const out = []; for (let t = 0; t <= max + 1e-9; t += step) out.push(+t.toFixed(6)); return out;
+  };
+
+  function legend(svg, x, anchor) {
+    const items = [["Clear road", cssVar("--ink-2"), "6 4"], ["As found", cssVar("--sign"), null]];
+    items.forEach(([label, color, dash], i) => {
+      const y = 28 + i * 18, lx = anchor === "end" ? x - 26 : x;
+      el("line", { x1: lx, y1: y - 4, x2: lx + 22, y2: y - 4, stroke: color, "stroke-width": 2.5, "stroke-dasharray": dash }, svg);
+      const t = el("text", { x: anchor === "end" ? lx - 6 : lx + 28, y, "text-anchor": anchor }, svg);
+      t.textContent = label;
+    });
+  }
+
+  function drawSpeedChart(twin) {
+    const svg = $("chart-speed");
+    const sf = twin.speed_flow;
+    const xMax = Math.max(sf.ideal.flow_pcu_h.at(-1), twin.demand_pcu_h) * 1.08;
+    const yMax = Math.max(...sf.ideal.speed_kmh) * 1.12;
+    const { X, Y } = axes(svg, xMax, yMax, "traffic, PCU/h", "speed, km/h", niceTicks(xMax), niceTicks(yMax));
+    const line = (q, v, color, dash) => {
+      const d = q.map((x, j) => `${j ? "L" : "M"}${X(x).toFixed(1)},${Y(v[j]).toFixed(1)}`).join("");
+      el("path", { d, fill: "none", stroke: color, "stroke-width": 2.5, "stroke-dasharray": dash }, svg);
+    };
+    line(sf.ideal.flow_pcu_h, sf.ideal.speed_kmh, cssVar("--ink-2"), "6 4");
+    line(sf.defect.flow_pcu_h, sf.defect.speed_kmh, cssVar("--sign"));
+    el("line", { x1: X(twin.demand_pcu_h), y1: 14, x2: X(twin.demand_pcu_h), y2: 222, stroke: cssVar("--kerb"), "stroke-width": 2 }, svg);
+    for (const [st, color] of [[twin.ideal, cssVar("--ink-2")], [twin.defect, cssVar("--sign")]]) {
+      const q = st.queue_growth_pcu_h > 0 ? st.capacity_pcu_h : twin.arrival_pcu_h ?? twin.demand_pcu_h;
+      el("circle", { cx: X(q), cy: Y(st.section_speed_kmh), r: 5, fill: color, stroke: "#fff", "stroke-width": 1.5 }, svg);
+    }
+    legend(svg, 462, "end");
+  }
+
+  function drawQueueChart(twin) {
+    const svg = $("chart-queue");
+    const tm = twin.time_min, qd = twin.queue_length_m.defect, qi = twin.queue_length_m.ideal;
+    const yMax = Math.max(100, ...qd, ...qi) * 1.1;
+    const { X, Y } = axes(svg, 60, yMax, "minutes", "queue, m", [0, 15, 30, 45, 60], niceTicks(yMax));
+    const path = (vals, color, dash) => el("path", {
+      d: tm.map((x, j) => `${j ? "L" : "M"}${X(x).toFixed(1)},${Y(vals[j]).toFixed(1)}`).join(""),
+      fill: "none", stroke: color, "stroke-width": 2.5, "stroke-dasharray": dash }, svg);
+    path(qi, cssVar("--ink-2"), "6 4");
+    path(qd, cssVar("--sign"));
+    legend(svg, 60, "start");
+    if (Math.max(...qd) === 0) el("text", { x: 240, y: 120, "text-anchor": "middle" }, svg).textContent = "No queue at this traffic level";
+  }
+
+  // ------------------------------------------------------------------ defects table
+  function renderDefectTable() {
+    const pd = S.result.per_defect || {};
+    const names = Object.keys(pd).sort((a, b) => (pd[b].capacity_loss_pct || 0) - (pd[a].capacity_loss_pct || 0));
+    if (!names.length) {
+      $("defect-table").innerHTML = "<tbody><tr><td>No obstructions were found. The road is working at its full Indo-HCM capacity for the side friction entered.</td></tr></tbody>";
+      return;
+    }
+    const rows = names.map((n) => {
+      const d = pd[n];
+      const obs = S.obstacles.filter((o) => o.defect_type === n);
+      const on = obs.some((o) => o.on);
+      const spans = (d.detections || []).map((x) => `${fmt(x.left_m, 1)}–${fmt(x.right_m, 1)}`).join(", ");
+      const mech = n === "illegal_parking" ? "Indo-HCM parking factor" : n === "pothole" || WIDTH_CLASSES.includes(n) ? "Lost width" : "–";
+      const det = [];
+      det.push(`<p><b>Action.</b> ${esc(d.action)}</p>`);
+      det.push(`<p><b>Reference.</b> ${esc(d.code_ref)}. Priority from ${esc(d.severity_basis)}.</p>`);
+      if (d.size_summary) {
+        const c = d.size_summary.counts || {};
+        det.push(`<p><b>Size.</b> ${c.small || 0} small, ${c.medium || 0} medium, ${c.large || 0} large. ${esc(d.size_summary.classification)}.</p>`);
+      }
+      if (d.rectification) {
+        const r = d.rectification;
+        det.push(`<p><b>${esc(r.rectification_category)}.</b> ${esc(r.method)}</p><p>${esc(r.materials)} ${esc(r.work_zone_note)}</p>`);
+        if (r.escalation_note) det.push(`<p>${esc(r.escalation_note)}</p>`);
+      }
+      return `<tr class="${on ? "" : "off"}">
+          <td><label class="switch"><input type="checkbox" data-class="${n}" ${on ? "checked" : ""}> on road</label></td>
+          <td class="defect-name"><span class="swatch" style="background:${colorOf(n)}"></span>${esc(LABEL[n] || n)}${d.count > 1 ? ` × ${d.count}` : ""}</td>
+          <td class="num">${spans} m</td>
+          <td>${mech}</td>
+          <td class="num">${fmt(d.capacity_loss_pct, 1)}%</td>
+          <td class="priority ${d.severity}">${d.severity ? d.severity.charAt(0) + d.severity.slice(1).toLowerCase() : "–"}</td>
+          <td><button type="button" class="row-toggle" aria-expanded="false" data-row="${n}">Details</button></td>
+        </tr>
+        <tr class="detail-row" id="detail-${n}" hidden><td colspan="7">${det.join("")}</td></tr>`;
+    }).join("");
+    $("defect-table").innerHTML = `<thead><tr><th>Include</th><th>Obstruction</th><th>From the left kerb</th><th>Acts through</th><th>Loss alone</th><th>Priority</th><th></th></tr></thead><tbody>${rows}</tbody>`;
+    $("defect-table").querySelectorAll("input[data-class]").forEach((cb) => cb.addEventListener("change", () => {
+      const cls = cb.dataset.class;
+      S.obstacles.forEach((o) => { if (o.defect_type === cls) o.on = cb.checked; });
+      if (cls === "illegal_parking" && (S.result.road_config || {}).on_street_parking !== "none") S.off.on_street_parking = !cb.checked;
+      drawRoad(sectionGeometry(), S.obstacles);
+      drawPhotoBoxes();
+      renderDefectTable();
+      requestWhatIf();
+    }));
+    $("defect-table").querySelectorAll(".row-toggle").forEach((b) => b.addEventListener("click", () => {
+      const row = $(`detail-${b.dataset.row}`);
+      row.hidden = !row.hidden;
+      b.setAttribute("aria-expanded", String(!row.hidden));
+      b.textContent = row.hidden ? "Details" : "Hide";
+    }));
+  }
+
+  // ------------------------------------------------------------------ downloads
+  function renderDownloads(res) {
+    const id = encodeURIComponent(res.job_id || "");
+    const items = [];
+    if (res.department_report_available) items.push([`/api/jobs/${id}/department-report.pdf`, "Department report", "PDF for PWD, traffic police and municipal desks"]);
+    if (res.roadrunner_xodr_available) items.push([`/api/jobs/${id}/bundle.zip`, "Digital twin bundle", "ZIP with road files and MATLAB scripts"]);
+    if (res.defects_excel_available) items.push([`/api/jobs/${id}/defects.xlsx`, "Obstruction log", "Excel, one row per detection"]);
+    if (res.roadrunner_xodr_available) items.push([`/api/jobs/${id}/roadrunner.xodr`, "Road file", "OpenDRIVE for RoadRunner"]);
+    let html = items.map(([href, t, s]) => `<a class="download" href="${href}" download><b>${t}</b><small>${s}</small></a>`).join("");
+    if (sessionResults.length >= 2) {
+      html += [
+        ["corridor-xodr", "Corridor road file", `${sessionResults.length} photos joined by distance`],
+        ["corridor-ideal", "Corridor, no obstructions", "the same corridor, cleared"],
+        ["corridor-capacity", "Corridor capacity", "weakest section governs"],
+      ].map(([k, t, s]) => `<button type="button" class="download" data-corridor="${k}"><b>${t}</b><small>${s}</small></button>`).join("");
+    }
+    $("download-row").innerHTML = html;
+    $("downloads").hidden = !html;
+    $("download-row").querySelectorAll("[data-corridor]").forEach((b) => b.addEventListener("click", () => corridorDownload(b)));
+  }
+  async function corridorDownload(btn) {
+    const map = {
+      "corridor-xodr": ["/api/export/roadrunner-corridor.xodr", "roadrunner_corridor.xodr"],
+      "corridor-ideal": ["/api/export/roadrunner-corridor-ideal.xodr", "roadrunner_corridor_ideal.xodr"],
+      "corridor-capacity": ["/api/export/roadrunner-corridor-capacity.json", "roadrunner_corridor_capacity.json"],
+    };
+    const [url, name] = map[btn.dataset.corridor];
+    btn.disabled = true;
+    try {
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ results: sessionResults }) });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.status); }
+      const blob = await r.blob(), a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) { showError(`Could not build the corridor file: ${e.message}`); }
+    finally { btn.disabled = false; }
+  }
+
+  function renderWarnings(res) {
+    const basis = res.capacity_basis || {};
+    const list = [...(basis.warnings || [])];
+    if (res.vehicle_veto_suppressed) list.push(`${res.vehicle_veto_suppressed} vendor or cart box(es) ignored because they overlapped a vehicle (usually an auto-rickshaw).`);
+    if (res.indicative_vehicles) list.push(`Vehicles per hour: about ${fmt(res.indicative_vehicles.base_capacity_veh_h)} on the clear road and ${fmt(res.indicative_vehicles.reduced_capacity_veh_h)} now. ${res.indicative_vehicles.note}`);
+    list.push(`Operating speed ${fmt(basis.operating_speed_kmh, 1)} km/h: ${basis.operating_speed_source}.`);
+    const w = $("warnings");
+    w.innerHTML = `<summary>Notes on this result (${list.length})</summary><ul>${list.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+    w.open = (basis.warnings || []).length > 0;
+    w.hidden = false;
+  }
+
+  // ------------------------------------------------------------------ several photos / video
+  function showMulti(sum) {
+    const isVideo = sum.mode === "video";
+    const b = sum.bottleneck_result;
+    let photo = null;
+    if (!isVideo && b) photo = selectedFiles.find((f) => f.name === b.image) || null;
+    if (b) showSingle({ ...b, digital_twin: sum.digital_twin, job_id: sum.job_id }, { photo, drop: true });
+    else { S.result = null; showPhoto(null); updatePreview(); }
+    renderDownloads({ ...(b || {}), job_id: sum.job_id, department_report_available: sum.department_report_available,
+                      roadrunner_xodr_available: false, defects_excel_available: false });
+
+    const m = $("multi");
+    const figs = isVideo
+      ? [[sum.frames_analysed, "frames analysed"], [fmt(sum.bottleneck_capacity_pcu_h), "PCU/h at the worst moment"],
+         [`${fmt(sum.worst_capacity_loss_pct, 1)}%`, "largest capacity loss"], [sum.unique_defect_count, "obstructions tracked"]]
+      : [[`${sum.num_succeeded} of ${sum.num_images}`, "photos analysed"], [fmt(sum.bottleneck_capacity_pcu_h), "PCU/h at the bottleneck"],
+         [`${fmt(sum.worst_capacity_loss_pct, 1)}%`, "largest capacity loss"], [`${fmt(sum.median_capacity_loss_pct, 1)}%`, "median loss"]];
+    let html = `<div class="section-head"><h2>${isVideo ? esc(sum.video) : "Photos along the road"}</h2>
+      <p class="section-sub">${isVideo
+        ? `The drawing above shows the frame at ${fmt((b || {}).timestamp_sec, 1)} s, where capacity was lowest. With a fixed camera the bars are changes over time; with a moving camera they are changes along the road.`
+        : `A road carries no more than its narrowest point allows, so the drawing above shows the bottleneck photo, ${esc((b || {}).image || "")}.`}</p></div>
+      <div class="multi-figures">${figs.map(([a, t]) => `<div><strong>${a}</strong><span>${t}</span></div>`).join("")}</div>`;
+
+    if (isVideo) {
+      const fr = sum.frame_by_frame || [];
+      const W = 900, H = 140, maxT = fr.length ? fr[fr.length - 1].timestamp_sec || 1 : 1;
+      const bars = fr.map((f) => {
+        const x = 40 + (f.timestamp_sec / maxT) * (W - 60), h = (f.capacity_loss_pct / 100) * (H - 40);
+        return `<rect x="${x.toFixed(1)}" y="${(H - 24 - h).toFixed(1)}" width="${Math.max(2, (W - 60) / Math.max(fr.length, 1) - 1).toFixed(1)}" height="${h.toFixed(1)}" fill="var(--sign)"><title>${fmt(f.timestamp_sec, 1)} s, ${fmt(f.capacity_loss_pct, 1)}% lost</title></rect>`;
+      }).join("");
+      html += `<svg class="timeline" viewBox="0 0 ${W} ${H}" role="img" aria-label="Capacity loss in each analysed frame">
+        <line x1="40" y1="${H - 24}" x2="${W - 20}" y2="${H - 24}" stroke="var(--ink)"/>${bars}
+        <text x="40" y="${H - 6}">0 s</text><text x="${W - 20}" y="${H - 6}" text-anchor="end">${fmt(maxT, 1)} s</text>
+        <text x="4" y="14">capacity lost, % (bar height)</text></svg>`;
+      const u = (sum.unique_defect_instances || []).slice().sort((a, c) => c.times_seen - a.times_seen);
+      html += `<table><thead><tr><th>Obstruction</th><th>Seen in frames</th><th>First seen</th><th>Last seen</th><th>Widest</th></tr></thead><tbody>${
+        u.map((d) => `<tr><td>${esc(LABEL[d.cls_name] || d.cls_name)}</td><td class="num">${d.times_seen}</td><td class="num">${fmt(d.first_seen_sec, 1)} s</td><td class="num">${fmt(d.last_seen_sec, 1)} s</td><td class="num">${fmt(d.max_width_m, 2)} m</td></tr>`).join("")
+        || '<tr><td colspan="5">No obstructions were tracked.</td></tr>'}</tbody></table>`;
+    } else {
+      const rows = (sum.per_image || []).slice().sort((a, c) => a.reduced_capacity_pcu_h - c.reduced_capacity_pcu_h);
+      html += `<table><thead><tr><th>Photo</th><th>Capacity now, PCU/h</th><th>Lost</th><th>Found</th></tr></thead><tbody>${
+        rows.map((r) => `<tr class="${b && r.image === b.image ? "is-bottleneck" : ""}"><td>${esc(r.image)}</td><td class="num">${fmt(r.reduced_capacity_pcu_h)}</td><td class="num">${fmt(r.capacity_loss_pct, 1)}%</td><td>${
+          r.defects_found.length ? r.defects_found.map((n) => esc(LABEL[n] || n)).join(", ") : "nothing"}</td></tr>`).join("")}</tbody></table>`;
+      if ((sum.errors || []).length)
+        html += `<p class="error" style="margin-top:14px">${sum.errors.length} photo(s) could not be read: ${sum.errors.map((e) => esc(`${e.image} (${e.error})`)).join("; ")}</p>`;
+    }
+    m.innerHTML = html;
+    m.hidden = false;
+  }
+
+  // back to the surveyed road (keeps the photo on screen)
+  $("whatif-reset").addEventListener("click", () => {
+    S.obstacles.forEach((o) => { o.on = true; });
+    S.off = { on_street_parking: false, bus_stop: false, access_points: false, iri: false };
+    const lv = S.result.level_of_service;
+    S.demand = lv && lv.observed_volume_pcu_h ? lv.observed_volume_pcu_h : (S.result.digital_twin ? S.result.digital_twin.demand_pcu_h : S.demand);
+    S.view = viewFromResult(S.result);
+    renderAll();
+  });
+
+  // ------------------------------------------------------------------ init
+  setMode("image");
+  loadConfig();
 })();

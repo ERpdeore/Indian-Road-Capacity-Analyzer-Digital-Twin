@@ -35,11 +35,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("road_analyzer.app")
 
-from road_analyzer.core import RoadAnalyzer, CLASS_NAMES, OBSTRUCTION_CLASSES, resolve_road_inputs
+from road_analyzer.core import (
+    RoadAnalyzer, CLASS_NAMES, OBSTRUCTION_CLASSES, WIDTH_CLASSES, resolve_road_inputs, compute_capacity,
+    get_overall_guidance,
+)
 from road_analyzer import indo_hcm as hcm
 from road_analyzer import extensions as ext
 from road_analyzer import field_validation as fv
 from road_analyzer.digital_twin_engine import (
+    generate_twin_data as dt_generate,
     run_and_store as dt_run_and_store,
     get_latest_twin_data as dt_get_latest_twin_data,
 )
@@ -387,6 +391,8 @@ def config_options():
         "access_points": opts(hcm.ACCESS_FACTORS),
         "width_methods": [{"key": k, "label": v} for k, v in ext.WIDTH_METHODS.items()],
         "dsv_vc_ratio": hcm.DSV_VC_RATIO,
+        "los_tables": {k: [{"letter": l, "vc_max": v, "ffs_pct_min": f} for l, v, f in rows]
+                       for k, rows in hcm.LOS_TABLES.items()},
         "defect_classes": OBSTRUCTION_CLASSES,
         "model_loaded": Path(MODEL_PATH).exists(),
     }
@@ -473,8 +479,10 @@ def _run_batch_job(job_id: str, job_dir: Path,
                 logger.warning("Batch department PDF generation failed: %s", e)
                 summary["department_report_available"] = False
 
-            # Twin of the governing (lowest-capacity) section.
+            # Twin of the governing (lowest-capacity) section, plus its full
+            # result so the dashboard can draw and explore that cross-section.
             summary["digital_twin"] = _twin(worst)
+            summary["bottleneck_result"] = {k: v for k, v in worst.items() if not k.startswith("_")}
 
         summary["job_id"] = job_id
         JOBS[job_id] = {"status": "done", "result": summary}
@@ -552,8 +560,10 @@ def _run_video_job(job_id: str, job_dir: Path, video_path: str,
                 logger.warning("Video department PDF generation failed: %s", e)
                 summary["department_report_available"] = False
 
-            # Twin of the governing (lowest-capacity) section.
+            # Twin of the governing (lowest-capacity) section, plus its full
+            # result so the dashboard can draw and explore that cross-section.
             summary["digital_twin"] = _twin(worst)
+            summary["bottleneck_result"] = {k: v for k, v in worst.items() if not k.startswith("_")}
 
         summary["job_id"] = job_id
         JOBS[job_id] = {"status": "done", "result": summary}
@@ -907,6 +917,60 @@ def field_compare(body: _ComparePairs):
         return fv.error_metrics(body.predicted, body.observed)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ----------------------------------------------------------------
+# Interactive what-if (dashboard): same formulas as an analysis, no YOLO.
+# ----------------------------------------------------------------
+class _WhatIf(BaseModel):
+    road_config: dict
+    obstacles: List[dict] = []          # [{"defect_type", "left_m", "right_m"}] still on the road
+    demand_pcu_h: Optional[float] = None
+
+
+@app.post("/api/whatif")
+def whatif(body: _WhatIf):
+    """Recompute capacity, LOS and the digital twin after the user removes
+    obstructions or changes the traffic demand on the dashboard."""
+    cfg = dict(body.road_config)
+    cfg["observed_volume_pcu_h"] = body.demand_pcu_h if body.demand_pcu_h and body.demand_pcu_h > 0 else None
+    try:
+        inp = resolve_road_inputs(cfg)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    w = inp["total_width_m"]
+    intervals, parking = [], False
+    for o in body.obstacles:
+        t = o.get("defect_type")
+        if t == "illegal_parking":
+            parking = True
+        elif t in WIDTH_CLASSES:
+            l, r = float(o["left_m"]), float(o["right_m"])
+            if not (0 <= l < r <= w + 1e-6):
+                raise HTTPException(400, f"Obstacle {o} lies outside the 0-{w:g} m carriageway.")
+            intervals.append((l, r))
+    cap = compute_capacity(inp, intervals, parking)
+    c0, c_hcm, c_ext = cap["c0"], cap["c_hcm"], cap["c_ext"]
+    rnd = lambda d: {k: (round(v, 3) if isinstance(v, float) else v) for k, v in d.items()}
+    result = {
+        "base_capacity_pcu_h": round(c0, 1),
+        "indo_hcm_capacity_pcu_h": round(c_hcm, 1),
+        "reduced_capacity_pcu_h": round(c_ext, 1),
+        "capacity_loss_pct": round((c0 - c_ext) / c0 * 100, 1),
+        "indo_hcm_factors": rnd(cap["hcm_factors"]),
+        "extension_factors": rnd(cap["ext_factors"]),
+        "parking_class_used": cap["parking_class_used"],
+        "width": rnd(cap["width"]),
+        "level_of_service": rnd(cap["los"]) if "los" in cap else None,
+        "overall_guidance": get_overall_guidance((c0 - c_ext) / c0 * 100),
+        "notes": cap["notes"],
+    }
+    twin_input = {**result, "capacity_basis": {"operating_speed_kmh": inp["v_ref"],
+                                               "operating_speed_source": inp["v_ref_source"]},
+                  "road_config": {"num_lanes": inp["lanes"]},
+                  "capacity_calculation": {"roughness": cap["roughness"]}}
+    result["digital_twin"] = dt_generate(twin_input)
+    return result
 
 
 @app.get("/api/health")
