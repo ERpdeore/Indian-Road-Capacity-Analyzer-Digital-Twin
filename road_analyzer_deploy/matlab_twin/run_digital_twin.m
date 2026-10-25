@@ -30,7 +30,7 @@ MODEL_NAME = 'road_digital_twin';
 
 if ~isfile(slx_path)
     fprintf('road_digital_twin.slx not found — building it first...\n');
-    run(fullfile(here, 'create_digital_twin_model.m'));
+    create_digital_twin_model();
 end
 if ~isfile(json_path)
     error('run_digital_twin:badPath', 'JSON file not found: %s', json_path);

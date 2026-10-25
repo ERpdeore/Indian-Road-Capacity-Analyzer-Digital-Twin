@@ -253,10 +253,11 @@ def resolve_road_inputs(road_config: dict) -> dict:
     notes += base["notes"]
 
     # Speed used by the twin and the roughness factor: the measured
-    # operating speed, else the speed Eq. 5.4 associates with the Table 5.4
-    # lane capacity (clamped to the 40-80 km/h validity range).
-    if base["operating_speed_kmh"]:
-        v_ref, v_src = base["operating_speed_kmh"], "measured operating speed (base section)"
+    # operating speed (also on undivided roads, where it does not set C0),
+    # else the speed Eq. 5.4 associates with the Table 5.4 lane capacity
+    # (clamped to the 40-80 km/h validity range).
+    if measured:
+        v_ref, v_src = measured, "measured operating speed (base section)"
     else:
         lo, hi = hcm.SPEED_MODEL_RANGE_KMH
         v_ref = min(max(hcm.operating_speed_from_lane_capacity(rt["lane_capacity_pcu_h"]), lo), hi)
@@ -308,7 +309,7 @@ def compute_capacity(inputs: dict, width_intervals: List[Tuple[float, float]],
         out["los"] = {"observed_volume_pcu_h": v,
                       "vc_base": v / c0, "los_base": hcm.los_from_vc(v / c0, d),
                       "vc_hcm": v / c_hcm, "los_hcm": hcm.los_from_vc(v / c_hcm, d),
-                      "vc_ext": v / c_ext if c_ext > 0 else float("inf"),
+                      "vc_ext": v / c_ext if c_ext > 0 else None,   # None = fully blocked
                       "los_ext": hcm.los_from_vc(v / c_ext, d) if c_ext > 0 else "F",
                       "table": "5.7" if d else "5.6"}
     return out

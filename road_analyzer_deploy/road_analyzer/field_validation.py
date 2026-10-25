@@ -1,8 +1,9 @@
 """
 road_analyzer.field_validation
 ==============================
-Field capacity from a video survey, following Indo-HCM 2017 Chapter 5
-(Annexures 5C-5E), and comparison with the capacity the dashboard predicts.
+Field capacity from a video survey and comparison with the dashboard.
+Methods A and B follow Indo-HCM 2017 Chapter 5 (Annexures 5C-5E); method C
+is a standard traffic-flow method not given in the manual.
 
 Survey (Annex 5C/5D)
 --------------------
@@ -14,15 +15,17 @@ Survey (Annex 5C/5D)
 
 Three ways to field capacity
 ----------------------------
-A. Operating speed (5.4.5, Eq. 5.4) — any time of day, divided roads:
+A. Operating speed (5.4.5, Eq. 5.4) — divided roads; needs a period
+   light enough for >= 100 cars to have headway > 8 s:
        85th percentile speed of free cars (headway > 8 s), >= 100 cars
        C = (20.11 V + 210.8) x lanes
 B. Speed-flow fit (Annex 5E.4, Greenshields) — the method Indo-HCM used for
    Table 5.4. Needs 5-min periods covering low AND high flows:
        q = 12 x (5-min PCU),  v = space-mean speed (Eq. 5E.2),  k = q / v
        fit v = v_f - (v_f / k_j) k  ->  C = v_f k_j / 4
-C. Queue discharge — counts PAST an obstruction while a queue stands behind
-   it equal that section's capacity: C = mean(12 x 5-min PCU in queue).
+C. Queue discharge (standard traffic-flow method, NOT from Indo-HCM) —
+   counts PAST an obstruction while a queue stands behind it equal that
+   section's capacity: C = mean(12 x 5-min PCU in queue).
 Volume counted without a queue is demand, not capacity, and is used only
 for V/C and LOS.
 
@@ -40,7 +43,7 @@ from typing import Dict, List, Optional, Sequence
 
 from road_analyzer import indo_hcm as hcm
 
-TRAP_RANGE_M = (50.0, 75.0)       # Section 5.3
+TRAP_RANGE_M = (50.0, 75.0)       # Section 5.3 (Annex 5C used 60-75 m)
 INTERVAL_S = 300                  # 5-minute periods (Annex 5D/5E.1)
 
 
@@ -69,8 +72,9 @@ def add_speeds_and_headways(vehicles: List[dict], trap_m: float) -> List[dict]:
     for v in vehicles:
         v["travel_time_s"] = v["t_out"] - v["t_in"]
         v["speed_kmh"] = trap_m / v["travel_time_s"] * 3.6
-        v["headway_s"] = (v["t_in"] - prev) if prev is not None else math.inf
+        v["headway_s"] = (v["t_in"] - prev) if prev is not None else None
         prev = v["t_in"]
+
     return vehicles
 
 
@@ -82,6 +86,9 @@ def capacity_from_operating_speed(vehicles: List[dict], road_type: str) -> dict:
     cars = [v for v in vehicles if v["type"] == "car"]
     op = hcm.operating_speed([c["speed_kmh"] for c in cars], [c["headway_s"] for c in cars])
     out = {"method": "A: operating speed + Eq. 5.4", **op}
+    if op["operating_speed_kmh"] is None:
+        out["capacity_pcu_h"] = None
+        return out
     if not rt["divided"]:
         out["capacity_pcu_h"] = None
         out["warning"] = ("Eq. 5.4 applies to divided roads only; use method B for a two-lane "
@@ -101,9 +108,15 @@ def five_minute_periods(vehicles: List[dict], road_type: str, trap_m: float,
     if not vehicles:
         return []
     t0 = vehicles[0]["t_in"]
+    t_end = vehicles[-1]["t_in"]
     bins: Dict[int, List[dict]] = defaultdict(list)
     for v in vehicles:
         bins[int((v["t_in"] - t0) // INTERVAL_S)].append(v)
+    # Drop a final period the data does not fully cover: scaling a partial
+    # 5-min count by 12 would create a false low-flow point.
+    last = max(bins)
+    if t0 + (last + 1) * INTERVAL_S > t_end + 1e-9 and len(bins) > 1:
+        bins.pop(last)
     divided = hcm.ROAD_TYPES[road_type]["divided"]
     out = []
     for i in sorted(bins):
@@ -204,6 +217,8 @@ def analyse_site(vehicles_csv: str, trap_m: float, road_type: str, pcu_method: s
     """Everything a single survey video gives: operating speed + Eq. 5.4
     capacity, 5-min PCU flows, Greenshields capacity, and peak flow."""
     warnings = []
+    if trap_m <= 0:
+        raise ValueError("trap_m must be > 0.")
     if not (TRAP_RANGE_M[0] <= trap_m <= TRAP_RANGE_M[1]):
         warnings.append(f"Trap length {trap_m:g} m is outside the 50-75 m used by Indo-HCM (5.3).")
     v = add_speeds_and_headways(load_vehicles(vehicles_csv), trap_m)

@@ -44,47 +44,57 @@ _LATEST = {"twin_data": None}
 
 
 def _v_uncongested(q: float, vf: float, qmax: float) -> float:
+    if qmax <= 0:
+        return 0.0
     q = min(max(q, 0.0), qmax)
     return vf * (1 + math.sqrt(max(0.0, 1 - q / qmax))) / 2
 
 
 def _v_congested(q: float, vf: float, qmax: float) -> float:
+    if qmax <= 0:
+        return 0.0
     q = min(max(q, 0.0), qmax)
     return vf * (1 - math.sqrt(max(0.0, 1 - q / qmax))) / 2
 
 
-def _state(name: str, demand: float, cap: float, vf: float, upstream_cap: float,
+def _state(name: str, arrival: float, cap: float, vf: float, upstream_cap: float,
            upstream_vf: float, lanes: int) -> dict:
-    kj = 4 * cap / vf
+    """arrival <= upstream_cap always (the road upstream cannot deliver more
+    than its own capacity)."""
     out = {"name": name, "capacity_pcu_h": round(cap, 1), "free_flow_speed_kmh": round(vf, 1),
-           "jam_density_pcu_km": round(kj, 1), "vc_ratio": round(demand / cap, 3) if cap else None}
-    if demand <= cap:
-        v = _v_uncongested(demand, vf, cap)
-        k = demand / v if v > 0 else 0.0
+           "jam_density_pcu_km": round(4 * cap / vf, 1) if vf > 0 else None,
+           "vc_ratio": round(arrival / cap, 3) if cap > 0 else None}
+    if cap > 0 and arrival <= cap:
+        v = _v_uncongested(arrival, vf, cap)
+        k = arrival / v if v > 0 else 0.0
         out.update(state="uncongested", section_speed_kmh=round(v, 1),
                    section_density_pcu_km=round(k, 1),
                    section_density_pcu_km_lane=round(k / lanes, 1),
-                   upstream_speed_kmh=round(_v_uncongested(demand, upstream_vf, upstream_cap), 1),
+                   upstream_speed_kmh=round(_v_uncongested(arrival, upstream_vf, upstream_cap), 1),
                    queue_growth_pcu_h=0.0, shockwave_kmh=0.0)
         return out
-    # Bottleneck: discharges at capacity, queue builds upstream.
-    v_cap = vf / 2
-    k_A = demand / _v_uncongested(min(demand, upstream_cap), upstream_vf, upstream_cap)
+    # Bottleneck: discharges at C (0 if fully blocked); queue builds upstream.
+    # Arriving traffic: uncongested branch of the upstream diagram at q_A.
+    # Queue: congested branch of the upstream diagram at q = C.
+    # Shockwave (LWR): w = (C - q_A) / (k_Q - k_A), negative = tail moves upstream.
+    k_A = arrival / _v_uncongested(arrival, upstream_vf, upstream_cap)
     v_Q = _v_congested(cap, upstream_vf, upstream_cap)
-    k_Q = cap / v_Q if v_Q > 0 else 4 * upstream_cap / upstream_vf
-    w = (cap - demand) / (k_Q - k_A) if k_Q > k_A else 0.0  # km/h, negative = moves upstream
-    out.update(state="queue forming upstream", section_speed_kmh=round(v_cap, 1),
-               section_density_pcu_km=round(cap / v_cap, 1),
-               section_density_pcu_km_lane=round(cap / v_cap / lanes, 1),
+    k_Q = cap / v_Q if v_Q > 0 else 4 * upstream_cap / upstream_vf   # jam density when C = 0
+    w = (cap - arrival) / (k_Q - k_A)
+    v_sec = vf / 2 if cap > 0 else 0.0
+    out.update(state="queue forming upstream" if cap > 0 else "fully blocked",
+               section_speed_kmh=round(v_sec, 1),
+               section_density_pcu_km=round(cap / v_sec, 1) if v_sec > 0 else None,
+               section_density_pcu_km_lane=round(cap / v_sec / lanes, 1) if v_sec > 0 else None,
                upstream_speed_kmh=round(v_Q, 1),
                upstream_queue_density_pcu_km_lane=round(k_Q / lanes, 1),
-               queue_growth_pcu_h=round(demand - cap, 1), shockwave_kmh=round(w, 2))
+               queue_growth_pcu_h=round(arrival - cap, 1), shockwave_kmh=round(w, 2))
     return out
 
 
 def generate_twin_data(result: dict) -> dict:
     c0 = float(result["base_capacity_pcu_h"])
-    c = float(result["reduced_capacity_pcu_h"])
+    c = max(0.0, float(result["reduced_capacity_pcu_h"]))
     basis = result.get("capacity_basis") or {}
     v0 = float(basis.get("operating_speed_kmh") or result.get("operating_speed_kmh") or 50.0)
     lanes = int((result.get("road_config") or {}).get("num_lanes") or 2)
@@ -97,14 +107,20 @@ def generate_twin_data(result: dict) -> dict:
         demand, demand_src = float(los["observed_volume_pcu_h"]), "observed volume entered by user"
     else:
         demand = c0 * hcm.DSV_VC_RATIO
-        demand_src = "ASSUMED: LOS-C design service volume of the ideal road (0.70 x C0)"
+        demand_src = "ASSUMED: design service volume of the ideal road (0.70 x C0, Table 5.4)"
 
     warnings = []
+    arrival = demand
     if demand > c0:
-        warnings.append("Entered volume exceeds the base capacity C0 — check the count, its "
-                        "direction basis (one direction vs both) or the road type.")
-    ideal = _state("ideal", demand, c0, v0, c0, v0, lanes)
-    defect = _state("defect", demand, c, vf_def, c0, v0, lanes)
+        arrival = c0
+        warnings.append(f"Entered volume {demand:.0f} PCU/h exceeds the Indo-HCM base capacity "
+                        f"{c0:.0f} PCU/h. Either the count is on a different direction basis, or the "
+                        f"site carries more than Table 5.4 assumes (measure the operating speed). "
+                        f"The twin caps arriving flow at C0.")
+    if c <= 0:
+        warnings.append("Usable width is zero: the section is fully blocked in this model.")
+    ideal = _state("ideal", arrival, c0, v0, c0, v0, lanes)
+    defect = _state("defect", arrival, c, vf_def, c0, v0, lanes)
 
     times = list(range(0, HORIZON_MIN + 1, STEP_MIN))
     def series(st):
@@ -117,12 +133,21 @@ def generate_twin_data(result: dict) -> dict:
     T = HORIZON_MIN / 60
     for st in (ideal, defect):
         g = st["queue_growth_pcu_h"]
+        cap = st["capacity_pcu_h"]
         st["queue_after_horizon_pcu"] = round(g * T, 1)
         st["queue_length_after_horizon_m"] = round(abs(st["shockwave_kmh"]) * T * 1000, 1)
-        # mean delay of vehicles arriving during the horizon, deterministic queue
-        st["mean_queue_delay_min"] = round((g * T / (2 * demand)) * 60, 1) if g > 0 else 0.0
+        # Deterministic queue: a vehicle arriving at t waits (q_A - C) t / C;
+        # mean over arrivals in [0, T] = (q_A - C) T / (2 C).
+        if g <= 0:
+            st["mean_queue_delay_min"] = 0.0
+        elif cap > 0:
+            st["mean_queue_delay_min"] = round(g * T / (2 * cap) * 60, 1)
+        else:
+            st["mean_queue_delay_min"] = None    # nothing is discharged
 
     def fd(cap, vf):
+        if cap <= 0:
+            return {"flow_pcu_h": [0.0], "speed_kmh": [0.0]}
         flows = [cap * i / (FD_POINTS - 1) for i in range(FD_POINTS)]
         return {"flow_pcu_h": [round(q, 1) for q in flows],
                 "speed_kmh": [round(_v_uncongested(q, vf, cap), 2) for q in flows]}
@@ -130,6 +155,7 @@ def generate_twin_data(result: dict) -> dict:
     return {
         "engine": "python-macroscopic (Greenshields FD + deterministic queue + LWR shockwave)",
         "demand_pcu_h": round(demand, 1),
+        "arrival_pcu_h": round(arrival, 1),
         "demand_source": demand_src,
         "horizon_min": HORIZON_MIN,
         "ideal": ideal,
@@ -141,8 +167,9 @@ def generate_twin_data(result: dict) -> dict:
         "speed_flow": {"ideal": fd(c0, v0), "defect": fd(c, vf_def)},
         "warnings": warnings,
         "assumptions": [
-            "Greenshields single-regime fundamental diagram, calibrated to Indo-HCM capacity.",
-            "Constant demand over the horizon; no demand diversion to other routes.",
+            "Greenshields single-regime fundamental diagram, calibrated to Indo-HCM capacity "
+            "(the model Indo-HCM Annex 5E.4 uses).",
+            "Constant demand over the horizon; no diversion to other routes.",
             (f"Free-flow speed on the current road reduced to {speed_ratio*100:.0f}% by measured roughness "
              f"(extensions.roughness_factor)." if speed_ratio < 1 else
              "Obstructions reduce capacity through width; free-flow speed is unchanged (no IRI measured)."),

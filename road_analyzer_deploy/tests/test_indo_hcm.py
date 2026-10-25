@@ -60,8 +60,17 @@ def test_example_5_5_1_capacity_and_los():
     assert hcm.los_from_vc(3023 / 2520, divided=True) == "F"
 
 
-def test_example_5_5_2_los_d():
-    assert hcm.los_from_vc(5228 / 6800, divided=True) == "D"    # 0.77
+EX552 = {"two_wheeler": 2640, "auto": 858, "car": 2239, "mini_bus": 11, "bus": 81,
+         "lcv": 120, "tat": 10, "mat": 12, "tractor_trailer": 16}
+
+
+def test_example_5_5_2_corrected():
+    # The manual prints MAT 12 x 5.90 = 710 (should be 70.8), total 5228 and
+    # LOS D. With correct arithmetic the flow is ~4582 PCU/h, V/C 0.67, LOS C.
+    q = hcm.flow_pcu(EX552, "divided_8lane")["flow_pcu_h"]
+    assert q == pytest.approx(4582, abs=2)
+    assert hcm.los_from_vc(q / 6800, divided=True) == "C"
+    assert hcm.los_from_vc(5228 / 6800, divided=True) == "D"   # the printed (wrong) figure
 
 
 def test_example_5_5_3_needs_six_lane():
@@ -70,9 +79,15 @@ def test_example_5_5_3_needs_six_lane():
     assert demand <= hcm.ROAD_TYPES["divided_6lane"]["dsv_pcu_h"]
 
 
+EX554 = {"two_wheeler": 369, "auto": 168, "car": 236, "bus": 58, "mini_bus": 20, "lcv": 78,
+         "tat": 25, "mat": 75, "tractor_trailer": 2, "bicycle": 25, "cycle_rickshaw": 12}
+
+
 def test_example_5_5_4_spare_capacity():
-    # 1890 - 1459 = 431 (the manual subtracts 1457 and prints 433)
-    assert hcm.ROAD_TYPES["divided_4lane"]["dsv_pcu_h"] - 1459 == 431
+    # Manual prints 1459 and 433; Table 5.3 medians give 1453.7 -> 436 spare.
+    q = hcm.flow_pcu(EX554, "divided_4lane")["flow_pcu_h"]
+    assert q == pytest.approx(1453.7, abs=0.5)
+    assert round(hcm.ROAD_TYPES["divided_4lane"]["dsv_pcu_h"] - q) == 436
 
 
 def test_parking_classes():
@@ -89,16 +104,27 @@ def test_width_check():
 
 
 # ---------------- extensions ----------------
-def test_width_factor_overlap_and_shy():
+def test_width_factor_overlap_and_kerb_shy_counted_once():
+    # clear effective width 7.0 - 2 x 0.25 = 6.5; kerb obstruction [0, 1.2]
+    # (merged overlap) leaves 1.45 .. 6.75 = 5.3 m usable
     fw = ext.width_factor([(0.0, 1.0), (0.7, 1.2)], 7.0, 2700, True)
     assert fw["obstruction_width_m"] == pytest.approx(1.2)
-    assert fw["blocked_with_shy_m"] == pytest.approx(1.45)   # one free side
-    assert fw["F_W"] == pytest.approx((7.0 - 1.45) / 7.0)
+    assert fw["usable_width_m"] == pytest.approx(5.3)
+    assert fw["F_W"] == pytest.approx(5.3 / 6.5)
+
+
+def test_width_factor_mid_road():
+    fw = ext.width_factor([(3.0, 3.4)], 7.0, 2700, True)        # loses 0.4 + 2 x 0.25
+    assert fw["F_W"] == pytest.approx(5.6 / 6.5)
 
 
 def test_width_factor_table_slope():
     fw = ext.width_factor([(0.0, 1.0)], 7.0, 2700, True, method="table_slope")
-    assert fw["F_W"] == pytest.approx((2700 - 1.25 * 1500 / 3.5) / 2700)
+    assert fw["F_W"] == pytest.approx((2700 - 1.0 * 1500 / 3.5) / 2700)
+
+
+def test_width_factor_no_obstruction_is_one():
+    assert ext.width_factor([], 7.0, 2700, True)["F_W"] == 1.0
 
 
 def test_roughness_not_applied_on_base_quality_road():
@@ -114,7 +140,7 @@ def test_core_two_capacities():
                                     "bus_stop": "kerbside_low", "observed_volume_pcu_h": 1500})
     cap = core.compute_capacity(inp, [(0.0, 1.0)], parking_detected=True)
     assert cap["c_hcm"] == pytest.approx(2700 * 0.70 * 0.80)           # parking (assumed class) + bus stop
-    assert cap["c_ext"] == pytest.approx(cap["c_hcm"] * (7 - 1.25) / 7)
+    assert cap["c_ext"] == pytest.approx(cap["c_hcm"] * 5.5 / 6.5)
     assert cap["los"]["table"] == "5.7"
 
 
@@ -140,3 +166,87 @@ def test_greenshields_recovers_known_capacity():
 def test_error_metrics():
     m = fv.error_metrics([110, 90], [100, 100])
     assert m["mape_pct"] == pytest.approx(10) and m["bias"] == pytest.approx(0) and m["n"] == 2
+
+
+# ---------------- regressions from the independent review ----------------
+import json
+
+from road_analyzer.digital_twin_engine import generate_twin_data
+from road_analyzer.roadrunner_export import lateral_to_t
+
+
+def _result(c0, c, volume=None, v=56.6, lanes=2):
+    return {"base_capacity_pcu_h": c0, "reduced_capacity_pcu_h": c, "capacity_loss_pct": 0,
+            "capacity_basis": {"operating_speed_kmh": v}, "road_config": {"num_lanes": lanes},
+            "capacity_calculation": {"roughness": {"speed_ratio": 1.0}},
+            "level_of_service": {"observed_volume_pcu_h": volume} if volume else None}
+
+
+def test_los_band_edges():
+    assert hcm.los_from_vc(0.15, divided=True) == "B"       # Table 5.7: A is "< 0.15"
+    assert hcm.los_from_vc(0.149, divided=True) == "A"
+    assert hcm.los_from_vc(1.0, divided=True) == "E"
+    assert hcm.los_from_vc(1.01, divided=True) == "F"
+
+
+def test_full_blockage_is_json_safe_and_twin_survives():
+    inp = core.resolve_road_inputs({"road_type": "divided_4lane", "total_width_m": 7.0,
+                                    "observed_volume_pcu_h": 1500})
+    cap = core.compute_capacity(inp, [(0.0, 7.0)], parking_detected=False)
+    assert cap["c_ext"] == 0 and cap["los"]["los_ext"] == "F" and cap["los"]["vc_ext"] is None
+    json.dumps(cap["los"], allow_nan=False)
+    t = generate_twin_data(_result(2700, 0.0, 1500))
+    assert t["defect"]["state"] == "fully blocked" and t["defect"]["shockwave_kmh"] < 0
+    json.dumps(t, allow_nan=False)
+
+
+def test_twin_delay_formula():
+    # q = 2400, C = 2000, T = 1 h: mean delay = (q - C) T / (2 C) = 6.0 min
+    t = generate_twin_data(_result(2700, 2000, 2400))
+    assert t["defect"]["mean_queue_delay_min"] == pytest.approx(6.0, abs=0.05)
+
+
+def test_twin_demand_above_c0_is_consistent():
+    t = generate_twin_data(_result(2700, 2000, 3000))
+    assert t["warnings"] and t["arrival_pcu_h"] == 2700
+    assert t["ideal"]["queue_growth_pcu_h"] == 0
+    d = t["defect"]
+    assert d["queue_growth_pcu_h"] == pytest.approx(700)
+    assert (d["queue_after_horizon_pcu"] > 0) == (d["queue_length_after_horizon_m"] > 0)
+
+
+def test_lateral_to_t_divided_stays_on_road():
+    for lat in (0.0, 1.0, 3.5, 6.0, 7.0):
+        t = lateral_to_t(lat, 7.0, 2, divided=True)
+        assert -7.0 <= t <= 0.0
+    assert lateral_to_t(0.0, 7.0, 2, divided=True) == 0.0          # image-left = reference line
+
+
+def test_lateral_to_t_undivided_not_mirrored():
+    assert lateral_to_t(0.0, 7.0, 2, divided=False) == pytest.approx(3.5)   # image-left = +t edge
+    assert lateral_to_t(7.0, 7.0, 2, divided=False) == pytest.approx(-3.5)
+
+
+def test_measured_speed_kept_for_undivided_twin():
+    inp = core.resolve_road_inputs({"road_type": "undivided_2lane", "total_width_m": 7.5,
+                                    "operating_speed_kmh": 42})
+    assert inp["c0"] == 2400 and inp["v_ref"] == 42
+
+
+def test_no_free_cars_does_not_crash():
+    r = hcm.operating_speed([40, 42, 45], [2, 3, 4])
+    assert r["operating_speed_kmh"] is None and r["warning"]
+
+
+def test_first_vehicle_headway_not_counted_as_free():
+    vs = [{"type": "car", "t_in": 0.0, "t_out": 5.0}, {"type": "car", "t_in": 2.0, "t_out": 7.0}]
+    fv.add_speeds_and_headways(vs, 60)
+    assert vs[0]["headway_s"] is None
+    assert fv.capacity_from_operating_speed(vs, "divided_4lane")["capacity_pcu_h"] is None
+
+
+def test_partial_last_period_dropped():
+    vs = [{"type": "car", "t_in": float(t), "t_out": t + 4.0} for t in range(0, 420, 2)]
+    fv.add_speeds_and_headways(vs, 60)
+    periods = fv.five_minute_periods(vs, "divided_4lane", 60)
+    assert len(periods) == 1 and periods[0]["flow_pcu_h"] == pytest.approx(1800)

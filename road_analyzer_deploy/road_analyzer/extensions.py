@@ -64,40 +64,49 @@ def union_length(intervals: List[Tuple[float, float]]) -> float:
 
 def with_shy_distance(intervals: List[Tuple[float, float]], width_m: float,
                       shy_m: float = OBSTRUCTION_SHY_M) -> List[Tuple[float, float]]:
-    """Widen each obstruction by the shy distance on every side facing
-    traffic (not on a side already touching the carriageway edge)."""
-    out = []
-    for l, r in intervals:
-        nl = l - shy_m if l > 1e-6 else l
-        nr = r + shy_m if r < width_m - 1e-6 else r
-        out.append((max(0.0, nl), min(width_m, nr)))
-    return out
+    """Widen each obstruction by the shy distance on both sides, clipped to
+    the carriageway."""
+    return [(max(0.0, l - shy_m), min(width_m, r + shy_m)) for l, r in intervals]
+
+
+def effective_width(intervals: List[Tuple[float, float]], width_m: float,
+                    shy_m: float = OBSTRUCTION_SHY_M) -> float:
+    """Width actually usable by moving traffic. Indo-HCM 5.1.2 keeps a 0.25 m
+    shy band at each kerb even on a clear road, so the clear-road effective
+    width is W - 2 x 0.25. An obstruction removes its own width plus a shy
+    band on each side; where it touches the kerb its shy band overlaps the
+    kerb band and is not counted twice."""
+    bands = [(0.0, min(shy_m, width_m)), (max(0.0, width_m - shy_m), width_m)]
+    return max(width_m - union_length(bands + with_shy_distance(intervals, width_m, shy_m)), 0.0)
 
 
 def width_factor(intervals: List[Tuple[float, float]], width_m: float, c_base: float,
                  divided: bool, method: str = "proportional") -> dict:
-    """F_W for the obstructions occupying [left, right] intervals (metres
-    across the carriageway). Overlaps are merged, so shared space is never
-    counted twice."""
+    """F_W for obstructions occupying [left, right] intervals (metres across
+    the carriageway). Overlaps are merged, so shared space is never counted
+    twice.
+        proportional: F_W = effective width with obstructions / clear effective width
+        table_slope : F_W = (C0 - lost effective width x 428.6) / C0"""
+    clear = effective_width([], width_m)
+    usable = effective_width(intervals, width_m)
+    lost = max(clear - usable, 0.0)
     blocked_raw = min(union_length(intervals), width_m)
-    blocked = min(union_length(with_shy_distance(intervals, width_m)), width_m)
-    usable = max(width_m - blocked, 0.0)
     if method == "table_slope" and divided:
-        loss = blocked * TABLE_5_4_SLOPE_PCU_PER_M
-        f = max(0.0, (c_base - loss) / c_base) if c_base > 0 else 1.0
+        f = max(0.0, (c_base - lost * TABLE_5_4_SLOPE_PCU_PER_M) / c_base) if c_base > 0 else 1.0
         used = "table_slope"
     else:
-        f = usable / width_m if width_m > 0 else 1.0
+        f = usable / clear if clear > 0 else 1.0
         used = "proportional"
     note = None
     if method == "table_slope" and not divided:
         note = "Table-slope method needs two divided rows of Table 5.4; proportional used for undivided."
-    if usable < hcm.LANE_WIDTH_M:
+    if intervals and usable < hcm.LANE_WIDTH_M:
         note = (note + " " if note else "") + (
             f"Usable width {usable:.2f} m is below one 3.5 m lane: the section is near blockage "
             f"and the factor is outside any calibrated range.")
     return {"F_W": f, "method": used, "obstruction_width_m": blocked_raw,
-            "blocked_with_shy_m": blocked, "usable_width_m": usable, "note": note}
+            "blocked_with_shy_m": lost, "usable_width_m": usable,
+            "clear_effective_width_m": clear, "note": note}
 
 
 # ------------------------------------------------------------------

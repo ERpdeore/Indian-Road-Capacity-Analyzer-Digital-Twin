@@ -233,7 +233,8 @@ def road_form(
     cfg = {
         "total_width_m": float(total_width_m),
         "road_type": road_type,
-        "iri_m_per_km": _opt_float(iri_m_per_km, "iri_m_per_km"),
+        "iri_m_per_km": (None if str(iri_m_per_km or "").strip() in ("", "0", "0.0")
+                         else _opt_float(iri_m_per_km, "iri_m_per_km")),
         "width_method": width_method,
         "operating_speed_kmh": _opt_float(operating_speed_kmh, "operating_speed_kmh"),
         "observed_volume_pcu_h": _opt_float(observed_volume_pcu_h, "observed_volume_pcu_h"),
@@ -876,6 +877,8 @@ def field_analyse(
 ):
     if road_type not in hcm.ROAD_TYPES:
         raise HTTPException(400, f"Unknown road_type '{road_type}'.")
+    if trap_m <= 0:
+        raise HTTPException(400, "trap_m must be > 0.")
     if pcu_method not in ("table", "se"):
         raise HTTPException(400, "pcu_method must be 'table' or 'se'.")
     job_id, job_dir = _new_job("field")
@@ -884,8 +887,8 @@ def field_analyse(
         shutil.copyfileobj(file.file, f)
     try:
         res = fv.analyse_site(str(dest), trap_m, road_type, pcu_method)
-    except (ValueError, KeyError) as e:
-        raise HTTPException(400, f"Could not read survey file: {e}")
+    except (ValueError, KeyError, ZeroDivisionError) as e:
+        raise HTTPException(400, f"Could not analyse survey file: {e}")
     res["job_id"] = job_id
     return res
 

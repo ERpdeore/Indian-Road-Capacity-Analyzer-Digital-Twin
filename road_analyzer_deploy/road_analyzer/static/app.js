@@ -631,7 +631,6 @@
     const perDefect = data.per_defect || {};
     const totalWidth = cfg.total_width_m || 0;
     const segments = Object.keys(perDefect)
-      .filter((n) => n !== "pothole")
       .map((name, i) => ({ name, blocked_m: perDefect[name].blocked_m || 0, color: colorFor(name, i),
                            mech: perDefect[name].mechanism }))
       .filter((s) => s.blocked_m > 0.001)
@@ -651,12 +650,12 @@
     }
     const legendHTML =
       segments.map((seg) => `<div class="leg"><span class="dot" style="background:${seg.color}"></span>${titleCase(seg.name)} · ${fmt(seg.blocked_m,2)} m · ${seg.mech}</div>`).join("") +
-      `<div class="leg"><span class="dot" style="background:var(--green)"></span>Usable for F<sub>W</sub> (after 0.25 m shy distance) · ${fmt(usable,2)} m</div>`;
+      `<div class="leg"><span class="dot" style="background:var(--green)"></span>Usable width after 0.25 m shy bands at kerbs and obstructions · ${fmt(usable,2)} m</div>`;
 
     return `
       <div class="card roadbar-card">
         <div class="card-title">Carriageway Width</div>
-        <div class="card-sub">Physical occupation across the carriageway. Parked vehicles are shown but act through the Indo-HCM parking factor, not the width factor; potholes act through speed.</div>
+        <div class="card-sub">Physical occupation across the carriageway. Vendors, carts, garbage, barricades and potholes act through the width factor F<sub>W</sub>; parked vehicles are shown but act only through the Indo-HCM parking factor F<sub>OP</sub>.</div>
         <div class="roadbar">${barHTML}</div>
         <div class="roadbar-meta"><span>Total: ${fmt(totalWidth,2)} m</span><span>Width-class obstructions: ${fmt(calc.obstruction_width_m,2)} m</span><span>Usable: ${fmt(usable,2)} m</span></div>
         <div class="roadbar-legend">${legendHTML}</div>
@@ -781,7 +780,7 @@
         <div class="depth-summary">
           <span class="depth-sev depth-${size.worst_size_class}">${size.worst_size_class.toUpperCase()} POTHOLE</span>
           <span class="depth-detail">small ${size.counts.small} · medium ${size.counts.medium} · large ${size.counts.large}
-            · assumed speed drop ${fmt(size.assumed_speed_reduction_pct,0)}% · ${size.classification}</span>
+            · ${size.classification}</span>
         </div>` : "";
       const rec = d.rectification;
       const rectHTML = rec ? `

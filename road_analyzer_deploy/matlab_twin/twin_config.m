@@ -18,9 +18,9 @@ cfg.traffic.seed           = 7;      % fixed seed -> identical traffic every run
 cfg.traffic.rightLanesTravelPlusX = true;   % OpenDRIVE default: lanes with t<0 drive +x
 % Fallbacks used only when no capacity JSON is found
 cfg.traffic.defaultDensityPcuKmLane = 30;   % ~ LOS-C density on a 50 km/h urban arterial
-cfg.traffic.defaultAvgPcu           = 0.80; % matches indo_hcm.DEFAULT_COMPOSITION, divided road
-% Assumed Indian urban mix (same shares as road_analyzer/indo_hcm.py
-% DEFAULT_COMPOSITION; autos and LCVs are drawn as vans, two-wheelers as
+cfg.traffic.defaultAvgPcu           = 0.75; % extensions.ASSUMED_COMPOSITION x Indo-HCM Table 5.3, four-lane divided
+% Assumed Indian urban mix (same shares as road_analyzer/extensions.py
+% ASSUMED_COMPOSITION; autos and LCVs are drawn as vans, two-wheelers as
 % two-wheelers). Replace with your classified count.
 cfg.traffic.mix      = struct('twoWheeler',0.55,'car',0.25,'van',0.14,'bus',0.03,'truck',0.03);
 % Typical lengths (m), used to space vehicles so they never overlap
