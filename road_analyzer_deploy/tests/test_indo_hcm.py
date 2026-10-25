@@ -312,3 +312,20 @@ def test_ch2_field_method_a_and_se_rejected():
     assert a["capacity_pcu_h"] == pytest.approx(187 + 12.4 * a["operating_speed_kmh"])
     with pytest.raises(ValueError):
         fv.five_minute_periods(vs, "single_lane", 60, "se")
+
+
+# ---------------- detector post-processing ----------------
+def test_cross_class_duplicate_keeps_more_confident():
+    dets = [{"cls_name": "barricade", "conf": 0.8, "xyxy": (0, 0, 100, 100)},
+            {"cls_name": "illegal_parking", "conf": 0.6, "xyxy": (5, 5, 100, 100)},
+            {"cls_name": "pothole", "conf": 0.7, "xyxy": (200, 200, 260, 240)},
+            {"cls_name": "vehicle", "conf": 0.9, "xyxy": (0, 0, 100, 100)}]
+    kept, dropped = core.suppress_cross_class(dets)
+    names = sorted(d["cls_name"] for d in kept)
+    assert dropped == 1 and names == ["barricade", "pothole", "vehicle"]
+
+
+def test_class_thresholds_file_overrides_defaults(tmp_path):
+    (tmp_path / "class_thresholds.json").write_text('{"pothole": 0.3, "cart": 5}')
+    t = core.load_class_thresholds(str(tmp_path / "best.pt"))
+    assert t["pothole"] == 0.3 and t["cart"] == core.CONF_THRESHOLDS["cart"]

@@ -1,0 +1,81 @@
+# ------------------------------------------------------------------
+# Class map for merging Roboflow datasets into ONE clean dataset.
+#
+# YOLO label files store only a NUMBER per box. Each Roboflow dataset
+# gives its numbers its own meaning (in one, 1 = pothole; in another,
+# 1 = barricade). merge_datasets.py never trusts the numbers: it reads
+# each dataset's own data.yaml, turns every number back into its NAME,
+# and then maps the name to the master list below.
+#
+# Edit only the parts marked EDIT.
+# ------------------------------------------------------------------
+
+# Master classes. ORDER MATTERS: it must match road_analyzer/core.py
+# CLASS_NAMES, so the trained best.pt works in the dashboard unchanged.
+master:
+  - barricade
+  - pothole
+  - illegal_parking      # label rule: any vehicle STANDING at the road edge / on the
+                         # carriageway (parked). Legality cannot be seen in a photo.
+  - street_vendor
+  - cart
+  - garbage
+  - vehicle              # moving traffic; used by the app only to veto vendor/cart
+
+# Names that mean the same master class in ANY dataset.
+# Names are compared after lower-casing and turning spaces/hyphens into "_".
+synonyms:
+  barricade: [barricade, barricades, barrier, barriers, road_barrier, traffic_barrier,
+              road_block, roadblock, traffic_cone, cone, cones, construction_barrier,
+              jersey_barrier, police_barricade]
+  pothole: [pothole, potholes, pot_hole, pot_holes, pothole_road, road_pothole]
+  illegal_parking: [illegal_parking, illegal_parked, parked_car, parked_vehicle,
+                    parked_bike, parked_two_wheeler, wrong_parking, no_parking_violation,
+                    parking_violation]
+  street_vendor: [street_vendor, vendor, vendors, hawker, hawkers, stall, street_stall,
+                  food_stall, encroachment_vendor]
+  cart: [cart, carts, handcart, hand_cart, push_cart, pushcart, thela]
+  garbage: [garbage, trash, waste, litter, debris, garbage_dump, garbage_pile, dump]
+  vehicle: [vehicle, vehicles, moving_vehicle]
+
+# Names that are ambiguous: they mean different things in different
+# datasets ("car" in a parking dataset = illegal_parking, in a traffic
+# dataset = vehicle). The script STOPS if it meets one of these and you
+# have not decided it for that dataset under `datasets:` below.
+ambiguous: [car, cars, bike, bikes, motorcycle, motorbike, two_wheeler, scooter,
+            auto, auto_rickshaw, rickshaw, truck, bus, van, tempo, jeep, suv]
+
+# Names to delete everywhere (boxes removed, image kept).
+# WARNING: deleting a class teaches the model that those objects are
+# background. Fine for "person"; NOT fine for anything that looks like
+# one of the master classes.
+drop: [person, people, pedestrian, crack, cracks, alligator_crack, longitudinal_crack,
+       transverse_crack, manhole, road, lane, sign, traffic_sign, signboard, tree,
+       animal, cow, dog]
+# Class names that are only numbers ('0', '1', ...) say nothing; the script
+# stops and asks you to map them per dataset after looking at the images.
+
+# EDIT: one entry per downloaded dataset folder (Roboflow "YOLOv8" export).
+# path:   folder that contains data.yaml (absolute, or relative to this file)
+# map:    decisions for THIS dataset only; overrides synonyms/drop.
+#         value = a master class name, or "drop".
+# role:   train (default) -> split into train/valid
+#         test            -> every image goes to the TEST split untouched
+#                            (use for your own Nashik photos)
+# priority: when the same photo appears in two datasets, the copy from
+#         the dataset listed FIRST is kept.
+datasets:
+  - name: potholes
+    path: raw/pothole_dataset
+  - name: barricades
+    path: raw/barricade_dataset
+  - name: parking
+    path: raw/parking_dataset
+    map: {car: illegal_parking, bike: illegal_parking, motorcycle: illegal_parking}
+  - name: vendors
+    path: raw/vendor_dataset
+  - name: garbage
+    path: raw/garbage_dataset
+  # - name: nashik_own
+  #   path: raw/nashik_own
+  #   role: test

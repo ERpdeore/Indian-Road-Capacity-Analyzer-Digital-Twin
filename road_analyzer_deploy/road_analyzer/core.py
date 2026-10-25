@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -83,6 +84,23 @@ CONF_THRESHOLDS: Dict[str, float] = {
     "vehicle":         0.40,
 }
 DEFAULT_CONF = 0.45
+THRESHOLDS_FILE = "class_thresholds.json"   # written by training/evaluate.py, next to best.pt
+CROSS_CLASS_IOU = 0.60                      # one object, two obstruction labels -> keep one
+
+
+def load_class_thresholds(model_path: str) -> Dict[str, float]:
+    """CONF_THRESHOLDS, overridden by class_thresholds.json beside the model
+    (per-class best-F1 thresholds measured on the validation split)."""
+    out = dict(CONF_THRESHOLDS)
+    f = Path(model_path).with_name(THRESHOLDS_FILE)
+    if f.exists():
+        try:
+            tuned = {k: float(v) for k, v in json.loads(f.read_text()).items() if 0 < float(v) < 1}
+            out.update(tuned)
+            logger.info("Per-class thresholds from %s: %s", f, tuned)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.warning("Ignoring %s (%s)", f, e)
+    return out
 
 # ================================================================
 # Maintenance / enforcement actions per defect class.
@@ -172,6 +190,25 @@ def iou(boxA: Tuple[float, float, float, float],
     areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
     denom = areaA + areaB - inter
     return inter / denom if denom > 0 else 0.0
+
+
+def suppress_cross_class(detections: List[dict],
+                         classes: Tuple[str, ...] = tuple(OBSTRUCTION_CLASSES),
+                         iou_threshold: float = CROSS_CLASS_IOU) -> Tuple[List[dict], int]:
+    """YOLO's NMS works within a class, so one barricade can come out as both
+    'barricade' and 'illegal_parking'. Among obstruction classes, when two
+    boxes of DIFFERENT classes cover the same object, keep the more
+    confident one. 'vehicle' is left out: the vendor/cart veto needs it."""
+    cand = sorted((d for d in detections if d["cls_name"] in classes), key=lambda d: -d["conf"])
+    kept: List[dict] = []
+    dropped = 0
+    for d in cand:
+        if any(k["cls_name"] != d["cls_name"] and iou(k["xyxy"], d["xyxy"]) >= iou_threshold
+               for k in kept):
+            dropped += 1
+            continue
+        kept.append(d)
+    return kept + [d for d in detections if d["cls_name"] not in classes], dropped
 
 
 def apply_vehicle_veto(detections: List[dict],
@@ -340,6 +377,14 @@ class RoadAnalyzer:
         if missing:
             logger.warning("Model is missing expected classes: %s", sorted(missing))
         logger.info("RoadAnalyzer: model loaded from %s (classes=%s)", self.model_path, sorted(names))
+        self.thresholds = load_class_thresholds(self.model_path)
+        # Inference size: ROAD_INFER_IMGSZ, else the size the model was trained at, else 640.
+        env = os.environ.get("ROAD_INFER_IMGSZ")
+        trained = (getattr(self.model, "overrides", None) or {}).get("imgsz")
+        try:
+            self.imgsz = int(env or trained or 640)
+        except (TypeError, ValueError):
+            self.imgsz = 640
 
     def _get_depth_estimator(self) -> "PotholeDepthEstimator":
         if self._depth_estimator is None:
@@ -348,19 +393,22 @@ class RoadAnalyzer:
 
     def _detect(self, image_bgr, image_label: str = "") -> Tuple[List[dict], int]:
         self._call_count += 1
-        pred = self.model.predict(image_bgr, conf=0.25, verbose=False,
-                                  imgsz=640, device="cpu", half=False)[0]
+        floor = min(0.25, min(self.thresholds.values()))
+        pred = self.model.predict(image_bgr, conf=floor, verbose=False,
+                                  imgsz=self.imgsz, device="cpu", half=False)[0]
         boxes = pred.boxes
         raw = []
         if boxes is not None:
             for box in boxes:
                 cls_name = self.model.names[int(box.cls[0])]
                 conf = float(box.conf[0])
-                if conf < CONF_THRESHOLDS.get(cls_name, DEFAULT_CONF):
+                if conf < self.thresholds.get(cls_name, DEFAULT_CONF):
                     continue
                 raw.append({"cls_name": cls_name, "conf": conf,
                             "xyxy": tuple(float(v) for v in box.xyxy[0])})
+        raw, merged = suppress_cross_class(raw)
         kept, vetoed = apply_vehicle_veto(raw)
+        vetoed += merged
         logger.info("detect: call#%d image=%s kept=%d vetoed=%d",
                     self._call_count, image_label, len(kept), vetoed)
         return kept, vetoed

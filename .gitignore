@@ -4,3 +4,9 @@ road_analyzer_deploy/road_analyzer/results/img_*/
 road_analyzer_deploy/road_analyzer/results/batch_*/
 road_analyzer_deploy/road_analyzer/results/video_*/
 road_analyzer_deploy/road_analyzer/results/field_*/
+training/raw/
+training/merged*/
+training/runs/
+training/audit*/
+training/evaluation/
+training/*.pt
