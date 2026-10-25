@@ -95,13 +95,14 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     % capacity summary if this is a corridor file, then to a fixed
     % default if neither exists, so the demo still works either way.
     [xodrFolder, xodrBase] = fileparts(xodr_path);
-    isCorridor = contains(xodrBase, 'corridor');
+    % Strip only the export SUFFIX (_roadrunner / _roadrunner_ideal), never
+    % text inside the photo's own name.
+    isCorridor = startsWith(xodrBase, 'roadrunner_corridor');
     if isCorridor
         capacityJsonPath = fullfile(xodrFolder, 'roadrunner_corridor_capacity.json');
     else
-        xodrBase = erase(xodrBase, '_ideal');
-        xodrBase = erase(xodrBase, '_roadrunner');
-        capacityJsonPath = fullfile(xodrFolder, [xodrBase '_roadrunner_capacity.json']);
+        stem = regexprep(xodrBase, '_roadrunner(_ideal)?$', '');
+        capacityJsonPath = fullfile(xodrFolder, [stem '_roadrunner_capacity.json']);
     end
 
     % Real road length, read straight from the .xodr's own <road length="...">

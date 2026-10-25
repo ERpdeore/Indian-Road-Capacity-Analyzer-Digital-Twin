@@ -37,10 +37,12 @@ function add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m
     cfg   = twin_config();  dc = cfg.defect;
     nLanes = max(1, round(getOpt(opts, 'numLanes', 2)));
     laneW  = totalWidth_m / nLanes;
-    nLeft  = ceil(nLanes/2);  nRight = nLanes - nLeft;
+    % Same lane split as roadrunner_export.py: a divided-road carriageway has
+    % all lanes on the right (t from -W to 0); an undivided road is split.
+    if logical(getOpt(opts, 'divided', false)), nLeft = 0; else, nLeft = ceil(nLanes/2); end
+    nRight = nLanes - nLeft;
     tLeft  =  nLeft  * laneW;                 % road edges in the .xodr (t, metres)
     tRight = -nRight * laneW;
-    tMid   = (tLeft + tRight) / 2;            % equals 0 for an even lane count
     scenarioFile = char(getOpt(opts, 'scenarioFile', 'nonideal_traffic.rrscenario'));
 
     n = numel(defectPositions);
@@ -70,10 +72,11 @@ function add_defects_to_scene(rrApp, defectPositions, totalWidth_m, roadLength_m
             W  = min(max(measuredW * p.scale, p.minWidth_m),  0.9 * totalWidth_m);
             Lg = min(max(measuredW * p.scale, p.minLength_m), maxLen_m);
 
-            % Lateral position: REAL measurement (same formula as
-            % roadrunner_export.py), shifted so it stays on the real road for
-            % odd lane counts too, and clamped so the footprint stays on the road.
-            tCenter = tMid + (d.lateral_m - totalWidth_m / 2);
+            % Lateral position: measured from the photo's left edge; the photo
+            % looks along +s, so image-left is the road's left edge (tLeft).
+            % Same formula as roadrunner_export.lateral_to_t. Clamped so the
+            % enlarged footprint stays on the road.
+            tCenter = tLeft - d.lateral_m;
             tCenter = min(max(tCenter, tRight + W/2), tLeft - W/2);
 
             posX = margin_m + (i - 0.5) * spacing_m;       % cosmetic spread along the road

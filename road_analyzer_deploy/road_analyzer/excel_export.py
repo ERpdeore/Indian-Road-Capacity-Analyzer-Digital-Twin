@@ -20,7 +20,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
-from .roadrunner_export import DEFAULT_SEGMENT_LENGTH_M, _flatten_defects
+from .roadrunner_export import DEFAULT_SEGMENT_LENGTH_M, _flatten_defects, _is_divided, lateral_to_t
 
 
 def _defect_coords(result: dict, segment_length_m: float = DEFAULT_SEGMENT_LENGTH_M) -> list[dict]:
@@ -45,7 +45,8 @@ def _defect_coords(result: dict, segment_length_m: float = DEFAULT_SEGMENT_LENGT
             "lateral_m":  round(d["lateral_m"], 3),
             "width_m":    round(d["width_m"], 3),
             "s_m":        round(start_s + i * step_s, 2),   # along-road position in the .xodr
-            "t_m":        round(d["lateral_m"] - total_width_m / 2, 2),  # centerline-relative offset in the .xodr
+            "t_m":        round(lateral_to_t(d["lateral_m"], total_width_m, int(cfg.get("num_lanes", 2)),
+                                             _is_divided(result)), 2),   # same t as the .xodr
         })
     return rows
 
@@ -65,7 +66,7 @@ def export_defects_excel(result: dict, out_path: str,
     ws = wb.active
     ws.title = "Defects"
     headers = ["#", "Defect type", "Lateral position (m from left edge)",
-               "Width (m)", "RoadRunner s (m, along road)", "RoadRunner t (m, from centerline)"]
+               "Width (m)", "RoadRunner s (m, along road)", "RoadRunner t (m, from reference line)"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")

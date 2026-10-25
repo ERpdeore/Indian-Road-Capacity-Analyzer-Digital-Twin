@@ -3,9 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Indian Road Capacity Analyzer — Indo-HCM 2017</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<title>Indian Road Capacity Analyzer</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -15,7 +13,7 @@
       <div class="brand-mark"></div>
       <div class="brand-text">Indian Road Capacity Analyzer</div>
     </div>
-    <div class="topbar-sub mono">Indo-HCM 2017 (urban roads) &middot; AI Defect Detection &middot; Digital Twin</div>
+    <div class="topbar-sub">Urban road capacity by Indo-HCM 2017, with obstruction detection and a digital twin</div>
   </div>
 
   <div class="wrap">
@@ -82,7 +80,7 @@
 
           <!-- photo tips -->
           <div class="photo-tips-box">
-            <div class="photo-tips-title">📷 For best detection accuracy</div>
+            <div class="photo-tips-title">For the best detection</div>
             <ul class="photo-tips-list">
               <li>Look <b>along</b> the road, not across it — the app maps image width to carriageway width</li>
               <li>Frame the shot so the two carriageway edges (kerbs) sit at the left and right borders</li>
@@ -94,7 +92,7 @@
 
         <!-- RIGHT: road parameters form -->
         <form class="config-col" id="config-form">
-          <div class="config-title mono">1 · REQUIRED</div>
+          <div class="config-title">Road details</div>
           <div class="field-grid">
             <div class="field">
               <label for="data_collection_date">Date of data collection</label>
@@ -124,7 +122,7 @@
             </div>
           </div>
 
-          <div class="config-title mono">2 · INDO-HCM SIDE FRICTION (Eq. 5.5) — leave "none" if absent</div>
+          <details class="config-group" open><summary class="config-title">Side friction (Indo-HCM Eq. 5.5) <span class="config-hint">leave as none if absent</span></summary>
           <div class="field-grid">
             <div class="field field-wide">
               <label for="on_street_parking">On-street parking F<sub>OP</sub> (Tables 5.9 / 5.10)</label>
@@ -141,7 +139,8 @@
             </div>
           </div>
 
-          <div class="config-title mono">3 · FIELD DATA (optional)</div>
+          </details>
+          <details class="config-group" open><summary class="config-title">Field data <span class="config-hint">optional</span></summary>
           <div class="field-grid">
             <div class="field">
               <label for="operating_speed_kmh">Operating speed at a base section (km/h)</label>
@@ -157,7 +156,8 @@
             </div>
           </div>
 
-          <div class="config-title mono">4 · PROJECT EXTENSIONS (not Indo-HCM)</div>
+          </details>
+          <details class="config-group"><summary class="config-title">Project extensions <span class="config-hint">not part of Indo-HCM</span></summary>
           <div class="field-grid">
             <div class="field">
               <label for="width_method">Width-loss method (F<sub>W</sub>)</label>
@@ -172,20 +172,22 @@
             </div>
           </div>
 
+          </details>
+
           <!-- Live base-capacity preview -->
           <div class="dsv-preview" id="dsv-preview" style="display:none;">
-            <span class="dsv-label mono">BASE CAPACITY C0 — Indo-HCM, before side friction</span>
+            <span class="dsv-label">Base capacity C0, Indo-HCM, before side friction</span>
             <div class="dsv-row">
               <span class="dsv-value" id="dsv-value">—</span>
               <span class="dsv-unit" id="dsv-unit">PCU / h</span>
             </div>
-            <div class="dsv-note mono" id="dsv-note"></div>
+            <div class="dsv-note" id="dsv-note"></div>
           </div>
 
           <button type="submit" class="run-btn" id="run-btn">
             <span id="run-btn-label">Run analysis</span>
           </button>
-          <div class="model-status mono" id="model-status"></div>
+          <div class="model-status" id="model-status" role="status"></div>
         </form>
       </div>
     </section>
@@ -207,10 +209,15 @@
         <div class="dt-title">Digital Twin — same demand, ideal road vs current road</div>
         <div class="dt-status-badge done" id="dt-status-badge">Computed</div>
       </div>
-      <div class="dt-subtitle mono" id="dt-demand-line">—</div>
+      <div class="dt-subtitle" id="dt-demand-line">—</div>
+      <div class="dt-demand">
+        <label for="dt-demand-slider">Try a different traffic level: <strong><output id="dt-demand-out">—</output> PCU/h</strong></label>
+        <input type="range" id="dt-demand-slider" min="0" max="3000" step="10">
+        <div class="dt-demand-scale"><span>0</span><span id="dt-demand-max">—</span></div>
+      </div>
       <div class="dt-road-compare">
         <div class="dt-road-card ideal">
-          <div class="dt-road-label">IDEAL ROAD — no obstructions</div>
+          <div class="dt-road-label">Ideal road, no obstructions</div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-ideal-cap">—</span><span class="dt-stat-unit">PCU/h</span><span class="dt-stat-label">Capacity C0</span></div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-ideal-vc">—</span><span class="dt-stat-unit"></span><span class="dt-stat-label">Demand / capacity</span></div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-ideal-speed">—</span><span class="dt-stat-unit">km/h</span><span class="dt-stat-label">Stream speed at demand</span></div>
@@ -223,7 +230,7 @@
           </div>
         </div>
         <div class="dt-road-card defect">
-          <div class="dt-road-label">CURRENT ROAD — detected obstructions</div>
+          <div class="dt-road-label">Current road, with detected obstructions</div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-cap">—</span><span class="dt-stat-unit">PCU/h</span><span class="dt-stat-label">Capacity incl. extensions</span></div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-vc">—</span><span class="dt-stat-unit"></span><span class="dt-stat-label">Demand / capacity</span></div>
           <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-speed">—</span><span class="dt-stat-unit">km/h</span><span class="dt-stat-label" id="dt-defect-speed-label">Speed at the section</span></div>
@@ -237,22 +244,20 @@
             <canvas id="dt-cap-chart" width="500" height="200"></canvas>
           </div>
           <div class="dt-chart-wrap">
-            <div class="dt-chart-label">Speed (km/h) vs flow (PCU/h) — uncongested branch</div>
+            <div class="dt-chart-label">Speed (km/h) against flow (PCU/h)</div>
             <canvas id="dt-spd-chart" width="500" height="200"></canvas>
           </div>
         </div>
       </div>
-      <div class="dt-speed-section mono" id="dt-notes"></div>
+      <div class="dt-speed-section" id="dt-notes"></div>
     </section>
 
   </div>
 
-  <footer class="mono">
-    Indo-HCM capacity: C<sub>HCM</sub> = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), C0 from Table 5.4 or Eq. 5.4 ·
-    Extended: C = C<sub>HCM</sub> × F<sub>W</sub> × F<sub>R</sub> — project extensions for obstructions Indo-HCM does not cover; field validation required ·
-    Pothole size per IRC:82-2015, width only ·
-    LOS is shown only when a traffic volume is entered ·
-    Pilot-study tool — not a substitute for a full traffic survey.
+  <footer>
+    Indo-HCM capacity: C<sub>HCM</sub> = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), with C0 from Table 5.4 or Eq. 5.4.
+    Project extensions multiply it by F<sub>W</sub> (lost width) and F<sub>R</sub> (roughness) for obstructions Indo-HCM does not cover; these need field validation.
+    Pothole size follows IRC:82-2015 by width only. A pilot tool, not a substitute for a traffic survey.
   </footer>
 
   <script src="/static/app.js"></script>

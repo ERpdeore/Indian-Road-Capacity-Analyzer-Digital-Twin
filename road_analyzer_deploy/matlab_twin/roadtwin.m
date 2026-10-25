@@ -138,8 +138,11 @@ LYD = arrayfun(@(l) TD + (l-0.5)*LH, 1:NUM_LANES);
 % 1 drawing unit ~ 1 m; 0.18 is only the animation time scale.
 SI   = IDEAL_SPD/3.6*0.18;
 SD   = QUEUE_SPD/3.6*0.18;
-SPCI = max(1000*AVG_PCU/max(K_IDEAL_LANE,1)*NUM_LANES, VW+2);  % spacing in the drawn stream
-SPCD = max(1000*AVG_PCU/max(K_QUEUE_LANE,1)*NUM_LANES, VW+1);
+% Vehicles share one x-array and are dealt to lanes in turn, so per-lane
+% spacing = NUM_LANES x SPCI. Per-lane spacing must be 1000*AVG_PCU/k_lane,
+% hence the division by NUM_LANES.
+SPCI = max(1000*AVG_PCU/max(K_IDEAL_LANE,1)/NUM_LANES, VW+2);
+SPCD = max(1000*AVG_PCU/max(K_QUEUE_LANE,1)/NUM_LANES, VW+1);
 
 VXI = (-SPCI*(NV-1) : SPCI : 0)';
 VXD = (-SPCD*(NV-1) : SPCD : 0)';

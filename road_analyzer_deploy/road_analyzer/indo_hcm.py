@@ -4,8 +4,8 @@ road_analyzer.indo_hcm
 Indo-HCM 2017 (CSIR-CRRI), Chapter 5 "Urban Roads" — and nothing else.
 
 Every constant below carries the table / equation / section it comes from.
-Nothing in this module is a project assumption; the project's own
-extensions live in road_analyzer/extensions.py.
+The project's own extensions live in road_analyzer/extensions.py. The only
+choices made here (not stated by the manual) are marked "CHOICE:".
 
 Scope (Section 5.1)
 -------------------
@@ -23,23 +23,27 @@ Method (Fig. 5.2)
                          cars measured on a BASE section (divided roads only)
 3. Actual capacity    — C = C0 x F_OP x F_BS x F_AC            (Eq. 5.5)
 4. LOS                — V/C and % of FFS bands (Tables 5.6, 5.7)
-5. Design Service Volume = capacity at LOS-C = 0.70 C          (Table 5.4)
+5. Design Service Volume = 0.70 C (every row of Table 5.4, described as
+   "computed for LOS-C"). Note: Table 5.7 puts the divided-road LOS-C upper
+   limit at V/C 0.75, so 0.70 is the manual's DSV ratio, not the LOS-C limit
+   on divided roads; for two-lane undivided (Table 5.6) they coincide.
 
-Advantages: calibrated on 68 sections in 10 Indian metro cities with mixed,
+Advantages: calibrated on 67 sections (Table 5.1: 31 base + 36 non-base) in
+10 Indian metro cities with mixed,
 lane-less traffic; needs only width + side-friction description, or a car
 free-speed survey.
 Limitations (read before citing):
 * Values are national medians; Table 5.1 shows small samples (2 base
   sections for two-lane undivided, 3 for ten-lane).
-* 8- and 10-lane values only apply where signal spacing is 1-3 km (5.4.4.2).
+* 8- and 10-lane values come from sections with signal spacing of 1-3 km and
+  apply "for similar site conditions" (5.4.4.2). The ten-lane lane capacity
+  (2000 PCU/h) corresponds to 89 km/h under Eq. 5.4, above its 80 km/h range.
 * Eq. 5.4 is valid for base sections, divided roads, 40-80 km/h only.
 * Side friction is limited to on-street parking, bus stops and access
   points; there are no factors for vendors, encroachment, potholes,
   pedestrians, roughness or work zones on urban roads.
-* Known misprints in the printed manual (checked against its own data):
-  Example 5.5.1 dynamic-PCU total is printed as 3153 PCU/h but its column
-  sums to ~3214; several examples cite the wrong table numbers; 5.4.7.1
-  refers to "Table 5.8/5.9" for parking where Tables 5.9/5.10 are meant.
+* Misprints in the printed manual are listed in docs/METHODOLOGY.md section 7
+  (Eq. 5E.4 inverted; Examples 5.5.1, 5.5.2 and 5.5.4 arithmetic).
 """
 
 from __future__ import annotations
@@ -83,16 +87,18 @@ ROAD_TYPES: Dict[str, dict] = {
         "label": "Eight-lane divided", "lanes": 4, "divided": True,
         "basis": "one direction", "paved_width_m": 14.0, "ref_width_m": 14.5,
         "capacity_pcu_h": 6800, "lane_capacity_pcu_h": 1700, "dsv_pcu_h": 4760,
-        "condition": "Valid only where signal spacing is 1-3 km (Section 5.4.4.2).",
+        "condition": "Derived from sections with 1-3 km signal spacing; applies to similar "
+                     "site conditions (Section 5.4.4.2).",
     },
     "divided_10lane": {
         "label": "Ten-lane divided", "lanes": 5, "divided": True,
         "basis": "one direction", "paved_width_m": 17.5, "ref_width_m": 18.0,
         "capacity_pcu_h": 10000, "lane_capacity_pcu_h": 2000, "dsv_pcu_h": 7000,
-        "condition": "Valid only where signal spacing is 1-3 km (Section 5.4.4.2).",
+        "condition": "Derived from sections with 1-3 km signal spacing; applies to similar "
+                     "site conditions (Section 5.4.4.2).",
     },
 }
-DSV_VC_RATIO = 0.70   # every row of Table 5.4: DSV / capacity = 0.70 (LOS-C)
+DSV_VC_RATIO = 0.70   # every row of Table 5.4: DSV / capacity = 0.70
 
 
 def check_road_width(road_type: str, paved_width_m: float) -> Optional[str]:
@@ -142,7 +148,7 @@ def base_capacity(road_type: str, operating_speed_kmh: Optional[float] = None) -
     """
     C0 for one analysis unit.
       * divided road + operating speed measured on a BASE section
-            -> Eq. 5.4 x lanes per direction   (site-specific, preferred by 5.4.5)
+            -> Eq. 5.4 x lanes per direction   (site-specific route offered by 5.4.5)
       * otherwise -> Table 5.4
     Two-lane undivided roads have no speed model: Table 5.4 only.
     """
@@ -241,7 +247,7 @@ PCU_TABLE_5_2 = {   # median values; None = insufficient sample ('-')
 PCU_TABLE_5_3 = {   # median values by road width; None = '-'
     "undivided_2lane": {"two_wheeler": 0.20, "auto": 0.73, "car": 1.00, "bus": 3.77, "mini_bus": 1.80,
                         "lcv": 2.30, "tat": 3.70, "mat": None, "tractor_trailer": 4.50,
-                        "bicycle": 0.39, "cycle_rickshaw": 1.80},
+                        "bicycle": 0.39, "cycle_rickshaw": None},   # 1.80 is printed as range, median '-'
     "divided_4lane":   {"two_wheeler": 0.20, "auto": 0.80, "car": 1.00, "bus": 4.58, "mini_bus": 2.10,
                         "lcv": 2.30, "tat": 3.80, "mat": 5.10, "tractor_trailer": 5.38,
                         "bicycle": 0.39, "cycle_rickshaw": 2.04},
@@ -264,8 +270,9 @@ PLAN_AREA_M2 = {"two_wheeler": 1.20, "auto": 4.48, "car": 6.19, "bus": 24.54, "m
 
 def pcu_values(road_type: str, purpose: str = "evaluation") -> Dict[str, float]:
     """Median PCUs. purpose='evaluation' (existing road) -> Table 5.3;
-    'planning' -> Table 5.2. Where Table 5.3 has '-', the Table 5.2 median for
-    the same divided/undivided class is used and flagged."""
+    'planning' -> Table 5.2. CHOICE: where Table 5.3 has '-', the Table 5.2
+    median for the same divided/undivided class is used (the manual gives no
+    rule for this case)."""
     divided = ROAD_TYPES[road_type]["divided"]
     t52 = PCU_TABLE_5_2["divided" if divided else "undivided"]
     if purpose == "planning":
@@ -330,16 +337,27 @@ LOS_TABLES = {
 
 
 def los_from_vc(vc: float, divided: bool) -> str:
-    for letter, upper, _ in LOS_TABLES["divided" if divided else "undivided"]:
+    """Band edges as printed: A is '< limit' (strict); B-E include their upper
+    value ('0.15 - 0.45' etc.); F is '> 1.00'.
+    CHOICE: Table 5.6 leaves a printing gap (A < 0.35, B 0.36-0.55); values in
+    such gaps go to the better band."""
+    bands = LOS_TABLES["divided" if divided else "undivided"]
+    if vc < bands[0][1]:
+        return "A"
+    for letter, upper, _ in bands[1:]:
         if vc <= upper:
             return letter
     return "F"
 
 
 def los_from_speed(stream_speed_kmh: float, ffs_kmh: float, divided: bool) -> str:
-    """Stream (space-mean) speed as % of free-flow speed."""
+    """Stream (space-mean) speed as % of free-flow speed. A is '> limit'
+    (strict); integer gaps in the printed bands go to the worse band."""
     pct = stream_speed_kmh / ffs_kmh * 100
-    for letter, _, lower in LOS_TABLES["divided" if divided else "undivided"]:
+    bands = LOS_TABLES["divided" if divided else "undivided"]
+    if pct > bands[0][2]:
+        return "A"
+    for letter, _, lower in bands[1:]:
         if pct >= lower:
             return letter
     return "F"
@@ -370,12 +388,19 @@ def percentile(values: Iterable[float], p: float) -> float:
 
 def operating_speed(car_speeds_kmh: Sequence[float], headways_s: Optional[Sequence[float]] = None) -> dict:
     """85th percentile free speed of cars (5.4.5). If headways are given,
-    only cars with headway > 8 s are free (5.2.2). Needs >= 100 cars."""
+    only cars with a finite headway > 8 s to the vehicle ahead are free
+    (5.2.2 'time gap ... more than 8 seconds'; 5E.5 'headway'). Needs >= 100
+    cars. Returns operating_speed_kmh = None when no free car exists."""
     speeds = list(car_speeds_kmh)
     if headways_s is not None:
-        speeds = [v for v, h in zip(car_speeds_kmh, headways_s) if h > FREE_FLOW_HEADWAY_S]
+        speeds = [v for v, h in zip(car_speeds_kmh, headways_s)
+                  if h is not None and math.isfinite(h) and h > FREE_FLOW_HEADWAY_S]
+    if not speeds:
+        return {"operating_speed_kmh": None, "free_flow_speed_kmh": None, "n_free_cars": 0,
+                "warning": "No free-flowing cars (headway > 8 s) in the data; survey at a "
+                           "lighter-traffic time to measure operating speed."}
     warn = None
     if len(speeds) < MIN_FREE_CAR_SAMPLE:
-        warn = f"Only {len(speeds)} free cars; Indo-HCM requires at least {MIN_FREE_CAR_SAMPLE} (5.4.6)."
+        warn = f"Only {len(speeds)} free cars; Indo-HCM requires at least {MIN_FREE_CAR_SAMPLE} (5.4.5)."
     return {"operating_speed_kmh": percentile(speeds, 85), "free_flow_speed_kmh": sum(speeds) / len(speeds),
             "n_free_cars": len(speeds), "warning": warn}

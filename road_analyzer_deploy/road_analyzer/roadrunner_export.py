@@ -82,6 +82,16 @@ def _lane_split(num_lanes: int, divided: bool = False) -> tuple[int, int]:
     return left, num_lanes - left
 
 
+def lateral_to_t(lateral_m: float, total_width_m: float, num_lanes: int, divided: bool) -> float:
+    """Photo position across the road -> OpenDRIVE t (positive to the left
+    when looking along +s). The photo looks along +s, so image-left is the
+    larger t. Undivided: the road spans t in [-right lanes, +left lanes];
+    divided carriageway: all lanes on the right, t in [-W, 0]."""
+    left, _ = _lane_split(num_lanes, divided)
+    t_left_edge = left * total_width_m / max(int(num_lanes), 1)
+    return t_left_edge - lateral_m
+
+
 def _is_divided(result: dict) -> bool:
     return bool((result.get("capacity_basis") or {}).get("divided"))
 
@@ -102,7 +112,7 @@ def _flatten_defects(per_defect: dict) -> list[dict]:
 
 
 def _add_defect_objects(road, defects: list[dict], total_width_m: float,
-                         segment_length_m: float) -> None:
+                         segment_length_m: float, num_lanes: int = 2, divided: bool = False) -> None:
     """Place each defect as an OpenDRIVE road <object>, spread across a
     small window at the segment's midpoint (see module docstring for why
     the spread is cosmetic, not measured)."""
@@ -115,7 +125,7 @@ def _add_defect_objects(road, defects: list[dict], total_width_m: float,
 
     for i, d in enumerate(defects):
         obj_type, w, length, h = _OBJECT_TYPE_MAP.get(d["type"], _DEFAULT_OBJECT)
-        t_offset = d["lateral_m"] - total_width_m / 2  # centerline-relative
+        t_offset = lateral_to_t(d["lateral_m"], total_width_m, num_lanes, divided)
         s_pos    = start_s + i * step_s
         obj = xodr.Object(
             s=round(s_pos, 2),
@@ -148,7 +158,7 @@ def build_single_road_xodr(result: dict, segment_length_m: float = DEFAULT_SEGME
     )
 
     defects = _flatten_defects(result.get("per_defect", {}))
-    _add_defect_objects(road, defects, total_width_m, segment_length_m)
+    _add_defect_objects(road, defects, total_width_m, segment_length_m, num_lanes, _is_divided(result))
 
     odr = xodr.OpenDrive(cfg.get("image") or "road_analyzer_export")
     odr.add_road(road)
@@ -200,7 +210,7 @@ def build_corridor_xodr(results: list[dict]) -> str:
             lane_width=round(lane_width, 3),
         )
         defects = _flatten_defects(result.get("per_defect", {}))
-        _add_defect_objects(road, defects, total_width_m, seg_len)
+        _add_defect_objects(road, defects, total_width_m, seg_len, num_lanes, _is_divided(result))
         roads.append(road)
 
     # Chain them end-to-end in SPACE only. We declare predecessor/

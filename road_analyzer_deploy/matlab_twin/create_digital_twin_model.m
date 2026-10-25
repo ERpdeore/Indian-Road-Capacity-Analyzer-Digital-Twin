@@ -22,8 +22,11 @@
 %% LOS letter, which needs a V/C ratio.
 %% ================================================================
 
-clc; clear; close all;
+function create_digital_twin_model()
+% A function (not a script) so it can be called from run_digital_twin.m
+% without wiping the caller's variables.
 MODEL_NAME = 'road_digital_twin';
+here = fileparts(mfilename('fullpath'));
 fprintf('Building %s.slx ...\n', MODEL_NAME);
 
 if bdIsLoaded(MODEL_NAME), close_system(MODEL_NAME, 0); end
@@ -85,5 +88,7 @@ add_line(MODEL_NAME, 'OutputMux/1', 'Scope_Queue/1', 'autorouting', 'on');
 %% ---- settings: one-hour horizon ----
 set_param(MODEL_NAME, 'StopTime', '3600', 'Solver', 'ode45', 'MaxStep', '10');
 
-save_system(MODEL_NAME, [MODEL_NAME '.slx']);
-fprintf('Model saved as %s.slx. Next: run_digital_twin(<capacity json>)\n', MODEL_NAME);
+save_system(MODEL_NAME, fullfile(here, [MODEL_NAME '.slx']));
+close_system(MODEL_NAME, 0);
+fprintf('Model saved as %s. Next: run_digital_twin(<capacity json>)\n', fullfile(here, [MODEL_NAME '.slx']));
+end
