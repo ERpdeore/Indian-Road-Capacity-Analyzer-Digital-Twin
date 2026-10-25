@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from road_analyzer.plate_recognition import read_plate, PlateReading, _save_evidence_crop
+from road_analyzer.experimental.plate_recognition import read_plate, PlateReading, _save_evidence_crop
 # BUG FIX: this used to be a bare `from plate_recognition import ...`, an
 # absolute top-level import. Since this file lives inside the
 # `road_analyzer` package and app.py always imports things as

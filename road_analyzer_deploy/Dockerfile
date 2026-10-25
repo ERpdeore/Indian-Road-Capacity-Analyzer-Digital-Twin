@@ -1,5 +1,5 @@
 # ================================================================
-# Road Efficiency Analyzer — deployment image
+# Indian Road Capacity Analyzer — deployment image
 # Builds a container that runs the FastAPI app + serves the
 # static dashboard. Works on Render, Railway, Fly.io, or any
 # Docker host.
@@ -8,7 +8,7 @@ FROM python:3.11-slim
 
 # OpenCV needs these system libs even with opencv-python-headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
-libgl1 \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -22,6 +22,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY road_analyzer/ ./road_analyzer/
+# MATLAB/RoadRunner helper scripts packed into each job's bundle.zip
+COPY matlab_twin/ ./matlab_twin/
 
 # Render (and most hosts) inject $PORT at runtime; default to 8000 for
 # local `docker run`.

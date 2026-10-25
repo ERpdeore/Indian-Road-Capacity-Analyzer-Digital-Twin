@@ -9,3 +9,4 @@ test_assets/
 smoke_test.py
 .git/
 *.md
+road_analyzer/experimental/

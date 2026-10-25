@@ -1,133 +1,102 @@
 """
-pothole_rectification.py
---------------------------
-Extends the existing per_defect['pothole'] output (which already gives
-severity, code_ref, count, and depth_summary from core.py's MiDaS pass)
-with a specific rectification measure, material spec, work-zone safety
-requirement, and priority timeline, keyed off severity + scale of the
-defect. This is a pure lookup/classification layer — no new detection
-model needed, it reads fields core.py already computes.
+road_analyzer.pothole_rectification
+===================================
+Repair recommendation for the potholes in per_defect['pothole'].
 
-Reference standards used:
-  IRC:SP:83-2019   — Guidelines for Maintenance of Bituminous Roads (pothole repair procedures)
-  IRC:37-2018       — Guidelines for the Design of Flexible Pavements
-  IRC:81-1997       — Guidelines for Strengthening of Flexible Pavements Using
-                       Benkelman Beam Deflection (overlay design)
-  IRC:SP:55-2014    — Guidelines on Traffic Management in Work Zones
-  IRC:67-2012 / IRC:35 — Road signs / markings for work-zone signage
+Code basis: IRC:82-2015, Code of Practice for Maintenance of Bituminous
+Road Surfaces.
+  cl. 7.5.3.4  pothole size: small (~200 mm wide, 25 mm deep),
+               medium (25-50 mm deep, 500 mm wide), large (> 50 mm deep)
+  cl. 7.5.3.5  rectification: fill with open- or dense-graded premix —
+               cold/hot mix for immediate use, storable cold mix
+               (cutback IRC:116 or emulsion IRC:100), ready-made mix, or
+               patching-machine cold mix
+  cl. 5.3      distress affecting riding quality and traffic flow should
+               be rectified straightaway; condition surveys before and
+               after the monsoon on urban roads
+  Table 5.3    urban roads: potholes > 0.5% of surface area = "poor"
 
-Caveat carried through to output: these are standard-practice
-recommendations based on visual/depth-estimate severity, not a
-substitute for a site engineer's inspection before major structural
-work is authorized.
+Earlier versions cited IRC:SP:83 for these repairs. IRC:SP:83 covers
+CEMENT CONCRETE pavements and does not apply to bituminous potholes.
+
+Size here is inferred from measured WIDTH only (a photo cannot measure
+depth), so a "small" pothole may in fact be deeper. Field verification of
+depth is required before the repair method is fixed.
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
+
+CODE = "IRC:82-2015"
 
 
 @dataclass
 class RectificationMeasure:
-    category: str                 # "Skin Patch" | "HMA Patch" | "Full-Depth Repair" | "Structural Overlay Review"
+    category: str
     method: str
     materials: str
     irc_reference: str
-    priority: str                 # "Routine (30 days)" | "Urgent (7 days)" | "Emergency (48 hr)"
+    priority: str
     work_zone_note: str
     escalation_note: str = ""
 
 
-def recommend_pothole_rectification(worst_severity: str, avg_depth_cm: float,
-                                     count: int, capacity_loss_pct: float) -> RectificationMeasure:
-    """
-    worst_severity: "shallow" | "moderate" | "deep"   (from core.py's MiDaS classifier)
-    avg_depth_cm: from depth_summary.avg_estimated_depth_cm
-    count: number of potholes detected in this image/segment
-    capacity_loss_pct: from the pothole entry in per_defect
-    """
+def recommend_pothole_rectification(worst_size: str, count: int) -> RectificationMeasure:
+    work_zone = ("Cone off the patch area and provide advance warning signs during the "
+                 "work and until the mix has set (IRC:SP:55-2014).")
+    # Many potholes in one frame usually indicate base/subgrade distress
+    # rather than isolated surface failure. Threshold is a project heuristic.
+    cluster = count >= 5
 
-    # Cluster/structural-failure escalation: many potholes in one frame,
-    # or severe capacity loss, signals base/subgrade failure rather than
-    # isolated surface distress -> escalate regardless of single-defect depth.
-    is_cluster_failure = count >= 5 or capacity_loss_pct >= 25.0
-
-    if is_cluster_failure or (worst_severity == "deep" and avg_depth_cm > 8.0):
+    if worst_size == "large" or cluster:
         return RectificationMeasure(
-            category="Full-Depth Repair / Structural Overlay Review",
-            method=("Full-depth patch: saw-cut to regular shape, remove failed layers down "
-                    "to sound base, reconstruct with granular sub-base (GSB) + Wet Mix "
-                    "Macadam (WMM) base + Dense Bituminous Macadam (DBM) + Bituminous "
-                    "Concrete (BC) surfacing, compacted in layers. Where failure is "
-                    "clustered over a stretch, commission a Benkelman Beam / FWD "
-                    "deflection survey before deciding patch-vs-overlay."),
-            materials="GSB, WMM, DBM, BC per IRC:37-2018 layer thickness design for the "
-                      "site's traffic (MSA) and subgrade CBR.",
-            irc_reference="IRC:SP:83-2019 (Sec. 6, deep/structural pothole repair), "
-                           "IRC:37-2018 (pavement layer design), IRC:81-1997 (if overlay "
-                           "over a wider stretch is indicated by the deflection survey)",
-            priority="Emergency (48 hr) — safety hazard; deep failure or cluster indicates "
-                     "active base distress",
-            work_zone_note="Full lane/road closure with barricading, diversion signage, "
-                            "and flagmen per IRC:SP:55-2014; retro-reflective cones "
-                            "IRC:67-2012.",
-            escalation_note="Recommend PWD structural engineer site visit — this pattern "
-                             "is beyond routine maintenance scope.",
+            category="Pothole patching with base check",
+            method=("Cut the pothole to a regular rectangular shape with vertical sides down to "
+                    "sound material. If the cavity extends into the base course, reinstate the "
+                    "base first; then apply tack coat and fill with dense-graded premix in layers, "
+                    "compacting each layer flush with the surface (IRC:82 cl. 7.5.3.5)."),
+            materials="Hot-mix or storable cold mix (emulsion IRC:100 / cutback IRC:116); "
+                      "granular base material where the base has failed.",
+            irc_reference=f"{CODE} cl. 7.5.3.4-7.5.3.5, cl. 5.3",
+            priority="Rectify straightaway (IRC:82 cl. 5.3)",
+            work_zone_note=work_zone,
+            escalation_note=("Cluster of potholes: assess the stretch structurally (deflection "
+                             "survey, IRC:115-2014 FWD or IRC:81-1997 BBD) to decide between "
+                             "patching and an overlay designed per IRC:37-2018."
+                             if cluster else "Verify depth on site; deep potholes indicate base failure."),
         )
-
-    if worst_severity == "moderate" or (worst_severity == "deep" and avg_depth_cm <= 8.0):
+    if worst_size == "medium":
         return RectificationMeasure(
-            category="Hot-Mix Asphalt (HMA) Patch",
-            method=("Square/rectangular saw-cut around the pothole with vertical edges, "
-                    "clean and dry the base, apply tack coat, place hot-mix asphalt (DBM "
-                    "or BC as per depth) in compacted layers not exceeding 50mm each, "
-                    "compact with a plate/roller flush to the surrounding surface."),
-            materials="Tack coat (bitumen emulsion RS-1) + DBM/BC hot-mix, per IRC:SP:83 "
-                      "Table on patch-depth vs mix selection.",
-            irc_reference="IRC:SP:83-2019 (Sec. 5, moderate pothole HMA patching), "
-                           "IRC:37-2018 Cl. 6.5",
-            priority="Urgent (7 days)",
-            work_zone_note="Lane closure with cones and warning signage per IRC:SP:55-2014 "
-                            "during patching and compaction curing.",
+            category="Pothole patching",
+            method=("Remove loose material, cut to a regular shape, clean and dry, apply tack coat, "
+                    "fill with premix and compact flush with the surrounding surface "
+                    "(IRC:82 cl. 7.5.3.5)."),
+            materials="Hot or cold premix; storable cold mix per IRC:100 / IRC:116 in wet weather.",
+            irc_reference=f"{CODE} cl. 7.5.3.4-7.5.3.5, cl. 5.3",
+            priority="Rectify straightaway (IRC:82 cl. 5.3)",
+            work_zone_note=work_zone,
         )
-
-    # shallow
     return RectificationMeasure(
-        category="Skin Patch / Surface Treatment",
-        method=("Clean loose debris and water from the pothole, apply cold-mix premix "
-                "carpet or slurry seal, compact by hand tamper/plate compactor flush "
-                "with surrounding surface. Suitable for isolated shallow surface "
-                "distress only."),
-        materials="Cold-mix premix (bitumen emulsion + aggregate) or micro-surfacing "
-                   "slurry seal.",
-        irc_reference="IRC:SP:83-2019 (Sec. 4.2, shallow pothole skin patching)",
-        priority="Routine (30 days)",
-        work_zone_note="Short-duration single-lane caution signage sufficient "
-                        "(IRC:67-2012); no full closure typically needed.",
+        category="Pothole filling",
+        method=("Clean out loose material and water, fill with premix and compact with a hand "
+                "rammer or plate compactor flush with the surface (IRC:82 cl. 7.5.3.5)."),
+        materials="Cold premix, ready-made mix or patching-machine cold mix.",
+        irc_reference=f"{CODE} cl. 7.5.3.4-7.5.3.5",
+        priority="Next maintenance round; include in the pre/post-monsoon survey (cl. 5.3)",
+        work_zone_note=work_zone,
     )
 
 
 def build_pwd_report_row(pothole_defect_entry: dict, location: str) -> dict:
-    """
-    pothole_defect_entry: the per_defect['pothole'] dict from core.py's
-        existing output, e.g.
-        {
-          "count": 2, "blocked_m": 1.4, "capacity_loss_pct": 12.5,
-          "severity": "ROUTINE", "code_ref": "IRC:37-2018, IRC:SP:83",
-          "action": "...",
-          "depth_summary": {"worst_severity": "moderate", "avg_estimated_depth_cm": 3.2}
-        }
-    """
-    depth = pothole_defect_entry.get("depth_summary", {})
-    rec = recommend_pothole_rectification(
-        worst_severity=depth.get("worst_severity", "shallow"),
-        avg_depth_cm=depth.get("avg_estimated_depth_cm", 0.0),
-        count=pothole_defect_entry.get("count", 1),
-        capacity_loss_pct=pothole_defect_entry.get("capacity_loss_pct", 0.0),
-    )
+    summary = pothole_defect_entry.get("size_summary", {}) or {}
+    worst = summary.get("worst_size_class") or "small"
+    rec = recommend_pothole_rectification(worst, int(pothole_defect_entry.get("count", 1)))
     return {
         "location": location,
         "pothole_count": pothole_defect_entry.get("count"),
-        "avg_depth_cm": depth.get("avg_estimated_depth_cm"),
+        "worst_size_class": worst,
+        "size_basis": "width-only proxy for IRC:82 cl. 7.5.3.4 (depth not measured)",
         "capacity_loss_pct": pothole_defect_entry.get("capacity_loss_pct"),
         "rectification_category": rec.category,
         "method": rec.method,

@@ -12,15 +12,12 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
         error('auto_import_roadrunner:BadMode', "mode must be 'ideal' or 'nonideal', got '%s'.", mode);
     end
 
-    % ---- FILLED IN based on your screenshots -- double check these two! ----
-    % Auto-detected: the folder this script lives in. Keep the .bat, .m,
-    % .xodr and .json files together in ONE folder; no path to edit.
+    % Inputs (.xodr + _roadrunner_capacity.json) are looked for in the
+    % folder this script lives in: keep the bundle files together.
     RESULTS_DIR = fileparts(mfilename('fullpath'));
     if nargin < 3 || isempty(project_folder)
-        project_folder = 'C:\Users\Admin\OneDrive\Documents\final year\matlab roadrunner\New RoadRunner Project';  % <-- CONFIRM this is your real RoadRunner project folder
+        project_folder = resolve_project_folder(RESULTS_DIR);
     end
-    % --------------------------------------------------------------------
-
     if strcmp(mode, 'ideal')
         filePattern = '*_roadrunner_ideal.xodr';
         corridorFile = 'roadrunner_corridor_ideal.xodr';
@@ -66,18 +63,12 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
              'then fix the project_folder line in this file.'], project_folder);
     end
 
-    % If roadrunnerSetup() has been run once, this line is all you need.
-    % If you still get "Unable to open RoadRunner application from
-    % installation folder" after running roadrunnerSetup, uncomment the
-    % line below and fill in your real RoadRunner install folder (find it
-    % via: right-click your RoadRunner shortcut -> Open file location).
-    INSTALLATION_FOLDER = 'C:\Program Files\RoadRunner R2026a\bin\win64';
-
     fprintf('[1/5] (%s) Opening RoadRunner project: %s\n', mode, project_folder);
-    if isempty(INSTALLATION_FOLDER)
-        rrApp = roadrunner(project_folder);
+    installFolder = resolve_install_folder();
+    if isempty(installFolder)
+        rrApp = roadrunner(project_folder);   % uses the folder saved by roadrunnerSetup
     else
-        rrApp = roadrunner(project_folder, 'InstallationFolder', INSTALLATION_FOLDER);
+        rrApp = roadrunner(project_folder, 'InstallationFolder', installFolder);
     end
     pause(5);
 
@@ -135,26 +126,42 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
     end
 
     speedKmh        = [];   % empty = twin_config.m default
-    defectPositions = [];   % real per-instance defect data, for accurate markers
-    totalWidth_m    = [];   % real road width
-    numLanes        = [];   % real lane count
-    keepFraction    = 1;    % defect road: reduced / original capacity
+    defectPositions = [];   % measured lateral defect positions
+    totalWidth_m    = [];   % measured carriageway width
+    numLanes        = [];   % lane count of the analysed carriageway
+    density         = [];   % PCU/km/lane from the Python twin (twin.ideal / twin.defect)
+    avgPcu          = [];   % PCU per vehicle, to turn PCU density into vehicles
+    divided         = false;% divided-road carriageway = all lanes one direction
     if isfile(capacityJsonPath)
         try
             cap = jsondecode(fileread(capacityJsonPath));
-            if strcmp(mode, 'nonideal') && isfield(cap, 'original_capacity_vehicles_hr') ...
-                    && ~isempty(cap.original_capacity_vehicles_hr) && cap.original_capacity_vehicles_hr > 0
-                keepFraction = cap.reduced_capacity_vehicles_hr / cap.original_capacity_vehicles_hr;
-                fprintf('      Using real capacity data: %.0f -> %.0f veh/hr (%.0f%% loss) -> %.0f%% of the ideal traffic shown\n', ...
-                    cap.original_capacity_vehicles_hr, cap.reduced_capacity_vehicles_hr, ...
-                    cap.capacity_loss_pct, 100 * keepFraction);
+            % Vehicle count and speed come from the macroscopic twin, i.e. the
+            % SAME demand on both roads. A capacity loss does not mean fewer
+            % vehicles on the road: when demand exceeds the reduced capacity a
+            % queue forms upstream and density goes UP, speed goes DOWN.
+            if isfield(cap, 'twin') && ~isempty(cap.twin)
+                if strcmp(mode, 'ideal')
+                    st = cap.twin.ideal;
+                    speedKmh = st.section_speed_kmh;
+                    density  = st.section_density_pcu_km_lane;
+                else
+                    st = cap.twin.defect;
+                    if isfield(st, 'upstream_queue_density_pcu_km_lane')
+                        speedKmh = st.upstream_speed_kmh;           % queued traffic
+                        density  = st.upstream_queue_density_pcu_km_lane;
+                    else
+                        speedKmh = st.section_speed_kmh;
+                        density  = st.section_density_pcu_km_lane;
+                    end
+                end
+                fprintf('      Twin (%s): %s, %.1f km/h, %.1f PCU/km/lane at demand %.0f PCU/h\n', ...
+                    mode, st.state, speedKmh, density, cap.twin.demand_pcu_h);
             end
-            if strcmp(mode, 'ideal') && isfield(cap, 'free_flow_speed_kmh') && ~isempty(cap.free_flow_speed_kmh)
-                speedKmh = cap.free_flow_speed_kmh;
-                fprintf('      Using real free-flow speed: %.1f km/h\n', speedKmh);
-            elseif strcmp(mode, 'nonideal') && isfield(cap, 'congested_speed_kmh') && ~isempty(cap.congested_speed_kmh)
-                speedKmh = cap.congested_speed_kmh;
-                fprintf('      Using real congested speed: %.1f km/h\n', speedKmh);
+            if isfield(cap, 'avg_pcu_per_vehicle') && ~isempty(cap.avg_pcu_per_vehicle)
+                avgPcu = cap.avg_pcu_per_vehicle;
+            end
+            if isfield(cap, 'divided') && ~isempty(cap.divided)
+                divided = logical(cap.divided);
             end
             if strcmp(mode, 'nonideal') && isfield(cap, 'defect_positions') && ~isempty(cap.defect_positions)
                 defectPositions = cap.defect_positions;
@@ -172,9 +179,9 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
         fprintf('      No capacity data found (%s) -- using default traffic.\n', capacityJsonPath);
     end
 
-    % Everything the traffic / defect scripts need to match the real road.
     opts = struct('projectFolder', project_folder, 'numLanes', numLanes, ...
-                  'totalWidth_m', totalWidth_m, 'keepFraction', keepFraction);
+                  'totalWidth_m', totalWidth_m, 'densityPcuKmLane', density, ...
+                  'avgPcu', avgPcu, 'divided', divided);
 
     if strcmp(mode, 'ideal')
         add_vehicles_ideal(rrApp, [], speedKmh, roadLength_m, opts);
@@ -192,3 +199,45 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
 
     fprintf('\nDONE (%s). Road and traffic are in RoadRunner and the simulation is running.\n', mode);
 end
+
+
+function folder = resolve_project_folder(here)
+%RESOLVE_PROJECT_FOLDER  RoadRunner project folder, in this order:
+%   1. environment variable RR_PROJECT_FOLDER
+%   2. roadrunner_project.txt next to this script (one line: the path)
+%   3. ask once with a folder picker, then save it to roadrunner_project.txt
+    folder = getenv('RR_PROJECT_FOLDER');
+    if ~isempty(folder) && isfolder(folder), return; end
+    cfgFile = fullfile(here, 'roadrunner_project.txt');
+    if isfile(cfgFile)
+        folder = strtrim(fileread(cfgFile));
+        if isfolder(folder), return; end
+        fprintf('Saved RoadRunner project folder no longer exists: %s\n', folder);
+    end
+    folder = uigetdir(pwd, 'Select your RoadRunner PROJECT folder (the one with Assets and Scenes)');
+    if isequal(folder, 0)
+        error('auto_import_roadrunner:NoProject', 'No RoadRunner project folder selected.');
+    end
+    fid = fopen(cfgFile, 'w');
+    if fid ~= -1, fprintf(fid, '%s', folder); fclose(fid); end
+    fprintf('Saved RoadRunner project folder to %s\n', cfgFile);
+end
+
+
+function folder = resolve_install_folder()
+%RESOLVE_INSTALL_FOLDER  RoadRunner install folder, or '' to let
+%   roadrunner() use the one saved by roadrunnerSetup.
+%   Order: env RR_INSTALL_FOLDER, then the newest C:\Program Files\RoadRunner R20xx*\bin\win64.
+    folder = getenv('RR_INSTALL_FOLDER');
+    if ~isempty(folder) && isfolder(folder), return; end
+    folder = '';
+    if ispc
+        d = dir(fullfile(getenv('ProgramFiles'), 'RoadRunner R20*'));
+        if ~isempty(d)
+            names = sort({d.name});
+            cand = fullfile(getenv('ProgramFiles'), names{end}, 'bin', 'win64');
+            if isfolder(cand), folder = cand; end
+        end
+    end
+end
+

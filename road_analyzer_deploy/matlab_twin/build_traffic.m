@@ -1,23 +1,23 @@
 function planned = build_traffic(rrApp, mode, speedKmh, roadLength_m, opts)
-%BUILD_TRAFFIC  Dense, mixed, MOVING traffic for the ideal or defect road.
-%
-%   Replaces the old "6 sedans that barely move". Vehicles are
-%     * a mix of cars, two-wheelers, trucks, buses and vans (twin_config.m)
-%     * packed lane by lane with a real gap, so they never overlap
-%     * given a speed and a route, so they actually drive when you press Play
-%     * fewer on the defect road, in proportion to the REAL capacity loss
+%BUILD_TRAFFIC  Mixed, moving traffic at the density and speed of the Python twin.
 %
 %   mode          : 'ideal' or 'nonideal'
-%   speedKmh      : real free-flow (ideal) or congested (nonideal) speed
-%   roadLength_m  : real road length
+%   speedKmh      : stream speed for this road from the twin (ideal: speed at
+%                   demand; nonideal: speed in the upstream queue when demand
+%                   exceeds the reduced capacity, else speed at demand)
+%   roadLength_m  : road length
 %   opts (optional struct, every field optional):
-%     .projectFolder  RoadRunner project folder (lets twin_assets list your real assets)
-%     .numLanes       lanes on the road (default 2)
-%     .totalWidth_m   road width in metres (default 7)
-%     .keepFraction   nonideal only: reduced/original capacity, 0..1 (default 1)
-%     .targetCount    force an exact vehicle count instead
-%     .scenarioFile   file name to save the scenario to
+%     .projectFolder     RoadRunner project folder
+%     .numLanes          lanes on the carriageway (default 2)
+%     .totalWidth_m      carriageway width (default 7)
+%     .divided           true = one-direction carriageway (all lanes same way)
+%     .densityPcuKmLane  density from the twin, PCU/km/lane
+%     .avgPcu            PCU per vehicle, converts PCU density to vehicles
+%     .targetCount       force an exact vehicle count instead
+%     .scenarioFile      file name to save the scenario to
 %
+%   Spacing follows from density: front-to-front spacing (m) =
+%   1000 / (k_PCU / avgPcu), never less than vehicle length + minGap.
 %   Returns the number of vehicles planned.
 
     cfg = twin_config();  tc = cfg.traffic;
@@ -29,26 +29,32 @@ function planned = build_traffic(rrApp, mode, speedKmh, roadLength_m, opts)
     nLanes       = max(1, round(getOpt(opts, 'numLanes', 2)));
     totalWidth   = getOpt(opts, 'totalWidth_m', 7.0);
     laneW        = totalWidth / nLanes;
-    keepFraction = getOpt(opts, 'keepFraction', 1);
+    divided      = logical(getOpt(opts, 'divided', false));
+    kPcu         = getOpt(opts, 'densityPcuKmLane', tc.defaultDensityPcuKmLane);
+    avgPcu       = getOpt(opts, 'avgPcu', tc.defaultAvgPcu);
     target       = getOpt(opts, 'targetCount', []);
     scenarioFile = char(getOpt(opts, 'scenarioFile', [mode '_traffic.rrscenario']));
+    kVeh         = max(kPcu / max(avgPcu, 0.1), 1e-3);     % vehicles/km/lane
+    spacing_m    = 1000 / kVeh;                            % front-to-front
 
-    %% ---- lane table: lateral centre t, travel direction, rank (1 = inner)
-    nLeft  = ceil(nLanes/2);               % same split as roadrunner_export.py
+    %% ---- lane table: lateral centre t, travel direction
+    % Same split as roadrunner_export.py: a divided carriageway has every
+    % lane on the right (t < 0, one direction); an undivided road is split.
+    if divided, nLeft = 0; else, nLeft = ceil(nLanes/2); end
     nRight = nLanes - nLeft;
     plusDir = 1;  if ~tc.rightLanesTravelPlusX, plusDir = -1; end
-    lanes = struct('t',{},'dir',{},'rank',{});
-    for i = 1:nRight, lanes(end+1) = struct('t', -(i-0.5)*laneW, 'dir',  plusDir, 'rank', i); end %#ok<AGROW>
-    for i = 1:nLeft,  lanes(end+1) = struct('t',  (i-0.5)*laneW, 'dir', -plusDir, 'rank', i); end %#ok<AGROW>
+    lanes = struct('t',{},'dir',{});
+    for i = 1:nRight, lanes(end+1) = struct('t', -(i-0.5)*laneW, 'dir',  plusDir); end %#ok<AGROW>
+    for i = 1:nLeft,  lanes(end+1) = struct('t',  (i-0.5)*laneW, 'dir', -plusDir); end %#ok<AGROW>
 
-    %% ---- plan the vehicle slots lane by lane (no overlaps, fixed seed)
+    %% ---- plan vehicle slots lane by lane at the twin density
     rng(tc.seed);
     cats   = fieldnames(tc.mix);
     wts    = cellfun(@(c) tc.mix.(c), cats);
     cumw   = cumsum(wts) / sum(wts);
     usable = max(roadLength_m - 2*tc.margin_m, 1);
-    packLen = (1 - tc.travelReserve) * usable;     % traffic starts in this part,
-    reserve = tc.travelReserve * usable;           % and drives into the rest
+    packLen = (1 - tc.travelReserve) * usable;
+    reserve = tc.travelReserve * usable;
     slots = zeros(0,3);                            % [lane index, x centre, category index]
     for li = 1:numel(lanes)
         dirn = lanes(li).dir;
@@ -64,7 +70,7 @@ function planned = build_traffic(rrApp, mode, speedKmh, roadLength_m, opts)
             far = xc + dirn*len/2;
             if (dirn > 0 && far > limit) || (dirn < 0 && far < limit), break; end
             slots(end+1,:) = [li, xc, ci]; %#ok<AGROW>
-            x = far + dirn*tc.gap_m;
+            x = far + dirn*max(spacing_m - len, tc.minGap_m);
         end
     end
     if isempty(slots)
@@ -72,23 +78,15 @@ function planned = build_traffic(rrApp, mode, speedKmh, roadLength_m, opts)
         warning('build_traffic:RoadTooShort', 'Road is very short -- placing a single vehicle.');
     end
 
-    %% ---- how many to show
-    n      = size(slots,1);
-    nIdeal = min(n, tc.maxVehicles);
-    if ~isempty(target)
-        nKeep = min(target, n);
-    elseif strcmp(mode, 'nonideal')
-        nKeep = max(min(tc.minVehicles, nIdeal), round(nIdeal * min(max(keepFraction,0),1)));
-    else
-        nKeep = nIdeal;
-    end
+    n = size(slots,1);
+    if ~isempty(target), nKeep = min(target, n); else, nKeep = n; end
     nKeep = max(1, min(nKeep, tc.maxVehicles));
     if nKeep < n
-        slots = slots(unique(round(linspace(1, n, nKeep))), :);   % thin evenly: gaps only grow
+        slots = slots(unique(round(linspace(1, n, nKeep))), :);
     end
     planned = size(slots,1);
-    fprintf('      Traffic plan (%s): %d vehicles on %d lane(s), %.0f km/h, %.0f m road.\n', ...
-        mode, planned, numel(lanes), speedKmh, roadLength_m);
+    fprintf('      Traffic plan (%s): %d vehicles on %d lane(s), %.1f PCU/km/lane (%.0f m spacing), %.1f km/h, %.0f m road.\n', ...
+        mode, planned, numel(lanes), kPcu, spacing_m, speedKmh, roadLength_m);
 
     %% ---- place them
     newScenario(rrApp);
@@ -115,8 +113,7 @@ function planned = build_traffic(rrApp, mode, speedKmh, roadLength_m, opts)
                 lat = lat + side * tc.weave_m;                        % weave round obstructions
             end
 
-            kmh = speedKmh * (1 - tc.laneSpeedStep * (lane.rank - 1));
-            mps = kmh / 3.6;
+            mps = max(speedKmh, 1) / 3.6;
             % Everyone in a lane drives the SAME distance, so gaps never close.
             dist = min(mps * tc.simSeconds, reserve);
             endX = startX + lane.dir * max(dist, 1);

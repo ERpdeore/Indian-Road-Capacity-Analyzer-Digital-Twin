@@ -13,14 +13,15 @@
   const videoSampleRow = document.getElementById("video-sample-row");
   const sampleEverySec = document.getElementById("sample-every-sec");
 
-  const carriagewaySel  = document.getElementById("carriageway_key");
-  const fringeSel       = document.getElementById("fringe_condition");
-  const fringeDescEl    = document.getElementById("fringe-desc");
-  const carriageDsvHint = document.getElementById("carriageway-dsv-hint");
-  const dsvPreview      = document.getElementById("dsv-preview");
-  const dsvValueEl      = document.getElementById("dsv-value");
-  const regimeSel       = document.getElementById("traffic_regime");
-  const regimeDescEl    = document.getElementById("regime-desc");
+  const roadTypeSel   = document.getElementById("road_type");
+  const roadTypeHint  = document.getElementById("road-type-hint");
+  const widthMethodSel = document.getElementById("width_method");
+  const speedInput    = document.getElementById("operating_speed_kmh");
+  const widthInput    = document.getElementById("total_width_m");
+  const widthHint     = document.getElementById("width-hint");
+  const dsvPreview    = document.getElementById("dsv-preview");
+  const dsvValueEl    = document.getElementById("dsv-value");
+  const FACTOR_FIELDS = ["on_street_parking", "bus_stop", "access_points"];
 
   const configForm    = document.getElementById("config-form");
   const runBtn        = document.getElementById("run-btn");
@@ -212,179 +213,77 @@
   }
 
   // ----------------------------------------------------------------
-  // Hardcoded fallback config — dropdowns always work even if server
-  // is sleeping (Render free tier cold start can take 60 seconds)
+  // Offline fallback (Render free tier can take ~60 s to wake). Must match
+  // road_analyzer/indo_hcm.py — the server copy replaces it when it loads.
   // ----------------------------------------------------------------
-  const FALLBACK_CONFIG = {
-    carriageway_options: [
-      { key: "2lane_oneway",    label: "2-Lane One-Way",
-        available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:2400, sub_arterial:1900, collector:1400 },
-        free_flow_speeds: { arterial:50, sub_arterial:40, collector:30 } },
-      { key: "2lane_twoway",    label: "2-Lane Two-Way",
-        available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:1500, sub_arterial:1200, collector:900 },
-        free_flow_speeds: { arterial:50, sub_arterial:40, collector:30 } },
-      { key: "3lane_oneway",    label: "3-Lane One-Way",
-        available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:3600, sub_arterial:2900, collector:2200 },
-        free_flow_speeds: { arterial:65, sub_arterial:50, collector:40 } },
-      { key: "4lane_undivided", label: "4-Lane Undivided",
-        available_fringes: ["arterial","sub_arterial","collector"],
-        dsv_values: { arterial:3000, sub_arterial:2400, collector:1800 },
-        free_flow_speeds: { arterial:65, sub_arterial:50, collector:40 } },
-      { key: "4lane_divided",   label: "4-Lane Divided",
-        available_fringes: ["arterial","sub_arterial"],
-        dsv_values: { arterial:3600, sub_arterial:2900 },
-        free_flow_speeds: { arterial:80, sub_arterial:65, collector:50 } },
-      { key: "6lane_undivided", label: "6-Lane Undivided",
-        available_fringes: ["arterial","sub_arterial"],
-        dsv_values: { arterial:4800, sub_arterial:3800 },
-        free_flow_speeds: { arterial:80, sub_arterial:65, collector:50 } },
-      { key: "6lane_divided",   label: "6-Lane Divided",
-        available_fringes: ["arterial","sub_arterial"],
-        dsv_values: { arterial:5400, sub_arterial:4300 },
-        free_flow_speeds: { arterial:100, sub_arterial:80, collector:65 } },
-      { key: "8lane_divided",   label: "8-Lane Divided",
-        available_fringes: ["arterial"],
-        dsv_values: { arterial:7200 },
-        free_flow_speeds: { arterial:120, sub_arterial:100, collector:80 } },
+  const FALLBACK_CONFIG = {   // must match road_analyzer/indo_hcm.py
+    road_types: [   // Indo-HCM Table 5.4
+      { key: "undivided_2lane", label: "Two-lane undivided", lanes: 2, divided: false, basis: "both directions", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2400, dsv_pcu_h: 1680 },
+      { key: "divided_4lane", label: "Four-lane divided", lanes: 2, divided: true, basis: "one direction", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2700, dsv_pcu_h: 1890 },
+      { key: "divided_6lane", label: "Six-lane divided", lanes: 3, divided: true, basis: "one direction", paved_width_m: 10.5, ref_width_m: 11.0, capacity_pcu_h: 4200, dsv_pcu_h: 2940 },
+      { key: "divided_8lane", label: "Eight-lane divided", lanes: 4, divided: true, basis: "one direction", paved_width_m: 14.0, ref_width_m: 14.5, capacity_pcu_h: 6800, dsv_pcu_h: 4760,
+        condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
+      { key: "divided_10lane", label: "Ten-lane divided", lanes: 5, divided: true, basis: "one direction", paved_width_m: 17.5, ref_width_m: 18.0, capacity_pcu_h: 10000, dsv_pcu_h: 7000,
+        condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
     ],
-    fringe_conditions: [
-      { key: "arterial",     description: "No frontage access, no standing vehicles, very little cross traffic" },
-      { key: "sub_arterial", description: "Frontage development, side roads, bus stops, no standing vehicles" },
-      { key: "collector",    description: "Free frontage access, parked vehicles, bus stops, heavy cross traffic" },
+    speed_model: { a: 20.11, b: 210.8, range_kmh: [40, 80] },
+    on_street_parking: [
+      { key: "none", label: "No on-street parking", factor: 1.0 },
+      { key: "len_lt25", label: "Long-term parking, < 25% of segment length", factor: 0.70 },
+      { key: "len_25_50", label: "Long-term parking, 25–50% of segment length", factor: 0.65 },
+      { key: "len_gt50", label: "Long-term parking, > 50% of segment length", factor: 0.40 },
+      { key: "man_le500", label: "Short-term parking, ≤ 500 manoeuvres/km/h", factor: 0.65 },
+      { key: "man_gt500", label: "Short-term parking, > 500 manoeuvres/km/h", factor: 0.40 },
     ],
-    traffic_regimes: [
-      { key: "low",  description: "Less than 15% heavy vehicles — mostly cars, autos, two-wheelers" },
-      { key: "high", description: "15% or more heavy vehicles — significant freight or bus movement" },
+    bus_stop: [
+      { key: "none", label: "No bus stop on segment", factor: 1.0 },
+      { key: "kerbside_low", label: "Kerbside stop, ≤ 30 buses/h", factor: 0.80 },
+      { key: "kerbside_high", label: "Kerbside stop, > 30 buses/h", factor: 0.60 },
+      { key: "bay_low", label: "Bus bay, ≤ 30 buses/h", factor: 0.90 },
+      { key: "bay_high", label: "Bus bay, > 30 buses/h", factor: 0.80 },
     ],
+    access_points: [
+      { key: "none", label: "No access points", factor: 1.0 },
+      { key: "lt200", label: "Access traffic < 200 veh/h (entry + exit)", factor: 0.90 },
+      { key: "200_500", label: "Access traffic 200–500 veh/h", factor: 0.80 },
+      { key: "gt500", label: "Access traffic > 500 veh/h", factor: 0.70 },
+    ],
+    width_methods: [
+      { key: "proportional", label: "Usable width / total width (capacity proportional to width)" },
+      { key: "table_slope", label: "Loss = blocked width x 428.6 PCU/h/m (slope of Indo-HCM Table 5.4, divided roads)" },
+    ],
+    dsv_vc_ratio: 0.70,
     model_loaded: true,
   };
 
-  // Has the user actually touched the carriageway/fringe/regime controls?
-  // Once true, a later config refresh (e.g. the real backend response
-  // arriving after the hardcoded fallback) must NOT overwrite their choice.
   let userTouchedConfig = false;
 
-  // Rebuild the fringe <select> so it only contains options that are valid
-  // for the currently chosen carriageway. Rebuilding (rather than leaving
-  // every option in the DOM and toggling `.disabled`) avoids the browser-
-  // dependent quirks around disabled-but-selected <option> elements that
-  // were causing the carriageway/frontage selection to misbehave.
-  function rebuildFringeOptions(data, carriagewayKey, preferredFringe) {
-    if (!fringeSel) return;
-    const opt = (data.carriageway_options || []).find((o) => o.key === carriagewayKey);
-    const allowed = opt ? (opt.available_fringes || []) : Object.keys(
-      Object.fromEntries((data.fringe_conditions || []).map((f) => [f.key, true]))
-    );
-    const fringeList = (data.fringe_conditions || []).filter((f) => allowed.includes(f.key));
-
-    fringeSel.innerHTML = fringeList
-      .map((f) => `<option value="${f.key}">${titleCase(f.key)}</option>`)
-      .join("");
-
-    // Keep the user's previous fringe choice if it's still valid for the
-    // newly selected carriageway type; otherwise fall back to the first
-    // allowed option.
-    if (preferredFringe && allowed.includes(preferredFringe)) {
-      fringeSel.value = preferredFringe;
-    } else if (fringeList.length) {
-      fringeSel.value = fringeList[0].key;
-    }
-
-    if (fringeDescEl) {
-      const fc = fringeList.find((f) => f.key === fringeSel.value);
-      fringeDescEl.textContent = fc ? fc.description : "";
-    }
+  function fillSelect(sel, items, render) {
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = items.map((o) => `<option value="${o.key}">${render(o)}</option>`).join("");
+    if (prev && items.some((o) => o.key === prev)) sel.value = prev;
   }
 
   function populateDropdowns(data) {
-    // Remember what the user had selected before this (re)populate, so a
-    // background config refresh never silently discards their in-progress
-    // selection — this was the root cause of the recurring carriageway /
-    // frontage-condition selection bug.
-    const prevCarriageway = carriagewaySel ? carriagewaySel.value : null;
-    const prevFringe      = fringeSel ? fringeSel.value : null;
-    const prevRegime      = regimeSel ? regimeSel.value : null;
-
     configData = data;
-
-    if (userTouchedConfig) {
-      // The user already interacted with the form (most likely: the
-      // fallback config loaded first, they picked options, and now the
-      // real /api/config-options response has arrived). Only refresh the
-      // underlying data model — do NOT touch the DOM selections.
-      return;
+    if (userTouchedConfig) return;   // never overwrite a selection in progress
+    fillSelect(roadTypeSel, data.road_types || [], (o) => o.label);
+    if (roadTypeSel && !roadTypeSel.dataset.init) {
+      roadTypeSel.value = "divided_4lane";
+      roadTypeSel.dataset.init = "1";
     }
+    fillSelect(widthMethodSel, data.width_methods || [], (o) => o.label);
+    FACTOR_FIELDS.forEach((f) =>
+      fillSelect(document.getElementById(f), data[f] || [], (o) => `${o.label} — ${o.factor.toFixed(2)}`));
 
-    // --- Carriageway dropdown ---
-    if (carriagewaySel) {
-      carriagewaySel.innerHTML = (data.carriageway_options || [])
-        .map((o) => `<option value="${o.key}">${o.label}</option>`)
-        .join("");
-      const cwOptions = (data.carriageway_options || []).map((o) => o.key);
-      carriagewaySel.value = (prevCarriageway && cwOptions.includes(prevCarriageway))
-        ? prevCarriageway
-        : (cwOptions[0] || "");
-    }
-
-    // --- Fringe dropdown (scoped to the selected carriageway) ---
-    rebuildFringeOptions(data, carriagewaySel ? carriagewaySel.value : null, prevFringe);
-
-    // --- Traffic regime dropdown ---
-    if (regimeSel) {
-      regimeSel.innerHTML = (data.traffic_regimes || [])
-        .map((r) => `<option value="${r.key}">${
-          r.key === "low"
-            ? "Low — <15% heavy vehicles (cars, autos, two-wheelers)"
-            : "High — ≥15% heavy vehicles (trucks, buses)"
-        }</option>`)
-        .join("");
-      const regimeOptions = (data.traffic_regimes || []).map((r) => r.key);
-      regimeSel.value = (prevRegime && regimeOptions.includes(prevRegime))
-        ? prevRegime
-        : (regimeOptions[0] || "");
-    }
-
-    // Wire up carriageway change — rebuild fringe options for the new type
-    if (carriagewaySel) {
-      carriagewaySel.onchange = () => {
-        userTouchedConfig = true;
-        rebuildFringeOptions(configData, carriagewaySel.value, fringeSel ? fringeSel.value : null);
-        updateDsvPreview();
-      };
-    }
-
-    // Wire up fringe change
-    if (fringeSel) {
-      fringeSel.onchange = () => {
-        userTouchedConfig = true;
-        if (fringeDescEl) {
-          const fc = (configData.fringe_conditions || []).find((f) => f.key === fringeSel.value);
-          fringeDescEl.textContent = fc ? fc.description : "";
-        }
-        updateDsvPreview();
-      };
-    }
-
-    // Wire up regime change
-    if (regimeSel) {
-      regimeSel.onchange = () => {
-        userTouchedConfig = true;
-        if (regimeDescEl) {
-          const r = (configData.traffic_regimes || []).find((x) => x.key === regimeSel.value);
-          regimeDescEl.textContent = r ? r.description : "";
-        }
-        updateDsvPreview();
-      };
-      regimeSel.onchange();
-    }
-
-    // Initial DSV preview for the defaults chosen above
+    [roadTypeSel, speedInput, widthInput, ...FACTOR_FIELDS.map((f) => document.getElementById(f))]
+      .forEach((el) => {
+        if (!el) return;
+        el.oninput = el.onchange = () => { userTouchedConfig = true; updateDsvPreview(); };
+      });
     updateDsvPreview();
 
-    // Model status
     if (!data.model_loaded) {
       modelStatusEl.textContent = "⚠ Model not found — copy best.pt into road_analyzer/models/";
       modelStatusEl.classList.add("warn");
@@ -394,67 +293,64 @@
     }
   }
 
-  // ----------------------------------------------------------------
-  // DSV preview — updates when carriageway or fringe changes
-  // ----------------------------------------------------------------
-  // PCU avg factors for quick vehicles/hr preview
-  const AVG_PCU = { low: 1.00, high: 1.30 };
-
-  function getFreeFlowSpeed() {
-    if (!configData) return 50;
-    const key    = carriagewaySel ? carriagewaySel.value : "";
-    const fringe = fringeSel ? fringeSel.value : "arterial";
-    const opt    = (configData.carriageway_options || []).find((o) => o.key === key);
-    if (opt && opt.free_flow_speeds && opt.free_flow_speeds[fringe] !== undefined) {
-      return opt.free_flow_speeds[fringe];
-    }
-    return 50; // fallback
-  }
-
+  // Mirrors indo_hcm.base_capacity() so the user sees C0 before uploading.
   function updateDsvPreview() {
-    if (!configData) return;
-    const key    = carriagewaySel ? carriagewaySel.value : "";
-    const fringe = fringeSel ? fringeSel.value : "arterial";
-    const regime = regimeSel ? regimeSel.value : "low";
-    const opt    = (configData.carriageway_options || []).find((o) => o.key === key);
-    if (opt && opt.dsv_values && opt.dsv_values[fringe] !== undefined) {
-      const dsv      = opt.dsv_values[fringe];
-      const avgPcu   = AVG_PCU[regime] || 1.00;
-      const vehPerHr = Math.round(dsv / avgPcu);
-      const freeSpd  = getFreeFlowSpeed();
-      dsvValueEl.textContent = dsv.toLocaleString("en-IN");
-      const noteEl = document.getElementById("dsv-note");
-      if (noteEl) {
-        noteEl.textContent =
-          `≈ ${vehPerHr.toLocaleString("en-IN")} vehicles/hr · Free-flow speed: ${freeSpd} km/h (IRC design speed)`;
-      }
-      dsvPreview.style.display = "";
-    } else {
-      dsvPreview.style.display = "none";
+    if (!configData || !roadTypeSel) return;
+    const rt = (configData.road_types || []).find((o) => o.key === roadTypeSel.value);
+    if (!rt) { dsvPreview.style.display = "none"; return; }
+    const sm = configData.speed_model || { a: 20.11, b: 210.8, range_kmh: [40, 80] };
+
+    // Eq. 5.4 exists only for divided roads
+    if (speedInput) {
+      speedInput.disabled = !rt.divided;
+      if (!rt.divided) speedInput.value = "";
+      const sh = document.getElementById("speed-hint");
+      if (sh) sh.textContent = rt.divided
+        ? "≥ 100 cars with headway > 8 s, on a friction-free stretch of this road (Eq. 5.4, valid 40–80 km/h)"
+        : "Not used: Indo-HCM Eq. 5.4 applies to divided roads only. Two-lane undivided uses Table 5.4 (2400 PCU/h).";
     }
+    const v = parseFloat(speedInput && speedInput.value);
+    let c0 = rt.capacity_pcu_h, how = "Indo-HCM Table 5.4";
+    if (rt.divided && v > 0) {
+      const lane = sm.a * v + sm.b;
+      c0 = Math.round(lane * rt.lanes);
+      how = `Indo-HCM Eq. 5.4: ${sm.a} × ${v} + ${sm.b} = ${Math.round(lane)} PCU/h/lane × ${rt.lanes}`;
+      if (v < sm.range_kmh[0] || v > sm.range_kmh[1]) how += " (outside 40–80 km/h — extrapolated)";
+    }
+    dsvValueEl.textContent = Math.round(c0).toLocaleString("en-IN");
+    document.getElementById("dsv-unit").textContent = `PCU/h, ${rt.basis}`;
+    const dsv = Math.round(c0 * (configData.dsv_vc_ratio || 0.7));
+    document.getElementById("dsv-note").textContent =
+      `${how} · Design Service Volume (LOS-C, 0.70 C) ${dsv.toLocaleString("en-IN")} PCU/h`;
+    if (roadTypeHint) {
+      roadTypeHint.textContent = `${rt.lanes} lanes, ${rt.basis}; Indo-HCM paved width ${rt.paved_width_m} m ± 0.5 m (Table 5B.1)` +
+        (rt.condition ? ` · ${rt.condition}` : "");
+    }
+    const w = parseFloat(widthInput && widthInput.value);
+    if (widthHint && w > 0) {
+      let ok, msg;
+      if (rt.divided) {
+        ok = Math.abs(w - rt.paved_width_m) <= 0.5;
+        msg = ok ? "fits this Indo-HCM road class" : `outside ${rt.paved_width_m - 0.5}–${rt.paved_width_m + 0.5} m — check road type`;
+      } else {
+        ok = w >= 6.0 && w <= 11.0;
+        msg = ok ? (w < 7 ? "within 6–11 m, but Indo-HCM studied > 7 m only" : "fits two-lane undivided (6–11 m)") : "outside 6–11 m — check road type";
+      }
+      widthHint.textContent = `${w} m: ${msg}`;
+      widthHint.classList.toggle("warn", !ok);
+    }
+    dsvPreview.style.display = "";
   }
 
-  // ----------------------------------------------------------------
-  // Config options (populate selects from backend)
-  // ----------------------------------------------------------------
   async function loadConfigOptions() {
-    // Populate with fallback immediately — dropdowns always have values
     populateDropdowns(FALLBACK_CONFIG);
     modelStatusEl.textContent = "⟳ Connecting to server…";
-
-    // Then fetch real data from server with retries
     let retries = 0;
     async function tryFetch() {
       try {
-        const res  = await fetch("/api/config-options");
+        const res = await fetch("/api/config-options");
         if (!res.ok) throw new Error("Server returned " + res.status);
-        const data = await res.json();
-        populateDropdowns(data);
-        configData = data;
-        modelStatusEl.textContent = data.model_loaded
-          ? "✓ Model loaded and ready."
-          : "⚠ No trained model found. Copy best.pt into road_analyzer/models/.";
-        if (!data.model_loaded) modelStatusEl.classList.add("warn");
+        populateDropdowns(await res.json());
       } catch (e) {
         retries++;
         if (retries < 6) {
@@ -505,23 +401,17 @@
     }
 
     const fd = new FormData(configForm);
-    // traffic_regime is now a valid field - do not delete it
 
     runBtn.disabled = true;
 
     try {
       if (mode === "image") {
         fd.append("file", selectedFiles[0]);
-        showStatus("Running AI defect detection and IRC:106 capacity analysis…");
+        showStatus("Running AI defect detection and Indo-HCM capacity analysis…");
         const res = await postJSON("/api/analyze/image", fd);
         hideStatus();
         renderImageResult(res);
-
-        // Trigger Digital Twin panel if MATLAB is running
-        if (res.digital_twin_status === "running") {
-          dtShowPanel();
-          dtStartPolling();
-        }
+        dtShow(res.digital_twin);
 
       } else if (mode === "batch") {
         selectedFiles.forEach((f) => fd.append("files", f));
@@ -629,7 +519,6 @@
     street_vendor:   "#D9B84A",
     cart:            "#B58A52",
     garbage:         "#7E8A6B",
-    tree_on_road:    "#5C8A5C",
   };
   const FALLBACK_COLORS = ["#D9534F","#D9B84A","#C97A3D","#B58A52","#7E8A6B","#9B6B9E"];
   function colorFor(name, idx) {
@@ -641,54 +530,75 @@
   // ----------------------------------------------------------------
 
   function heroHTML(data) {
-    const cfg = data.road_config  || {};
-    const irc = data.irc_basis    || {};
-    const calc = data.capacity_calculation || {};
+    const cfg   = data.road_config || {};
+    const basis = data.capacity_basis || {};
+    const calc  = data.capacity_calculation || {};
+    const iv    = data.indicative_vehicles || {};
+    const los   = data.level_of_service;
 
-    const regime   = data.traffic_regime || {};
     const stripParts = [
-      ["Collected",      formatDateDisplay(cfg.data_collection_date)],
-      ["Date",           formatDateDisplay(cfg.analysis_date)],
-      ["Carriageway",    titleCase(cfg.carriageway_key || "")],
-      ["Fringe",         titleCase(cfg.fringe_condition || "")],
-      ["Total width",    cfg.total_width_m   != null ? cfg.total_width_m   + " m" : null],
-      ["Lanes",          cfg.num_lanes],
-      ["Shoulder",       cfg.usable_shoulder_m != null ? cfg.usable_shoulder_m + " m" : null],
-      ["Traffic regime", regime.regime ? (regime.regime === "low" ? "Low (<15% heavy)" : "High (≥15% heavy)") : null],
-      ["Base DSV",       irc.base_dsv_pcu_hr  != null ? irc.base_dsv_pcu_hr  + " PCU/hr" : null],
-      ["Avg PCU/veh",    regime.avg_pcu_per_vehicle != null ? regime.avg_pcu_per_vehicle : null],
-    ].filter((p) => p[1] !== null && p[1] !== undefined);
+      ["Collected",       formatDateDisplay(cfg.data_collection_date)],
+      ["Analysed",        formatDateDisplay(cfg.analysis_date)],
+      ["Road type",       basis.road_type_label],
+      ["Basis",           basis.direction_basis],
+      ["C0 method",       basis.base_capacity_detail],
+      ["Width",           cfg.total_width_m != null ? cfg.total_width_m + " m" : null],
+      ["Lanes",           cfg.num_lanes],
+      ["Operating speed", basis.operating_speed_kmh != null
+                            ? `${basis.operating_speed_kmh} km/h (${basis.operating_speed_source})` : null],
+    ].filter((p) => p[1] !== null && p[1] !== undefined && p[1] !== "");
+
+    const chip = ([k, v]) => `<span class="${v < 1 ? "factor-active" : ""}"><b>${k.replace("F_", "F<sub>")}</sub></b> ${fmt(v, 3)}</span>`;
+    const factorChips =
+      `<span><b>Indo-HCM:</b></span>` + Object.entries(calc.indo_hcm_factors || {}).map(chip).join("") +
+      `<span><b>Extensions:</b></span>` + Object.entries(calc.extension_factors || {}).map(chip).join("");
+
+    const warnings = (basis.warnings || []).concat((data.digital_twin || {}).warnings || []);
+    const losHTML = los
+      ? `<div class="item"><div class="label">LOS at ${fmt(los.observed_volume_pcu_h, 0)} PCU/h (Table ${los.table})</div>
+           <div class="val">${los.los_base} → ${los.los_hcm} → <span class="red">${los.los_ext}</span></div>
+           <div class="val-sub">V/C ${fmt(los.vc_base, 2)} base · ${fmt(los.vc_hcm, 2)} Indo-HCM · ${fmt(los.vc_ext, 2)} with extensions</div></div>`
+      : `<div class="item"><div class="label">Level of service</div>
+           <div class="val-sub">Enter an observed volume to get V/C and LOS</div></div>`;
 
     return `
       <div class="hero">
         <div class="card hero-main">
-          <div class="eyebrow">Analysed ${cfg.analysis_date ? `· ${formatDateDisplay(cfg.analysis_date)} ` : ""}· <span class="image-name">${data.image || "untitled"}</span></div>
-          <div class="big-number">${fmt(data.reduced_capacity_pcu_hr, 0)} <small>PCU/hr usable capacity</small></div>
+          <div class="eyebrow">${basis.standard || "Indo-HCM 2017"} · <span class="image-name">${data.image || "untitled"}</span></div>
+          <div class="big-number">${fmt(data.reduced_capacity_pcu_h, 0)} <small>PCU/h capacity now (${basis.direction_basis || ""})</small></div>
           <div class="compare">
             <div class="item">
-              <div class="label">Base capacity (IRC:106)</div>
-              <div class="val orig">${fmt(data.original_capacity_pcu_hr, 0)} PCU/hr</div>
-              ${data.original_capacity_vehicles_hr ? `<div class="val-sub">${fmt(data.original_capacity_vehicles_hr, 0)} vehicles/hr</div>` : ""}
+              <div class="label">Base capacity C0</div>
+              <div class="val orig">${fmt(data.base_capacity_pcu_h, 0)} PCU/h</div>
+              <div class="val-sub">≈ ${fmt(iv.base_capacity_veh_h, 0)} veh/h (assumed mix)</div>
             </div>
             <div class="item">
-              <div class="label">Reduced capacity</div>
-              <div class="val red">${fmt(data.reduced_capacity_pcu_hr, 0)} PCU/hr</div>
-              ${data.reduced_capacity_vehicles_hr ? `<div class="val-sub">${fmt(data.reduced_capacity_vehicles_hr, 0)} vehicles/hr</div>` : ""}
+              <div class="label">Indo-HCM capacity (Eq. 5.5)</div>
+              <div class="val">${fmt(data.indo_hcm_capacity_pcu_h, 0)} PCU/h</div>
+              <div class="val-sub">parking, bus stop, access points only (${fmt(data.indo_hcm_loss_pct, 1)}% loss)</div>
+            </div>
+            <div class="item">
+              <div class="label">Capacity incl. extensions</div>
+              <div class="val red">${fmt(data.reduced_capacity_pcu_h, 0)} PCU/h</div>
+              <div class="val-sub">≈ ${fmt(iv.reduced_capacity_veh_h, 0)} veh/h (assumed mix)</div>
             </div>
             <div class="item">
               <div class="label">Capacity lost</div>
-              <div class="val loss">${fmt(data.capacity_loss_pcu_hr, 0)} PCU/hr (${fmt(data.capacity_loss_pct, 1)}%)</div>
-              ${data.capacity_loss_vehicles_hr ? `<div class="val-sub">${fmt(data.capacity_loss_vehicles_hr, 0)} vehicles/hr lost</div>` : ""}
+              <div class="val loss">${fmt(data.capacity_loss_pcu_h, 0)} PCU/h (${fmt(data.capacity_loss_pct, 1)}%)</div>
+              <div class="val-sub">LOS-C service volume ${fmt(data.dsv_los_c_ideal_pcu_h, 0)} → ${fmt(data.dsv_los_c_reduced_pcu_h, 0)}</div>
             </div>
+            ${losHTML}
           </div>
-          ${calc.formula ? `<div class="formula-box mono">Formula: ${calc.formula}</div>` : ""}
+          ${calc.formula_indo_hcm ? `<div class="formula-box mono">${calc.formula_indo_hcm}<br>${calc.formula}</div>` : ""}
+          <div class="config-strip">${factorChips}</div>
           <div class="config-strip">${stripParts.map(([l, v]) => `<span><b>${l}:</b> ${v}</span>`).join("")}</div>
+          ${warnings.map((w) => `<div class="veto-note">⚠ ${w}</div>`).join("")}
           ${data.vehicle_veto_suppressed
-            ? `<div class="veto-note">Note: ${data.vehicle_veto_suppressed} vendor/cart detection(s) suppressed (overlapped a vehicle - likely auto-rickshaw misclassification).</div>`
+            ? `<div class="veto-note">${data.vehicle_veto_suppressed} vendor/cart detection(s) suppressed because they overlapped a vehicle box (likely auto-rickshaws).</div>`
             : ""}
         </div>
         <div class="card capacity-band-card">
-          <div class="eyebrow">Overall Road Condition</div>
+          <div class="eyebrow">Overall capacity loss</div>
           ${overallBandHTML(data)}
         </div>
       </div>`;
@@ -715,38 +625,40 @@
 
   function overallGuidanceHTML(data) { return ""; }  // merged into heroHTML above
 
-  function roadbarHTML(cfg, perDefect) {
+  function roadbarHTML(data) {
+    const cfg  = data.road_config || {};
+    const calc = data.capacity_calculation || {};
+    const perDefect = data.per_defect || {};
     const totalWidth = cfg.total_width_m || 0;
-    const names = Object.keys(perDefect || {});
-    const segments = names
-      .map((name, i) => ({ name, blocked_m: perDefect[name].blocked_m || 0, color: colorFor(name, i) }))
+    const segments = Object.keys(perDefect)
+      .filter((n) => n !== "pothole")
+      .map((name, i) => ({ name, blocked_m: perDefect[name].blocked_m || 0, color: colorFor(name, i),
+                           mech: perDefect[name].mechanism }))
       .filter((s) => s.blocked_m > 0.001)
       .sort((a, b) => b.blocked_m - a.blocked_m);
-
     const blockedTotal = segments.reduce((s, seg) => s + seg.blocked_m, 0);
-    const scale        = (blockedTotal > totalWidth && totalWidth > 0) ? totalWidth / blockedTotal : 1;
-    const usableWidth  = Math.max(totalWidth - blockedTotal, 0);
+    const scale  = (blockedTotal > totalWidth && totalWidth > 0) ? totalWidth / blockedTotal : 1;
+    const usable = calc.effective_width_m != null ? calc.effective_width_m : Math.max(totalWidth - blockedTotal, 0);
 
     let barHTML = "";
     if (totalWidth > 0) {
       segments.forEach((seg) => {
         const pct = ((seg.blocked_m * scale) / totalWidth) * 100;
-        barHTML += `<div class="seg" style="width:${pct}%;background:${seg.color}" title="${titleCase(seg.name)}: ${fmt(seg.blocked_m,2)}m">${pct > 6 ? `<span class="seg-label">${titleCase(seg.name)}</span>` : ""}</div>`;
+        barHTML += `<div class="seg" style="width:${pct}%;background:${seg.color}" title="${titleCase(seg.name)}: ${fmt(seg.blocked_m,2)} m">${pct > 6 ? `<span class="seg-label">${titleCase(seg.name)}</span>` : ""}</div>`;
       });
-      const usablePct = (usableWidth / totalWidth) * 100;
-      barHTML += `<div class="seg usable" style="width:${usablePct}%" title="Usable: ${fmt(usableWidth,2)}m">${usablePct > 10 ? `<span class="seg-label">Usable</span>` : ""}</div>`;
+      const restPct = Math.max(0, 100 - segments.reduce((s, seg) => s + (seg.blocked_m * scale / totalWidth) * 100, 0));
+      barHTML += `<div class="seg usable" style="width:${restPct}%">${restPct > 10 ? `<span class="seg-label">Open</span>` : ""}</div>`;
     }
-
     const legendHTML =
-      segments.map((seg) => `<div class="leg"><span class="dot" style="background:${seg.color}"></span>${titleCase(seg.name)} · ${fmt(seg.blocked_m,2)} m</div>`).join("") +
-      `<div class="leg"><span class="dot" style="background:var(--green)"></span>Usable width · ${fmt(usableWidth,2)} m</div>`;
+      segments.map((seg) => `<div class="leg"><span class="dot" style="background:${seg.color}"></span>${titleCase(seg.name)} · ${fmt(seg.blocked_m,2)} m · ${seg.mech}</div>`).join("") +
+      `<div class="leg"><span class="dot" style="background:var(--green)"></span>Usable for F<sub>W</sub> (after 0.25 m shy distance) · ${fmt(usable,2)} m</div>`;
 
     return `
       <div class="card roadbar-card">
-        <div class="card-title">Carriageway Width Budget</div>
-        <div class="card-sub">How each obstruction type consumes road width - overlap-aware (no double counting).</div>
+        <div class="card-title">Carriageway Width</div>
+        <div class="card-sub">Physical occupation across the carriageway. Parked vehicles are shown but act through the Indo-HCM parking factor, not the width factor; potholes act through speed.</div>
         <div class="roadbar">${barHTML}</div>
-        <div class="roadbar-meta"><span>Total: ${fmt(totalWidth,2)} m</span><span>Usable: ${fmt(usableWidth,2)} m</span><span>Blocked: ${fmt(Math.min(blockedTotal,totalWidth),2)} m</span></div>
+        <div class="roadbar-meta"><span>Total: ${fmt(totalWidth,2)} m</span><span>Width-class obstructions: ${fmt(calc.obstruction_width_m,2)} m</span><span>Usable: ${fmt(usable,2)} m</span></div>
         <div class="roadbar-legend">${legendHTML}</div>
       </div>`;
   }
@@ -762,14 +674,12 @@
     cart:            "🛺",
     garbage:         "🗑️",
     barricade:       "🚧",
-    tree_on_road:    "🌳",
   };
 
   const DEFECT_ALERT_MESSAGES = {
     pothole: {
-      URGENT:  "Potholes are SEVERE - emergency repair required within 24 hours (IRC:SP:83).",
-      ROUTINE: "Potholes detected - patch with hot-mix asphalt within 7 days.",
-      MONITOR: "Minor potholes noted - log and monitor at next maintenance cycle.",
+      URGENT:  "Medium/large potholes — rectify straightaway (IRC:82-2015 cl. 5.3); verify depth on site.",
+      ROUTINE: "Small potholes — fill with premix at the next maintenance round (IRC:82 cl. 7.5.3.5).",
     },
     illegal_parking: {
       URGENT:  "Illegal parking is critically blocking road - immediate towing required (MV Act Sec.122).",
@@ -787,19 +697,14 @@
       MONITOR: "Cart movement noted - no immediate action needed.",
     },
     garbage: {
-      URGENT:  "Garbage severely blocking road - immediate clearance under SWM Rules 2016.",
-      ROUTINE: "Garbage dump detected - priority clearance within 48 hours.",
+      URGENT:  "Garbage severely blocking road - immediate clearance (SWM Rules 2016).",
+      ROUTINE: "Garbage dump detected - request priority clearance from the SWM department.",
       MONITOR: "Minor garbage noted - schedule at next municipal collection.",
     },
     barricade: {
       URGENT:  "Barricade severely restricting road - coordinate immediate removal (IRC:SP:55).",
       ROUTINE: "Work zone barricade - ensure proper signage and reduce width to minimum.",
       MONITOR: "Barricade detected - verify valid permit and signage per IRC:SP:55.",
-    },
-    tree_on_road: {
-      URGENT:  "Tree on road - immediate removal by tree authority, place diversion signage.",
-      ROUTINE: "Tree encroaching on road - request pruning within 7 days.",
-      MONITOR: "Tree noted - log for tree authority inspection.",
     },
   };
 
@@ -839,7 +744,7 @@
           <div class="alert-row-msg">${msg}</div>
           <div class="alert-row-stats">
             <span>${d.count} detected</span>
-            <span>${fmt(d.blocked_m, 2)} m blocked</span>
+            <span>${d.blocked_m ? fmt(d.blocked_m, 2) + " m wide" : d.mechanism}</span>
             <span>${fmt(d.capacity_loss_pct, 1)}% capacity lost</span>
           </div>
         </div>`;
@@ -871,16 +776,18 @@
 
     return `<div class="defect-grid">${sorted.map((d) => {
       const sev   = d.severity || "INVESTIGATE";
-      const depth = d.depth_summary;
-      const depthHTML = depth ? `
+      const size = d.size_summary;
+      const depthHTML = size ? `
         <div class="depth-summary">
-          <span class="depth-sev depth-${depth.worst_severity}">${depth.worst_severity.toUpperCase()} POTHOLE</span>
-          <span class="depth-detail">~${depth.avg_estimated_depth_cm} cm avg depth · penalty factor: ${depth.penalty_applied}</span>
+          <span class="depth-sev depth-${size.worst_size_class}">${size.worst_size_class.toUpperCase()} POTHOLE</span>
+          <span class="depth-detail">small ${size.counts.small} · medium ${size.counts.medium} · large ${size.counts.large}
+            · assumed speed drop ${fmt(size.assumed_speed_reduction_pct,0)}% · ${size.classification}</span>
         </div>` : "";
       const rec = d.rectification;
       const rectHTML = rec ? `
         <div class="defect-action" style="border-top:1px solid #333;margin-top:8px;padding-top:8px;">
           <strong>${rec.rectification_category}</strong> — ${rec.priority}
+          ${rec.escalation_note ? `<div style="font-size:0.8em;opacity:0.8;margin-top:4px;">${rec.escalation_note}</div>` : ""}
           <div style="font-size:0.85em;opacity:0.85;margin-top:4px;">${rec.method}</div>
           <div style="font-size:0.8em;opacity:0.7;">${rec.materials}</div>
           <div style="font-size:0.8em;opacity:0.7;">${rec.work_zone_note}</div>
@@ -890,19 +797,20 @@
           <div class="defect-head">
             <div>
               <div class="defect-name">${titleCase(d.name)}</div>
-              <div class="defect-count">${d.count} detected · ${fmt(d.blocked_m,2)} m blocked (overlap-aware)</div>
+              <div class="defect-count">${d.count} detected · ${d.mechanism}${d.blocked_m ? ` · ${fmt(d.blocked_m,2)} m` : ""}</div>
             </div>
             <div class="sev-chip sev-${sev}">${sev}</div>
           </div>
           <div class="defect-metrics">
             <div class="m"><div class="v">${fmt(d.capacity_loss_pcu,0)}</div><div class="l">PCU/hr lost</div></div>
-            <div class="m"><div class="v">${fmt(d.capacity_loss_pct,1)}%</div><div class="l">of capacity</div></div>
-            <div class="m"><div class="v">${fmt(d.width_factor ? (1-d.width_factor)*100 : null,1)}%</div><div class="l">width reduction</div></div>
+            <div class="m"><div class="v">${fmt(d.capacity_loss_pct,1)}%</div><div class="l">of C0 if alone</div></div>
+            <div class="m"><div class="v">${fmt(d.factor,3)}</div><div class="l">factor alone</div></div>
           </div>
           ${depthHTML}
           ${rectHTML}
           <div class="defect-action">${d.action || "No specific action mapped - flag for manual inspection."}</div>
           <div class="defect-code">${d.code_ref || ""}</div>
+          <div class="defect-code">Severity basis: ${d.severity_basis || "-"}</div>
         </div>`;
     }).join("")}</div>`;
   }
@@ -1069,7 +977,7 @@
           <div>
             <div class="action-bar-title">Department Action Report</div>
             <div class="action-bar-sub">Defects grouped by the civic department responsible for each —
-            PWD, Traffic Police, or Municipal Corporation — with IRC code references, ready to send as-is.</div>
+            PWD, Traffic Police, or Municipal Corporation — with IRC code references, verify on site before dispatch.</div>
           </div>
         </div>
         <a class="action-dl-btn" href="/api/jobs/${encodeURIComponent(data.job_id)}/department-report.pdf"
@@ -1089,8 +997,8 @@
       xodrButtonHTML(data) +
       departmentReportButtonHTML(data) +
       corridorButtonHTML() +
-      roadbarHTML(data.road_config || {}, data.per_defect || {}) +
-      `<div class="section-title">Defects Detected - Capacity Loss &amp; Recommended Actions</div>` +
+      roadbarHTML(data) +
+      `<div class="section-title">Defects Detected — each factor shown as if it were the only obstruction (factors combine by multiplication)</div>` +
       defectGridHTML(data.per_defect);
 
     // Track this analysis for the "combine into one corridor" export —
@@ -1110,6 +1018,7 @@
       <tr>
         <td class="rank">${i + 1}</td>
         <td>${r.image}</td>
+        <td>${fmt(r.reduced_capacity_pcu_h,0)}</td>
         <td>${fmt(r.capacity_loss_pct,1)}%</td>
         <td class="defects-list">${r.defects_found.length ? r.defects_found.map(titleCase).join(", ") : "-"}</td>
       </tr>`).join("");
@@ -1124,7 +1033,8 @@
         <div class="card-sub">Date of analysis: ${formatDateDisplay((data.road_config || {}).analysis_date)}</div>
         <div class="batch-summary-row">
           <div class="batch-stat"><div class="l">Worst capacity loss</div><div class="v loss">${fmt(data.worst_capacity_loss_pct,1)}%</div></div>
-          <div class="batch-stat"><div class="l">Average capacity loss</div><div class="v">${fmt(data.avg_capacity_loss_pct,1)}%</div></div>
+          <div class="batch-stat"><div class="l">Bottleneck capacity</div><div class="v">${fmt(data.bottleneck_capacity_pcu_h,0)} PCU/h</div></div>
+          <div class="batch-stat"><div class="l">Median loss</div><div class="v">${fmt(data.median_capacity_loss_pct,1)}%</div></div>
           <div class="batch-stat"><div class="l">Worst image</div><div class="v" style="font-size:13px;font-family:monospace;">${data.worst_image_or_frame || "-"}</div></div>
         </div>
       </div>
@@ -1132,7 +1042,7 @@
       <div class="section-title">Images Ranked by Capacity Loss (Worst First)</div>
       <div class="card">
         <table class="stretch-table">
-          <thead><tr><th>#</th><th>Image</th><th>Capacity Lost</th><th>Defects Found</th></tr></thead>
+          <thead><tr><th>#</th><th>Image</th><th>Capacity now (PCU/h)</th><th>Capacity Lost</th><th>Defects Found</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1141,10 +1051,7 @@
     // The department report / digital twin are both built from the worst
     // photo in the batch (see app.py's _run_batch_job) — trigger the same
     // twin panel + polling the single-image flow uses.
-    if (data.job_id) {
-      dtShowPanel();
-      dtStartPolling();
-    }
+    dtShow(data.digital_twin);
   }
 
   // ----------------------------------------------------------------
@@ -1164,7 +1071,7 @@
       .map((d) => `
         <div class="unique-defect-row">
           <span class="udr-name">${titleCase(d.cls_name)}</span>
-          <span class="udr-meta">seen ${d.times_seen}× · ${fmt(d.first_seen_sec,1)}s–${fmt(d.last_seen_sec,1)}s · max ${fmt(d.max_blocked_m,2)} m blocked</span>
+          <span class="udr-meta">seen ${d.times_seen}× · ${fmt(d.first_seen_sec,1)}s–${fmt(d.last_seen_sec,1)}s · max ${fmt(d.max_width_m,2)} m wide</span>
         </div>`).join("");
 
     resultsRoot.innerHTML = `
@@ -1173,7 +1080,8 @@
         <div class="card-sub">Date of analysis: ${formatDateDisplay((data.road_config || {}).analysis_date)}</div>
         <div class="batch-summary-row">
           <div class="batch-stat"><div class="l">Worst moment</div><div class="v loss">${fmt(data.worst_capacity_loss_pct,1)}%</div></div>
-          <div class="batch-stat"><div class="l">Average capacity loss</div><div class="v">${fmt(data.avg_capacity_loss_pct,1)}%</div></div>
+          <div class="batch-stat"><div class="l">Bottleneck capacity</div><div class="v">${fmt(data.bottleneck_capacity_pcu_h,0)} PCU/h</div></div>
+          <div class="batch-stat"><div class="l">Median loss</div><div class="v">${fmt(data.median_capacity_loss_pct,1)}%</div></div>
           <div class="batch-stat"><div class="l">Frames analysed</div><div class="v">${data.frames_analysed}</div></div>
           <div class="batch-stat"><div class="l">Unique defects tracked</div><div class="v">${data.unique_defect_count}</div></div>
         </div>
@@ -1181,7 +1089,7 @@
       ${departmentReportButtonHTML(data)}
       <div class="card timeline-card">
         <div class="card-title">Capacity Loss Over Time</div>
-        <div class="card-sub">Each bar = one sampled frame. Height = capacity lost at that moment.</div>
+        <div class="card-sub">Each bar = one sampled frame. Fixed camera: change over time. Moving camera: change along the road.</div>
         <div class="timeline-bar">${barsHTML}</div>
         <div class="timeline-meta"><span>0s</span><span>${frames.length ? frames[frames.length-1].timestamp_sec + "s" : "-"}</span></div>
       </div>
@@ -1190,10 +1098,7 @@
 
     // Same reasoning as renderBatchResult above — twin data was generated
     // from the worst sampled frame in _run_video_job.
-    if (data.job_id) {
-      dtShowPanel();
-      dtStartPolling();
-    }
+    dtShow(data.digital_twin);
   }
 
   function lossToColor(pct) {
@@ -1204,150 +1109,89 @@
   }
 
   // ================================================================
-  // DIGITAL TWIN PANEL
+  // DIGITAL TWIN PANEL — twin data arrives with the analysis response
   // ================================================================
-  const DT = { pollTimer: null };
-
-  function dtShowPanel() {
+  function dtShow(twin) {
     const panel = document.getElementById("dt-panel");
-    if (panel) {
-      panel.style.display = "";
-      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!panel || !twin) return;
+    panel.style.display = "";
+    const I = twin.ideal || {}, D = twin.defect || {};
+    setText("dt-demand-line",
+      `Demand ${fmt(twin.demand_pcu_h, 0)} PCU/h — ${twin.demand_source} · horizon ${twin.horizon_min} min`);
+    setText("dt-ideal-cap",   fmt(I.capacity_pcu_h, 0));
+    setText("dt-defect-cap",  fmt(D.capacity_pcu_h, 0));
+    setText("dt-ideal-vc",    fmt(I.vc_ratio, 2));
+    setText("dt-defect-vc",   fmt(D.vc_ratio, 2));
+    setText("dt-ideal-speed", fmt(I.section_speed_kmh, 1));
+    setText("dt-ideal-queue", fmt(I.queue_length_after_horizon_m, 0));
+    setText("dt-defect-queue", fmt(D.queue_length_after_horizon_m, 0));
+    if (D.queue_growth_pcu_h > 0) {
+      setText("dt-defect-speed", `${fmt(D.section_speed_kmh, 1)} / ${fmt(D.upstream_speed_kmh, 1)}`);
+      setText("dt-defect-speed-label", "At bottleneck / in the queue");
+    } else {
+      setText("dt-defect-speed", fmt(D.section_speed_kmh, 1));
+      setText("dt-defect-speed-label", "Stream speed at demand");
     }
-    dtSetBadge("running", "Calculating…");
-  }
+    setText("dt-loss-pct", fmt(twin.capacity_loss_pct, 1) + "%");
 
-  function dtStartPolling() {
-    if (DT.pollTimer) clearInterval(DT.pollTimer);
-    DT.pollTimer = setInterval(dtPoll, 2500);
-    dtPoll();
-  }
-
-  async function dtPoll() {
-    try {
-      const res  = await fetch("/api/digital-twin/status");
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.status === "done" && data.twin_data) {
-        clearInterval(DT.pollTimer);
-        dtSetBadge("done", "Simulation complete");
-        dtRender(data.twin_data);
-      } else if (data.status === "error") {
-        clearInterval(DT.pollTimer);
-        dtSetBadge("error", "Simulation error");
-      } else {
-        dtSetBadge("running", "Calculating…");
-      }
-    } catch (e) { /* silent */ }
-  }
-
-  function dtRender(twin) {
-    const s = twin.summary || {};
-    DT.lastSummary = s;  // stash for the RoadRunner script generator (vehicle count)
-    setText("dt-ideal-cap",    Math.round(s.ideal_capacity_pcu_hr  || 0));
-    setText("dt-defect-cap",   Math.round(s.defect_capacity_pcu_hr || 0));
-    setText("dt-ideal-vol",    Math.round(s.ideal_volume_design_pcu  || 0));
-    setText("dt-defect-vol",   Math.round(s.defect_volume_design_pcu || 0));
-    setText("dt-defect-speed", (s.steady_state_speed_kmh || 0).toFixed(1));
-    setText("dt-loss-pct",     (s.capacity_loss_pct || 0).toFixed(1) + "%");
-
-    if ((s.pothole_speed_impact_pct || 0) > 0) {
-      document.getElementById("dt-speed-section").style.display = "";
-      setText("dt-speed-reduction", (s.speed_reduction_pct || 0).toFixed(1));
-      setText("dt-congested-speed", (s.steady_state_speed_kmh || 0).toFixed(1));
+    const notes = [];
+    if (D.queue_growth_pcu_h > 0) {
+      notes.push(`Demand exceeds the reduced capacity: the queue grows by ${fmt(D.queue_growth_pcu_h,0)} PCU/h and its tail moves upstream at ${fmt(Math.abs(D.shockwave_kmh),1)} km/h; mean added delay ${fmt(D.mean_queue_delay_min,1)} min per vehicle over the horizon.`);
+    } else {
+      notes.push("Demand is below the reduced capacity: no queue forms; the obstruction only lowers stream speed.");
     }
+    (twin.warnings || []).forEach((w) => notes.push("⚠ " + w));
+    notes.push("Assumptions: " + (twin.assumptions || []).join(" · "));
+    document.getElementById("dt-notes").innerHTML = notes.map((n) => `<div>${n}</div>`).join("");
+    document.getElementById("dt-notes").style.display = "";
 
-    dtDrawCapChart(twin);
-    dtDrawSpdChart(twin);
-    const phEl = document.getElementById("dt-pothole-marker");
-    if (phEl && (s.pothole_speed_impact_pct || 0) > 0) phEl.style.display = "";
+    drawXY(document.getElementById("dt-cap-chart"), [
+      { x: twin.time_min, y: twin.queue_length_m.ideal,  color: "#22c55e", label: "Ideal" },
+      { x: twin.time_min, y: twin.queue_length_m.defect, color: "#ef4444", label: "Current" },
+    ], "min", "m");
+    drawXY(document.getElementById("dt-spd-chart"), [
+      { x: twin.speed_flow.ideal.flow_pcu_h,  y: twin.speed_flow.ideal.speed_kmh,  color: "#22c55e", label: "Ideal" },
+      { x: twin.speed_flow.defect.flow_pcu_h, y: twin.speed_flow.defect.speed_kmh, color: "#ef4444", label: "Current" },
+    ], "PCU/h", "km/h", twin.demand_pcu_h);
   }
 
-  function dtDrawCapChart(twin) {
-    const canvas = document.getElementById("dt-cap-chart");
+  function drawXY(canvas, series, xUnit, yUnit, markX) {
     if (!canvas) return;
-    dtDrawLineChart(canvas.getContext("2d"), canvas,
-      twin.simulation_time_s || [],
-      [
-        { data: twin.ideal_capacity_pcu_hr  || [], color: "#22c55e", label: "Ideal" },
-        { data: twin.defect_capacity_pcu_hr || [], color: "#ef4444", label: "Defect" },
-      ]);
-  }
-
-  function dtDrawSpdChart(twin) {
-    const canvas = document.getElementById("dt-spd-chart");
-    if (!canvas) return;
-    dtDrawLineChart(canvas.getContext("2d"), canvas,
-      twin.simulation_time_s || [],
-      [{ data: twin.vehicle_speed_kmh || [], color: "#f97316", label: "Speed" }]);
-  }
-
-  function dtDrawLineChart(ctx, canvas, xData, series) {
+    const ctx = canvas.getContext("2d");
     const W = canvas.width, H = canvas.height;
-    const PAD = { top: 12, right: 12, bottom: 24, left: 48 };
-    const plotW = W - PAD.left - PAD.right;
-    const plotH = H - PAD.top - PAD.bottom;
-
-    ctx.fillStyle = "#1e293b";
-    ctx.fillRect(0, 0, W, H);
-
-    let yMin = Infinity, yMax = -Infinity;
-    series.forEach((s) => s.data.forEach((v) => { yMin = Math.min(yMin,v); yMax = Math.max(yMax,v); }));
-    if (!isFinite(yMin)) { yMin = 0; yMax = 100; }
-    const yPad = (yMax - yMin) * 0.1 || 10;
-    yMin -= yPad; yMax += yPad;
-
-    const xMax   = xData[xData.length - 1] || 60;
-    const xScale = (v) => PAD.left + (v / xMax) * plotW;
-    const yScale = (v) => PAD.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
-
+    const P = { top: 14, right: 14, bottom: 28, left: 52 };
+    const pw = W - P.left - P.right, ph = H - P.top - P.bottom;
+    ctx.fillStyle = "#1e293b"; ctx.fillRect(0, 0, W, H);
+    const xs = series.flatMap((s) => s.x), ys = series.flatMap((s) => s.y);
+    const xMax = Math.max(1, ...xs, markX || 0), yMax = Math.max(1, ...ys) * 1.1;
+    const X = (v) => P.left + (v / xMax) * pw, Y = (v) => P.top + ph - (v / yMax) * ph;
+    ctx.font = "10px JetBrains Mono, monospace"; ctx.fillStyle = "#64748b";
     ctx.strokeStyle = "#334155"; ctx.lineWidth = 0.5;
     for (let i = 0; i <= 4; i++) {
-      const y   = PAD.top + (plotH / 4) * i;
-      const val = yMax - ((yMax - yMin) / 4) * i;
-      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + plotW, y); ctx.stroke();
-      ctx.fillStyle = "#64748b"; ctx.font = "10px JetBrains Mono, monospace";
-      ctx.textAlign = "right";
-      ctx.fillText(Math.round(val), PAD.left - 4, y + 4);
+      const yv = (yMax / 4) * i, y = Y(yv);
+      ctx.beginPath(); ctx.moveTo(P.left, y); ctx.lineTo(P.left + pw, y); ctx.stroke();
+      ctx.textAlign = "right"; ctx.fillText(Math.round(yv), P.left - 4, y + 3);
+      const xv = (xMax / 4) * i;
+      ctx.textAlign = "center"; ctx.fillText(Math.round(xv), X(xv), P.top + ph + 14);
     }
-    ctx.strokeStyle = "#475569"; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(PAD.left, PAD.top); ctx.lineTo(PAD.left, PAD.top + plotH);
-    ctx.lineTo(PAD.left + plotW, PAD.top + plotH);
-    ctx.stroke();
-    ctx.fillStyle = "#64748b"; ctx.font = "10px JetBrains Mono, monospace"; ctx.textAlign = "center";
-    [0,15,30,45,60].forEach((sec) => ctx.fillText(sec + "s", xScale(sec), PAD.top + plotH + 16));
-
-    series.forEach(({ data, color }) => {
-      if (!data.length) return;
-      ctx.strokeStyle = color; ctx.lineWidth = 2;
-      ctx.beginPath();
-      data.forEach((v, i) => {
-        const x = xScale(xData[i] || 0), y = yScale(v);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      });
+    ctx.textAlign = "right"; ctx.fillText(xUnit, P.left + pw, P.top + ph + 26);
+    ctx.textAlign = "left";  ctx.fillText(yUnit, 4, P.top + 8);
+    if (markX) {
+      ctx.strokeStyle = "#94a3b8"; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(X(markX), P.top); ctx.lineTo(X(markX), P.top + ph); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillText("demand", X(markX) + 3, P.top + 10);
+    }
+    series.forEach((s, si) => {
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.beginPath();
+      s.x.forEach((xv, i) => (i ? ctx.lineTo(X(xv), Y(s.y[i])) : ctx.moveTo(X(xv), Y(s.y[i]))));
       ctx.stroke();
-      ctx.fillStyle = color + "22";
-      ctx.beginPath();
-      data.forEach((v, i) => {
-        const x = xScale(xData[i] || 0), y = yScale(v);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      });
-      ctx.lineTo(xScale(xData[xData.length-1] || 0), yScale(yMin));
-      ctx.lineTo(xScale(xData[0] || 0), yScale(yMin));
-      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = s.color; ctx.fillText(s.label, P.left + 8 + si * 70, P.top + 10);
     });
   }
 
   function setText(id, val) {
     const el = document.getElementById(id);
     if (el) el.textContent = val;
-  }
-  function dtSetBadge(cls, text) {
-    const el = document.getElementById("dt-status-badge");
-    if (!el) return;
-    el.className = `dt-status-badge ${cls}`;
-    el.textContent = text;
   }
 
   // ----------------------------------------------------------------

@@ -30,7 +30,7 @@ from typing import Optional
 
 logger = logging.getLogger("road_analyzer.digital_twin_bridge")
 
-BASE_DIR       = Path(__file__).resolve().parent.parent   # road_analyzer_deploy/
+BASE_DIR       = Path(__file__).resolve().parents[2]   # road_analyzer_deploy/
 MATLAB_TWIN_DIR = BASE_DIR / "matlab_twin"
 STATUS_PATH    = MATLAB_TWIN_DIR / "dt_status.json"
 OUTPUT_PATH    = MATLAB_TWIN_DIR / "dt_output.json"

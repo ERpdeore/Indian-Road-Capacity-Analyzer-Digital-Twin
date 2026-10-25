@@ -52,7 +52,7 @@ _OBJECT_TYPE_MAP = {
     "illegal_parking": (xodr.ObjectType.parkingSpace, 2.0, 4.5, 0.0),
     "street_vendor":   (xodr.ObjectType.obstacle, 1.5, 1.5, 1.8),
     "garbage":         (xodr.ObjectType.obstacle, 1.0, 1.0, 0.5),
-    "tree":            (xodr.ObjectType.tree,     1.0, 1.0, 4.0),
+    "cart":            (xodr.ObjectType.obstacle, 1.2, 2.0, 1.2),
 }
 _DEFAULT_OBJECT = (xodr.ObjectType.obstacle, 1.0, 1.0, 0.5)
 
@@ -72,12 +72,18 @@ def _serialize(odr) -> str:
         os.remove(path)
 
 
-def _lane_split(num_lanes: int) -> tuple[int, int]:
-    """Split total lane count into (left, right) for a two-way road."""
+def _lane_split(num_lanes: int, divided: bool = False) -> tuple[int, int]:
+    """(left, right) lanes. A divided-road carriageway (one direction) has
+    all its lanes on one side; an undivided road is split between both."""
     num_lanes = max(1, int(num_lanes))
+    if divided:
+        return 0, num_lanes
     left  = (num_lanes + 1) // 2
-    right = num_lanes - left
-    return left, max(right, 0)
+    return left, num_lanes - left
+
+
+def _is_divided(result: dict) -> bool:
+    return bool((result.get("capacity_basis") or {}).get("divided"))
 
 
 def _flatten_defects(per_defect: dict) -> list[dict]:
@@ -131,7 +137,7 @@ def build_single_road_xodr(result: dict, segment_length_m: float = DEFAULT_SEGME
     num_lanes     = int(cfg.get("num_lanes", 2))
     lane_width    = total_width_m / max(num_lanes, 1)
 
-    left_lanes, right_lanes = _lane_split(num_lanes)
+    left_lanes, right_lanes = _lane_split(num_lanes, _is_divided(result))
 
     road = xodr.create_road(
         xodr.Line(segment_length_m),
@@ -174,7 +180,7 @@ def build_corridor_xodr(results: list[dict]) -> str:
         total_width_m = float(cfg.get("total_width_m", 7.0))
         num_lanes     = int(cfg.get("num_lanes", 2))
         lane_width    = total_width_m / max(num_lanes, 1)
-        left_lanes, right_lanes = _lane_split(num_lanes)
+        left_lanes, right_lanes = _lane_split(num_lanes, _is_divided(result))
 
         # Segment length: gap to the NEXT segment's chainage, if known and
         # sane; otherwise fall back to the default spacing.
@@ -242,41 +248,31 @@ def build_ideal_corridor_xodr(results: list[dict]) -> str:
 
 
 def corridor_capacity_summary(results: list[dict]) -> dict:
-    """Combines the per-photo capacity numbers already calculated for
-    each segment into ONE summary for the whole corridor, using the
-    weakest-segment (bottleneck) rule: a corridor's real capacity is
-    limited by its worst segment, not the average of all of them --
-    that's standard traffic-engineering practice, not an arbitrary
-    choice. Speeds are taken from that same bottleneck segment so the
-    numbers stay internally consistent with each other."""
+    """Corridor capacity = capacity of its weakest section (bottleneck rule).
+    Ideal and reduced figures are each the minimum over the sections, so
+    they may come from different photos; both are named in the output."""
     if not results:
         raise ValueError("No completed analyses to summarize.")
-
-    def reduced(r):
-        v = r.get("reduced_capacity_vehicles_hr")
-        return v if v is not None else float("inf")
-
-    worst = min(results, key=reduced)
-
-    original_vals = [r.get("original_capacity_vehicles_hr") for r in results
-                      if r.get("original_capacity_vehicles_hr") is not None]
-    worst_original = min(original_vals) if original_vals else worst.get("original_capacity_vehicles_hr")
-    worst_reduced  = worst.get("reduced_capacity_vehicles_hr")
-
-    loss_pct = None
-    if worst_original and worst_reduced is not None and worst_original > 0:
-        loss_pct = round((worst_original - worst_reduced) / worst_original * 100, 1)
-
+    usable = [r for r in results if r.get("reduced_capacity_pcu_h") is not None]
+    if not usable:
+        raise ValueError("None of the results carry capacity figures.")
+    ideal = min(usable, key=lambda r: r.get("base_capacity_pcu_h", float("inf")))
+    worst = min(usable, key=lambda r: r["reduced_capacity_pcu_h"])
+    c0, c = ideal.get("base_capacity_pcu_h"), worst["reduced_capacity_pcu_h"]
+    twin = worst.get("digital_twin") or {}
     return {
-        "original_capacity_vehicles_hr": worst_original,
-        "reduced_capacity_vehicles_hr": worst_reduced,
-        "capacity_loss_pct": loss_pct,
-        "free_flow_speed_kmh": worst.get("free_flow_speed_kmh"),
-        "congested_speed_kmh": (worst.get("traffic_regime") or {}).get("congested_speed_kmh"),
-        "bottleneck_note": (
-            f"Combined from {len(results)} photos using the weakest segment "
-            f"(lowest reduced capacity) as the corridor's real limiting capacity."
-        ),
+        "units": "PCU/h",
+        "base_capacity_pcu_h": c0,
+        "reduced_capacity_pcu_h": c,
+        "capacity_loss_pct": round((c0 - c) / c0 * 100, 1) if c0 else None,
+        "ideal_limiting_section": ideal.get("image"),
+        "bottleneck_section": worst.get("image"),
+        "operating_speed_kmh": worst.get("operating_speed_kmh"),
+        "avg_pcu_per_vehicle": (worst.get("indicative_vehicles") or {}).get("avg_pcu_per_vehicle"),
+        "num_lanes": (worst.get("road_config") or {}).get("num_lanes"),
+        "divided": (worst.get("capacity_basis") or {}).get("divided"),
+        "twin": {k: twin.get(k) for k in ("demand_pcu_h", "demand_source", "ideal", "defect")} if twin else None,
+        "bottleneck_note": f"Weakest of {len(usable)} sections governs the corridor.",
     }
 
 

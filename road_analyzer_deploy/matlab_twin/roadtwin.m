@@ -5,7 +5,7 @@ function roadtwin(jsonPath)
 %%
 %% USAGE (with your REAL analysis data -- recommended):
 %%   roadtwin('C:\Users\Admin\Downloads\images (1)_roadrunner_capacity.json')
-%%   (or just run 3_run_2D_digital_twin.bat, which finds this automatically)
+%%   (or double-click run_2d_digital_twin.bat, which finds the newest JSON here)
 %%
 %% USAGE (with placeholder demo numbers, no real data):
 %%   roadtwin()
@@ -32,16 +32,23 @@ end
 %% was given and found; otherwise falls back to demo defaults below,
 %% so this always runs even with no data.
 %% ============================================================
-BASE_DSV        = 1500;
-REDUCED_CAP     = 1050;
-CAP_LOSS_PCT    = 30.0;
+% Demo defaults (used only when no capacity JSON is given). PCU/h.
+BASE_CAP        = 2700;     % Indo-HCM Table 5.4, four-lane divided, one direction
+REDUCED_CAP     = 2133;     % x F_W 0.79 (vendor), no Indo-HCM friction
+CAP_LOSS_PCT    = 21.0;
 TOTAL_WIDTH_M   = 7.0;
-BLOCKED_M       = 2.1;
-WIDTH_FACTOR    = 0.700;
-POTHOLE_PENALTY = 0.85;
+BLOCKED_M       = 1.5;
+FACTORS         = struct('F_OP',1,'F_BS',1,'F_AC',1,'F_W',0.79,'F_R',1);
 NUM_LANES       = 2;
-DEFECTS         = 'pothole + street vendor';
-FREE_FLOW_SPEED = 50;
+DEFECTS         = 'street vendor';
+FREE_SPD        = 56.6;     % speed Eq. 5.4 implies for 1350 PCU/h/lane
+DEMAND          = 1890;     % Design Service Volume, LOS-C (Table 5.4)
+IDEAL_SPD       = 43.8;     % twin: speed at demand, ideal road
+CONG_SPD        = 37.9;     % twin: speed at the obstruction
+QUEUE_SPD       = 37.9;     % twin: speed in the upstream queue (= CONG_SPD if no queue)
+K_IDEAL_LANE    = 21.6;     % twin densities, PCU/km/lane
+K_QUEUE_LANE    = 24.9;
+AVG_PCU         = 0.80;
 
 HAS_POTHOLE   = true;
 HAS_VENDOR    = true;
@@ -53,55 +60,47 @@ usedRealData = false;
 if ~isempty(jsonPath) && isfile(jsonPath)
     try
         cap = jsondecode(fileread(jsonPath));
-        if isfield(cap,'original_capacity_vehicles_hr') && ~isempty(cap.original_capacity_vehicles_hr)
-            BASE_DSV = cap.original_capacity_vehicles_hr;
-        end
-        if isfield(cap,'reduced_capacity_vehicles_hr') && ~isempty(cap.reduced_capacity_vehicles_hr)
-            REDUCED_CAP = cap.reduced_capacity_vehicles_hr;
-        end
-        if isfield(cap,'capacity_loss_pct') && ~isempty(cap.capacity_loss_pct)
-            CAP_LOSS_PCT = cap.capacity_loss_pct;
-        end
-        if isfield(cap,'total_width_m') && ~isempty(cap.total_width_m)
-            TOTAL_WIDTH_M = cap.total_width_m;
-        end
-        if isfield(cap,'total_blocked_m') && ~isempty(cap.total_blocked_m)
-            BLOCKED_M = cap.total_blocked_m;
-        end
-        if isfield(cap,'width_factor') && ~isempty(cap.width_factor)
-            WIDTH_FACTOR = cap.width_factor;
-        end
-        if isfield(cap,'pothole_penalty') && ~isempty(cap.pothole_penalty)
-            POTHOLE_PENALTY = cap.pothole_penalty;
-        end
-        if isfield(cap,'num_lanes') && ~isempty(cap.num_lanes)
-            NUM_LANES = cap.num_lanes;
-        end
-        if isfield(cap,'free_flow_speed_kmh') && ~isempty(cap.free_flow_speed_kmh)
-            FREE_FLOW_SPEED = cap.free_flow_speed_kmh;
+        BASE_CAP      = getf(cap, 'base_capacity_pcu_h', BASE_CAP);
+        REDUCED_CAP   = getf(cap, 'reduced_capacity_pcu_h', REDUCED_CAP);
+        CAP_LOSS_PCT  = getf(cap, 'capacity_loss_pct', CAP_LOSS_PCT);
+        TOTAL_WIDTH_M = getf(cap, 'total_width_m', TOTAL_WIDTH_M);
+        BLOCKED_M     = getf(cap, 'blocked_incl_shy_m', BLOCKED_M);
+        FACTORS       = getf(cap, 'factors', FACTORS);
+        NUM_LANES     = getf(cap, 'num_lanes', NUM_LANES);
+        FREE_SPD      = getf(cap, 'operating_speed_kmh', FREE_SPD);
+        AVG_PCU       = getf(cap, 'avg_pcu_per_vehicle', AVG_PCU);
+        if isfield(cap,'twin') && ~isempty(cap.twin)
+            DEMAND       = cap.twin.demand_pcu_h;
+            IDEAL_SPD    = cap.twin.ideal.section_speed_kmh;
+            K_IDEAL_LANE = cap.twin.ideal.section_density_pcu_km_lane;
+            CONG_SPD     = cap.twin.defect.section_speed_kmh;
+            QUEUE_SPD    = CONG_SPD;  K_QUEUE_LANE = cap.twin.defect.section_density_pcu_km_lane;
+            if isfield(cap.twin.defect,'upstream_queue_density_pcu_km_lane')
+                QUEUE_SPD    = cap.twin.defect.upstream_speed_kmh;
+                K_QUEUE_LANE = cap.twin.defect.upstream_queue_density_pcu_km_lane;
+            end
         end
         if isfield(cap,'defects_found') && ~isempty(cap.defects_found)
             found = cellstr(string(cap.defects_found));
             HAS_POTHOLE   = any(strcmp(found, 'pothole'));
-            HAS_VENDOR    = any(strcmp(found, 'street_vendor'));
+            HAS_VENDOR    = any(strcmp(found, 'street_vendor')) || any(strcmp(found, 'cart'));
             HAS_PARKING   = any(strcmp(found, 'illegal_parking'));
             HAS_BARRICADE = any(strcmp(found, 'barricade'));
             HAS_GARBAGE   = any(strcmp(found, 'garbage'));
             DEFECTS = strjoin(strrep(found, '_', ' '), ' + ');
-            if isempty(DEFECTS)
-                DEFECTS = 'none detected';
-            end
+        else
+            DEFECTS = 'none detected';
         end
         usedRealData = true;
-        fprintf('Loaded REAL analysis data from: %s\n', jsonPath);
+        fprintf('Loaded analysis data from: %s\n', jsonPath);
     catch e
-        fprintf('Could not read %s (%s) -- using demo placeholder numbers instead.\n', jsonPath, e.message);
+        fprintf('Could not read %s (%s) -- using demo numbers instead.\n', jsonPath, e.message);
     end
 else
-    fprintf('No data file given/found -- using demo placeholder numbers.\n');
+    fprintf('No data file given/found -- using demo numbers.\n');
 end
 if ~usedRealData
-    fprintf('NOTE: this run is showing DEMO numbers, not your real analysis. Pass a capacity JSON path to use real data.\n');
+    fprintf('NOTE: DEMO numbers, not a real analysis. Pass a *_roadrunner_capacity.json path.\n');
 end
 
 SAVE_VIDEO    = true;
@@ -109,16 +108,14 @@ VIDEO_SEC     = 8;
 VIDEO_FPS     = 20;
 
 %% ============================================================
-%% DERIVED
+%% DERIVED -- all speeds come from the Python twin (same demand on both
+%% roads); none are derived here from the capacity ratio.
 %% ============================================================
-FREE_SPD = FREE_FLOW_SPEED;
-CONG_SPD = FREE_SPD * (1 - (1 - REDUCED_CAP/BASE_DSV) * 0.5);
-
-
-fprintf('Base DSV      : %d PCU/hr\n', round(BASE_DSV));
-fprintf('Reduced cap   : %d PCU/hr  (%.1f%% loss)\n', round(REDUCED_CAP), CAP_LOSS_PCT);
-fprintf('Ideal speed   : %d km/h\n', round(FREE_SPD));
-fprintf('Congested spd : %.1f km/h\n', CONG_SPD);
+fprintf('Base capacity : %d PCU/h\n', round(BASE_CAP));
+fprintf('Reduced cap   : %d PCU/h  (%.1f%% loss)\n', round(REDUCED_CAP), CAP_LOSS_PCT);
+fprintf('Demand        : %d PCU/h\n', round(DEMAND));
+fprintf('Ideal speed   : %.1f km/h at demand\n', IDEAL_SPD);
+fprintf('At obstruction: %.1f km/h  | in queue: %.1f km/h\n', CONG_SPD, QUEUE_SPD);
 fprintf('Defects       : %s\n\n', DEFECTS);
 
 %% ============================================================
@@ -138,10 +135,11 @@ BLKW  = max((BLOCKED_M/TOTAL_WIDTH_M)*RL*0.28, 3);
 LYI = arrayfun(@(l) TI + (l-0.5)*LH, 1:NUM_LANES);
 LYD = arrayfun(@(l) TD + (l-0.5)*LH, 1:NUM_LANES);
 
-SI   = FREE_SPD/3.6*0.18;
-SD   = CONG_SPD/3.6*0.18;
-SPCI = max(SI*(3600/max(BASE_DSV,1)),    VW+6);
-SPCD = max(SD*(3600/max(REDUCED_CAP,1)), VW+3);
+% 1 drawing unit ~ 1 m; 0.18 is only the animation time scale.
+SI   = IDEAL_SPD/3.6*0.18;
+SD   = QUEUE_SPD/3.6*0.18;
+SPCI = max(1000*AVG_PCU/max(K_IDEAL_LANE,1)*NUM_LANES, VW+2);  % spacing in the drawn stream
+SPCD = max(1000*AVG_PCU/max(K_QUEUE_LANE,1)*NUM_LANES, VW+1);
 
 VXI = (-SPCI*(NV-1) : SPCI : 0)';
 VXD = (-SPCD*(NV-1) : SPCD : 0)';
@@ -228,7 +226,7 @@ text(RL*0.5,TD-3.5,['DEFECT ROAD  -  ' upper(DEFECTS)],...
     'HorizontalAlignment','center','Parent',ax);
 
 %% Speed display
-spd_i_txt = text(4,TI+RDH/2,sprintf('%d km/h',round(FREE_SPD)),...
+spd_i_txt = text(4,TI+RDH/2,sprintf('%.1f km/h',IDEAL_SPD),...
     'Color',CTGI,'FontSize',10,'FontWeight','bold','Parent',ax);
 spd_d_txt = text(4,TD+RDH/2,sprintf('%.1f km/h',CONG_SPD),...
     'Color',CTGD,'FontSize',10,'FontWeight','bold','Parent',ax);
@@ -239,15 +237,15 @@ patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...
     [0.12 0.30 0.20],'EdgeColor',CTGI,'LineWidth',1,'Parent',ax);
 patch([BX BX+BW BX+BW BX],[TI+1 TI+1 TI+1+BH TI+1+BH],...
     CGI,'EdgeColor','none','Parent',ax);
-text(BX+BW/2,TI+BH+3,sprintf('%d PCU/hr',round(BASE_DSV)),...
+text(BX+BW/2,TI+BH+3,sprintf('%d PCU/h',round(BASE_CAP)),...
     'Color',CTGI,'FontSize',8,'HorizontalAlignment','center','Parent',ax);
 
 patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+BH TD+1+BH],...
     [0.28 0.08 0.08],'EdgeColor',CTGD,'LineWidth',1,'Parent',ax);
-DBH  = BH*(REDUCED_CAP/BASE_DSV);
+DBH  = BH*(REDUCED_CAP/BASE_CAP);
 fd   = patch([BX BX+BW BX+BW BX],[TD+1 TD+1 TD+1+DBH TD+1+DBH],...
     CGD,'EdgeColor','none','Parent',ax);
-text(BX+BW/2,TD+BH+3,sprintf('%d PCU/hr',round(REDUCED_CAP)),...
+text(BX+BW/2,TD+BH+3,sprintf('%d PCU/h',round(REDUCED_CAP)),...
     'Color',CTGD,'FontSize',8,'HorizontalAlignment','center','Parent',ax);
 
 %% Stats panels
@@ -257,18 +255,18 @@ annotation(fig,'rectangle',[0.01 0.01 0.48 0.17],...
 annotation(fig,'rectangle',[0.51 0.01 0.48 0.17],...
     'Color',CTGD,'LineWidth',1.5,'FaceColor',[0.16 0.05 0.05]);
 
-s1 = ['IDEAL ROAD (IRC:106-1990)' NL ...
-      sprintf('Design Service Volume : %d PCU/hr',round(BASE_DSV)) NL ...
-      sprintf('Free-flow speed       : %d km/h',round(FREE_SPD)) NL ...
-      sprintf('Lanes : %d  |  Full capacity : 100%%',NUM_LANES)];
+s1 = ['IDEAL ROAD (Indo-HCM 2017, urban)' NL ...
+      sprintf('Base capacity C0 : %d PCU/h   Demand : %d PCU/h',round(BASE_CAP),round(DEMAND)) NL ...
+      sprintf('Operating speed  : %d km/h  -> %.1f km/h at demand',round(FREE_SPD),IDEAL_SPD) NL ...
+      sprintf('Lanes : %d',NUM_LANES)];
 annotation(fig,'textbox',[0.01 0.01 0.48 0.17],'String',s1,...
     'Color',[0.78 0.95 0.86],'FontSize',10,'FontName','Courier New',...
     'EdgeColor','none','VerticalAlignment','middle','HorizontalAlignment','center');
 
-s2 = ['DEFECT ROAD (Current State)' NL ...
-      sprintf('Reduced Capacity : %d PCU/hr  (-%.1f%%)',round(REDUCED_CAP),CAP_LOSS_PCT) NL ...
-      sprintf('Congested speed  : %.1f km/h  (was %d km/h)',CONG_SPD,round(FREE_SPD)) NL ...
-      sprintf('Width factor : %.3f  |  Pothole penalty : %.2f',WIDTH_FACTOR,POTHOLE_PENALTY)];
+s2 = ['DEFECT ROAD (current state)' NL ...
+      sprintf('Reduced capacity : %d PCU/h  (-%.1f%%)',round(REDUCED_CAP),CAP_LOSS_PCT) NL ...
+      sprintf('Speed at obstruction %.1f km/h | in queue %.1f km/h',CONG_SPD,QUEUE_SPD) NL ...
+      sprintf('Indo-HCM F_OP %.2f F_BS %.2f F_AC %.2f | ext F_W %.3f F_R %.3f',getf(FACTORS,'F_OP',1),getf(FACTORS,'F_BS',1),getf(FACTORS,'F_AC',1),getf(FACTORS,'F_W',1),getf(FACTORS,'F_R',1))];
 annotation(fig,'textbox',[0.51 0.01 0.48 0.17],'String',s2,...
     'Color',[0.98 0.78 0.78],'FontSize',10,'FontName','Courier New',...
     'EdgeColor','none','VerticalAlignment','middle','HorizontalAlignment','center');
@@ -331,7 +329,7 @@ while isvalid(fig)
     simt = simt + DT;
     fc   = fc   + 1;
 
-    %% Ideal vehicles - constant speed
+    %% Ideal vehicles - stream speed at demand
     VXI = VXI + SI;
     wi  = VXI > RL+VW;
     if any(wi)
@@ -340,19 +338,18 @@ while isvalid(fig)
         VXI(wi) = mn - SPCI*(1:c)';
     end
 
-    %% Defect vehicles - physics speed
+    %% Defect vehicles: queue speed upstream, bottleneck speed through the
+    %% obstruction, recovery towards the ideal stream speed downstream.
+    SB = CONG_SPD/3.6*0.18;
     for v = 1:NVD
         x  = VXD(v);
-        d  = OX - x;
-        if d > SPCD*4
+        if x < OX
             tsp = SD;
-        elseif d > 0
-            tsp = SD*(0.20 + 0.80*d/(SPCD*4));
-        elseif x >= OX && x <= OX+BLKW
-            tsp = SD*0.15;
+        elseif x <= OX+BLKW
+            tsp = SB;
         else
             rec = min(1,(x-OX-BLKW)/(SPCD*6));
-            tsp = SD*(0.20 + 0.80*rec);
+            tsp = SB + (SI-SB)*rec;
         end
         CURD(v) = CURD(v) + (tsp-CURD(v))*0.15;
         VXD(v)  = VXD(v)  + CURD(v);
@@ -388,7 +385,7 @@ while isvalid(fig)
         set(vd(v),'XData',x+[0 VW VW 0],...
                   'YData',yd+[0 0 VH VH],...
                   'FaceColor',col);
-        kmh = sr*CONG_SPD;
+        kmh = CURD(v)/0.18*3.6;
         if x > -VW && x < RL
             set(sl(v),'Position',[x+VW/2 yd+VH+1.8 0],...
                       'String',sprintf('%.0f',kmh));
@@ -432,6 +429,12 @@ end
 fprintf('Done.\n');
 
 end %% function roadtwin
+
+
+function v = getf(s, name, default)
+%GETF  Field of a struct, or default when missing/empty.
+    if isfield(s, name) && ~isempty(s.(name)), v = s.(name); else, v = default; end
+end
 
 
 %% ============================================================

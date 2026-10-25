@@ -61,10 +61,6 @@ DEPARTMENT_MAP = {
         "department": "Municipal Corporation - Solid Waste Management Department",
         "reason": "Garbage accumulation obstructing carriageway / roadside drainage.",
     },
-    "tree_on_road": {
-        "department": "Municipal Corporation - Garden & Tree Department",
-        "reason": "Overhanging or fallen tree/branch reducing usable carriageway width.",
-    },
 }
 
 DEFAULT_DEPARTMENT = {
@@ -116,7 +112,9 @@ def _severity_color(severity: str) -> colors.Color:
         "critical": colors.HexColor("#dc2626"),
         "severe":   colors.HexColor("#ea580c"),
         "moderate": colors.HexColor("#d97706"),
-        "shallow":  colors.HexColor("#65a30d"),
+        "urgent":   colors.HexColor("#dc2626"),
+        "routine":  colors.HexColor("#d97706"),
+        "monitor":  colors.HexColor("#65a30d"),
         "minor":    colors.HexColor("#65a30d"),
     }.get((severity or "").lower(), colors.HexColor("#475569"))
 
@@ -153,7 +151,8 @@ def generate_department_report_pdf(result: dict, output_path: str,
     story = []
 
     road_config = result.get("road_config", {}) or {}
-    irc_basis   = result.get("irc_basis", {}) or {}
+    basis       = result.get("capacity_basis", {}) or {}
+    calc        = result.get("capacity_calculation", {}) or {}
     generated_at = datetime.now().strftime("%d %b %Y, %I:%M %p")
 
     # Date the site photo/video was actually analysed (set by the operator
@@ -167,7 +166,7 @@ def generate_department_report_pdf(result: dict, output_path: str,
     story.append(Paragraph("Road Capacity Obstruction Report", styles["ReportTitle"]))
     story.append(Paragraph(
         f"Date of analysis: <b>{survey_date}</b> &middot; Site: {site_label or result.get('image', '-')} "
-        f"&middot; IRC:106-1990 Table 2 basis &middot; Report generated {generated_at}",
+        f"&middot; Indo-HCM 2017 (urban roads) basis &middot; Report generated {generated_at}",
         styles["ReportSubtitle"],
     ))
     story.append(HRFlowable(width="100%", color=colors.HexColor("#cbd5e1"), thickness=1))
@@ -178,15 +177,27 @@ def generate_department_report_pdf(result: dict, output_path: str,
     if isinstance(guidance, dict):
         guidance = f"{guidance.get('band', '-')} — {guidance.get('action', '-')}"
 
+    los = result.get("level_of_service")
+    factors = calc.get("factors") or {}
     summary_rows = [
+        ["Date of data collection", _format_survey_date(road_config.get("data_collection_date"))],
         ["Date of analysis", survey_date],
-        ["Carriageway type", str(irc_basis.get("carriageway_key", "-"))],
-        ["Fringe condition", str(irc_basis.get("fringe_desc", "-"))],
-        ["Total carriageway width", f"{road_config.get('total_width_m', '-')} m"],
-        ["Number of lanes", str(road_config.get("num_lanes", "-"))],
-        ["Design Service Volume (base)", f"{result.get('original_capacity_pcu_hr', '-')} PCU/hr"],
-        ["Reduced capacity (with obstructions)", f"{result.get('reduced_capacity_pcu_hr', '-')} PCU/hr"],
+        ["Road type", f"{basis.get('road_type_label', '-')} — capacity basis: {basis.get('direction_basis', '-')}"],
+        ["Carriageway width (measured)", f"{road_config.get('total_width_m', '-')} m"],
+        ["Operating speed", f"{basis.get('operating_speed_kmh', '-')} km/h "
+                            f"({basis.get('operating_speed_source', '-')})"],
+        ["Base capacity C0", f"{result.get('base_capacity_pcu_h', '-')} PCU/h — {basis.get('base_capacity_detail', '')}"],
+        ["Indo-HCM factors (Eq. 5.5)", ", ".join(f"{k} = {v}" for k, v in (calc.get("indo_hcm_factors") or {}).items()) or "-"],
+        ["Indo-HCM capacity", f"{result.get('indo_hcm_capacity_pcu_h', '-')} PCU/h"],
+        ["Project extension factors", ", ".join(f"{k} = {v}" for k, v in (calc.get("extension_factors") or {}).items()) or "-"],
+        ["Capacity incl. extensions", f"{result.get('reduced_capacity_pcu_h', '-')} PCU/h"],
         ["Capacity loss", f"{result.get('capacity_loss_pct', '-')}%"],
+        ["Service volume at LOS-C (0.70 C)",
+         f"{result.get('dsv_los_c_ideal_pcu_h', '-')} → {result.get('dsv_los_c_reduced_pcu_h', '-')} PCU/h"],
+        ["Level of service",
+         (f"V = {los['observed_volume_pcu_h']} PCU/h (Table {los['table']}): base LOS {los['los_base']}, "
+          f"Indo-HCM LOS {los['los_hcm']}, with extensions LOS {los['los_ext']}") if los else
+         "Not computed — no traffic volume was entered (LOS needs V/C)."],
         ["Overall guidance", str(guidance)],
     ]
     summary_table = Table(
@@ -226,7 +237,7 @@ def generate_department_report_pdf(result: dict, output_path: str,
         header = [
             Paragraph("Defect", styles["CellHeader"]),
             Paragraph("Count", styles["CellHeader"]),
-            Paragraph("Width blocked", styles["CellHeader"]),
+            Paragraph("Width / mechanism", styles["CellHeader"]),
             Paragraph("Capacity loss", styles["CellHeader"]),
             Paragraph("Severity", styles["CellHeader"]),
             Paragraph("IRC code ref / action", styles["CellHeader"]),
@@ -236,7 +247,7 @@ def generate_department_report_pdf(result: dict, output_path: str,
             rows.append([
                 Paragraph(dname.replace("_", " ").title(), styles["Cell"]),
                 Paragraph(str(dinfo.get("count", "-")), styles["Cell"]),
-                Paragraph(f"{dinfo.get('blocked_m', '-')} m", styles["Cell"]),
+                Paragraph(f"{dinfo.get('blocked_m', '-')} m<br/>{dinfo.get('mechanism', '')}", styles["Cell"]),
                 Paragraph(f"{dinfo.get('capacity_loss_pct', '-')}%", styles["Cell"]),
                 Paragraph(str(dinfo.get("severity", "-")).title(), styles["Cell"]),
                 Paragraph(
@@ -265,8 +276,9 @@ def generate_department_report_pdf(result: dict, output_path: str,
     story.append(HRFlowable(width="100%", color=colors.HexColor("#cbd5e1"), thickness=1))
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        "This report was generated automatically from an IRC:106-1990-based road capacity "
-        "analysis. Field verification is recommended before dispatching maintenance crews.",
+        "Generated automatically from an Indo-HCM 2017 (urban roads) capacity analysis of a "
+        "single cross-section photo. Obstruction widths are image-based estimates and pothole "
+        "size is a width-only proxy; verify on site before dispatching crews.",
         styles["ReportSubtitle"],
     ))
 

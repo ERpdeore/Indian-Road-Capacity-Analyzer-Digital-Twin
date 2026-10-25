@@ -3,19 +3,9 @@ road_analyzer.app
 =================
 FastAPI server for the Indian Road Capacity Analyzer.
 
-FIXES IN THIS VERSION
----------------------
-- heavy_traffic_regime field removed (unused in IRC:106 Table 2)
-- LOS removed from API response
-- path traversal fix: Path(file.filename).name
-- logger defined before first use
-- assert replaced with raise ValueError in core.py
-- second-upload "failed" bug fixed: each request gets a fresh job_id
-  and the _analyzer singleton is preserved (model stays warm)
-- digital twin bridge imported safely (app works without MATLAB)
-- data_collection_date added alongside analysis_date: collection date
-  must be strictly before today, analysis date can't be in the future,
-  and analysis date can't precede the collection date
+Capacity method: Indo-HCM 2017 Chapter 5 (see road_analyzer/indo_hcm.py and
+road_analyzer/core.py). The digital twin is computed in pure Python by
+road_analyzer/digital_twin_engine.py and returned with every analysis.
 """
 
 from __future__ import annotations
@@ -32,7 +22,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -45,24 +35,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("road_analyzer.app")
 
-from road_analyzer.core import (
-    RoadAnalyzer, IRC106_DSV, IRC106_DSV_LABELS,
-    FRINGE_CONDITION_DESC, TRAFFIC_REGIME_DESC,
-    IRC106_PCU_FACTORS, IRC_FREE_FLOW_SPEED,
-    get_free_flow_speed, CLASS_NAMES,
-)
-
-# Digital Twin — pure-Python Greenshields engine (see digital_twin_engine.py
-# for why this replaced the old MATLAB-subprocess bridge). Always available,
-# since it's plain Python with no external dependency — no more "bridge not
-# found" fallback path needed.
+from road_analyzer.core import RoadAnalyzer, CLASS_NAMES, OBSTRUCTION_CLASSES, resolve_road_inputs
+from road_analyzer import indo_hcm as hcm
+from road_analyzer import extensions as ext
+from road_analyzer import field_validation as fv
 from road_analyzer.digital_twin_engine import (
     run_and_store as dt_run_and_store,
-    get_twin_status as dt_get_twin_status,
     get_latest_twin_data as dt_get_latest_twin_data,
 )
-_DT_ENABLED = True
-logger.info("Digital Twin engine loaded (pure-Python Greenshields model).")
 
 from road_analyzer.department_extensions import generate_department_report_pdf
 from road_analyzer.pothole_rectification import build_pwd_report_row
@@ -93,12 +73,13 @@ MODEL_PATH = os.environ.get("ROAD_MODEL_PATH", str(MODELS_DIR / "best.pt"))
 
 app = FastAPI(title="Indian Road Capacity Analyzer", version="3.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The dashboard is served from this same origin, so no CORS is needed by
+# default. Set ALLOWED_ORIGINS="https://a.example,https://b.example" only if
+# another site must call this API.
+_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if _origins:
+    app.add_middleware(CORSMiddleware, allow_origins=_origins,
+                       allow_methods=["GET", "POST"], allow_headers=["*"])
 
 # In-memory job store — each request gets a unique job_id
 # so second/third uploads never collide with previous results
@@ -219,58 +200,56 @@ def _validate_dates(data_collection_date: str, analysis_date: str) -> tuple[str,
     return collection_dt.isoformat(), analysis_str
 
 
-def _road_config_from_form(
-    total_width_m:    float,
-    num_lanes:        int,
-    carriageway_key:  str,
-    fringe_condition: str,
-    usable_shoulder_m: float,
-    traffic_regime:   str = "low",
-    chainage_m:       float = 0.0,
-    analysis_date:    str = "",
-    data_collection_date: str = "",
+def _opt_float(value: Optional[str], label: str) -> Optional[float]:
+    """Optional numeric form fields arrive as '' when left blank."""
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        v = float(value)
+    except ValueError:
+        raise HTTPException(400, f"{label} must be a number.")
+    if v <= 0:
+        raise HTTPException(400, f"{label} must be > 0 when given.")
+    return v
+
+
+def road_form(
+    total_width_m:        float = Form(...),
+    road_type:            str   = Form(...),
+    iri_m_per_km:         Optional[str] = Form(None),
+    width_method:         str   = Form("proportional"),
+    operating_speed_kmh:  Optional[str] = Form(None),
+    observed_volume_pcu_h: Optional[str] = Form(None),
+    on_street_parking:    str   = Form("none"),
+    bus_stop:             str   = Form("none"),
+    access_points:        str   = Form("none"),
+    chainage_m:           float = Form(0.0),
+    analysis_date:        str   = Form(""),
+    data_collection_date: str   = Form(...),
 ) -> dict:
-    if carriageway_key not in IRC106_DSV:
-        raise HTTPException(400, f"Unknown carriageway_key '{carriageway_key}'. "
-                                  f"Valid: {list(IRC106_DSV.keys())}")
-    if fringe_condition not in FRINGE_CONDITION_DESC:
-        raise HTTPException(400, f"Unknown fringe_condition '{fringe_condition}'. "
-                                  f"Valid: {list(FRINGE_CONDITION_DESC.keys())}")
-    # IRC:106 Table 2 doesn't define a DSV for every carriageway/fringe pair
-    # (e.g. an 8-lane divided carriageway has no "collector" row). Catching
-    # that here — before any file is uploaded or a job/background task is
-    # started — means a bad combination fails fast with a clear message
-    # instead of surfacing later as a wasted upload or a failed batch/video
-    # job. This is the same table the frontend uses to grey out invalid
-    # fringe options, so this is a backstop, not a duplicate of that UX.
-    if IRC106_DSV[carriageway_key].get(fringe_condition) is None:
-        valid_fringes = [f for f, v in IRC106_DSV[carriageway_key].items() if v is not None]
-        raise HTTPException(
-            400,
-            f"IRC:106 Table 2 has no Design Service Volume for "
-            f"'{carriageway_key}' under '{fringe_condition}' fringe conditions. "
-            f"Valid fringe conditions for this carriageway type: {valid_fringes}",
-        )
-    if traffic_regime not in ("low", "high"):
-        traffic_regime = "low"
-    if num_lanes <= 0:
-        raise HTTPException(400, "num_lanes must be >= 1")
-    if total_width_m <= 0:
-        raise HTTPException(400, "total_width_m must be > 0")
-
+    """Shared road-parameter form for every analysis endpoint. Validates
+    everything (including Indo-HCM option keys) before any upload is saved."""
     collection_str, analysis_str = _validate_dates(data_collection_date, analysis_date)
-
-    return {
-        "total_width_m":    float(total_width_m),
-        "num_lanes":        int(num_lanes),
-        "carriageway_key":  carriageway_key,
-        "fringe_condition": fringe_condition,
-        "usable_shoulder_m": float(usable_shoulder_m),
-        "traffic_regime":   traffic_regime,
-        "chainage_m":       float(chainage_m),
-        "analysis_date":    analysis_str,
+    cfg = {
+        "total_width_m": float(total_width_m),
+        "road_type": road_type,
+        "iri_m_per_km": _opt_float(iri_m_per_km, "iri_m_per_km"),
+        "width_method": width_method,
+        "operating_speed_kmh": _opt_float(operating_speed_kmh, "operating_speed_kmh"),
+        "observed_volume_pcu_h": _opt_float(observed_volume_pcu_h, "observed_volume_pcu_h"),
+        "on_street_parking": on_street_parking,
+        "bus_stop": bus_stop,
+        "access_points": access_points,
+        "chainage_m": float(chainage_m),
+        "analysis_date": analysis_str,
         "data_collection_date": collection_str,
     }
+    try:
+        resolved = resolve_road_inputs(cfg)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    cfg["num_lanes"] = resolved["lanes"]
+    return cfg
 
 
 def _new_job(prefix: str) -> tuple[str, Path]:
@@ -278,6 +257,78 @@ def _new_job(prefix: str) -> tuple[str, Path]:
     job_dir = RESULTS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     return job_id, job_dir
+
+
+def _twin(result: dict) -> Optional[dict]:
+    try:
+        return dt_run_and_store(result)
+    except Exception as e:
+        logger.warning("Digital twin generation failed: %s", e)
+        return None
+
+
+def _capacity_sidecar(result: dict, twin: Optional[dict]) -> dict:
+    """Numbers the MATLAB / RoadRunner scripts read. Capacities are in PCU/h;
+    vehicle placement uses the twin's densities and speeds, not capacity."""
+    cap_calc = result.get("capacity_calculation") or {}
+    iv = result.get("indicative_vehicles") or {}
+    return {
+        "units": "PCU/h unless stated",
+        "base_capacity_pcu_h": result.get("base_capacity_pcu_h"),
+        "indo_hcm_capacity_pcu_h": result.get("indo_hcm_capacity_pcu_h"),
+        "reduced_capacity_pcu_h": result.get("reduced_capacity_pcu_h"),
+        "capacity_loss_pct": result.get("capacity_loss_pct"),
+        "operating_speed_kmh": result.get("operating_speed_kmh"),
+        "avg_pcu_per_vehicle": iv.get("avg_pcu_per_vehicle"),
+        "factors": cap_calc.get("factors"),
+        "total_width_m": cap_calc.get("total_width_m"),
+        "blocked_incl_shy_m": cap_calc.get("blocked_incl_shy_m"),
+        "num_lanes": (result.get("road_config") or {}).get("num_lanes"),
+        "divided": (result.get("capacity_basis") or {}).get("divided"),
+        "defects_found": list((result.get("per_defect") or {}).keys()),
+        # Lateral position across the carriageway is measured; along-road
+        # position cannot be measured from one photo and is not included.
+        "defect_positions": get_defect_positions(result),
+        "twin": None if twin is None else {
+            "demand_pcu_h": twin["demand_pcu_h"],
+            "demand_source": twin["demand_source"],
+            "ideal": twin["ideal"],
+            "defect": twin["defect"],
+        },
+    }
+
+
+def _attach_outputs(result: dict, job_dir: Path, stem: str, site_label: str) -> None:
+    """Every per-job export, each allowed to fail on its own."""
+    if "pothole" in result.get("per_defect", {}):
+        try:
+            result["per_defect"]["pothole"]["rectification"] = build_pwd_report_row(
+                result["per_defect"]["pothole"], location=site_label)
+        except Exception as e:
+            logger.warning("Pothole rectification lookup failed: %s", e)
+
+    twin = _twin(result)
+    result["digital_twin"] = twin
+
+    exports = [
+        ("department_report_available", f"{stem}_department_report.pdf",
+         lambda p: generate_department_report_pdf(result, str(p), site_label=site_label)),
+        ("roadrunner_xodr_available", f"{stem}_roadrunner.xodr",
+         lambda p: p.write_text(build_single_road_xodr(result), encoding="utf-8")),
+        ("roadrunner_ideal_xodr_available", f"{stem}_roadrunner_ideal.xodr",
+         lambda p: p.write_text(build_ideal_road_xodr(result), encoding="utf-8")),
+        ("capacity_json_available", f"{stem}_roadrunner_capacity.json",
+         lambda p: p.write_text(json.dumps(_capacity_sidecar(result, twin), indent=2), encoding="utf-8")),
+        ("defects_excel_available", f"{stem}_defects.xlsx",
+         lambda p: export_defects_excel(result, str(p))),
+    ]
+    for flag, name, fn in exports:
+        try:
+            fn(job_dir / name)
+            result[flag] = True
+        except Exception as e:
+            logger.warning("Export %s failed: %s", name, e)
+            result[flag] = False
 
 
 # ----------------------------------------------------------------
@@ -316,31 +367,27 @@ def serve_index():
 # ----------------------------------------------------------------
 @app.get("/api/config-options")
 def config_options():
-    carriageway_options = []
-    for key, fringe_vals in IRC106_DSV.items():
-        available_fringes = [f for f, v in fringe_vals.items() if v is not None]
-        carriageway_options.append({
-            "key":              key,
-            "label":            IRC106_DSV_LABELS.get(key, key),
-            "available_fringes": available_fringes,
-            "dsv_values":        {f: v for f, v in fringe_vals.items() if v is not None},
-        })
-    # Add free flow speed to each carriageway option
-    for opt in carriageway_options:
-        opt["free_flow_speeds"] = IRC_FREE_FLOW_SPEED.get(opt["key"], {})
-
+    def opts(table):
+        return [{"key": k, "label": v["label"], "factor": v["factor"], "table": v["table"]}
+                for k, v in table.items()]
     return {
-        "carriageway_options": carriageway_options,
-        "fringe_conditions": [
-            {"key": k, "description": v} for k, v in FRINGE_CONDITION_DESC.items()
+        "standard": hcm.SOURCE,
+        "road_types": [
+            {"key": k, "label": v["label"], "lanes": v["lanes"], "divided": v["divided"],
+             "basis": v["basis"], "paved_width_m": v["paved_width_m"], "ref_width_m": v["ref_width_m"],
+             "capacity_pcu_h": v["capacity_pcu_h"], "dsv_pcu_h": v["dsv_pcu_h"],
+             "condition": v.get("condition", "")}
+            for k, v in hcm.ROAD_TYPES.items()
         ],
-        "traffic_regimes": [
-            {"key": k, "description": v} for k, v in TRAFFIC_REGIME_DESC.items()
-        ],
-        "pcu_factors":        IRC106_PCU_FACTORS,
-        "free_flow_speeds":   IRC_FREE_FLOW_SPEED,
-        "defect_classes":     CLASS_NAMES,
-        "model_loaded":       Path(MODEL_PATH).exists(),
+        "speed_model": {"a": hcm.SPEED_MODEL_A, "b": hcm.SPEED_MODEL_B,
+                        "range_kmh": hcm.SPEED_MODEL_RANGE_KMH},
+        "on_street_parking": opts(hcm.PARKING_FACTORS),
+        "bus_stop": opts(hcm.BUS_STOP_FACTORS),
+        "access_points": opts(hcm.ACCESS_FACTORS),
+        "width_methods": [{"key": k, "label": v} for k, v in ext.WIDTH_METHODS.items()],
+        "dsv_vc_ratio": hcm.DSV_VC_RATIO,
+        "defect_classes": OBSTRUCTION_CLASSES,
+        "model_loaded": Path(MODEL_PATH).exists(),
     }
 
 
@@ -353,23 +400,9 @@ def config_options():
 # (health check, job polling) for the whole inference.
 @app.post("/api/analyze/image")
 def analyze_image(
-    file:              UploadFile = File(...),
-    total_width_m:     float = Form(...),
-    num_lanes:         int   = Form(...),
-    carriageway_key:   str   = Form(...),
-    fringe_condition:  str   = Form(...),
-    usable_shoulder_m: float = Form(...),
-    traffic_regime:    str   = Form("low"),
-    chainage_m:        float = Form(0.0),
-    analysis_date:     str   = Form(""),
-    data_collection_date: str = Form(...),
+    file:        UploadFile = File(...),
+    road_config: dict = Depends(road_form),
 ):
-    road_config = _road_config_from_form(
-        total_width_m, num_lanes, carriageway_key,
-        fringe_condition, usable_shoulder_m, traffic_regime, chainage_m,
-        analysis_date, data_collection_date,
-    )
-
     # Fresh job_id for EVERY request — this is what fixes the
     # "second upload fails" bug: previously result paths collided.
     job_id, job_dir = _new_job("img")
@@ -388,134 +421,10 @@ def analyze_image(
         logger.error("Image analysis failed: %s", e, exc_info=True)
         raise HTTPException(400, f"Analysis failed: {e}")
 
-    json_path = result.pop("_json_path", None)
+    result.pop("_json_path", None)
     result.pop("_csv_path", None)
     result["job_id"] = job_id
-
-    # analyser.analyse_image() builds its own road_config copy internally
-    # and may not know about the new data_collection_date field, so make
-    # sure it's present in the response either way — same value we just
-    # validated above, not whatever (if anything) core.py echoed back.
-    result.setdefault("road_config", {})
-    result["road_config"]["data_collection_date"] = road_config["data_collection_date"]
-    result["road_config"]["analysis_date"] = road_config["analysis_date"]
-
-    # Pothole rectification recommendation — pure lookup over data
-    # analyse_image() already computed (severity, depth, capacity loss).
-    # Only runs when a pothole was actually detected; every other
-    # per_defect entry and every other field in `result` is untouched.
-    if "pothole" in result.get("per_defect", {}):
-        try:
-            result["per_defect"]["pothole"]["rectification"] = build_pwd_report_row(
-                result["per_defect"]["pothole"], location=safe_name
-            )
-        except Exception as e:
-            logger.warning("Pothole rectification lookup failed: %s", e)
-
-    # Department-routed PDF report — replaces the old CSV export, which
-    # was written to disk but never exposed through any download route.
-    # Generated synchronously here (a single-image report takes well
-    # under a second with reportlab) and saved into the same job_dir as
-    # the image and JSON, so /api/jobs/{job_id}/department-report.pdf
-    # can serve it straight off disk.
-    try:
-        pdf_path = job_dir / f"{Path(dest).stem}_department_report.pdf"
-        generate_department_report_pdf(result, str(pdf_path), site_label=safe_name)
-        result["department_report_available"] = True
-    except Exception as e:
-        logger.warning("Department PDF report generation failed: %s", e)
-        result["department_report_available"] = False
-
-    # RoadRunner OpenDRIVE (.xodr) export — a straight road segment sized
-    # to this photo's measured width/lanes, with detected defects placed
-    # as road objects. Saved to disk the same way as the PDF report so
-    # /api/jobs/{job_id}/roadrunner.xodr can serve it without re-running
-    # analysis. See roadrunner_export.py for the honest limits on what
-    # this can and can't know from a single photo.
-    try:
-        xodr_path = job_dir / f"{Path(dest).stem}_roadrunner.xodr"
-        xodr_path.write_text(build_single_road_xodr(result), encoding="utf-8")
-        result["roadrunner_xodr_available"] = True
-    except Exception as e:
-        logger.warning("RoadRunner .xodr export failed: %s", e)
-        result["roadrunner_xodr_available"] = False
-
-    # IDEAL version of the same road (same width/lanes, defects removed)
-    # -- generated alongside the non-ideal one so both are ready to go
-    # the instant analysis finishes, with no extra wait during the demo.
-    try:
-        ideal_xodr_path = job_dir / f"{Path(dest).stem}_roadrunner_ideal.xodr"
-        ideal_xodr_path.write_text(build_ideal_road_xodr(result), encoding="utf-8")
-        result["roadrunner_ideal_xodr_available"] = True
-    except Exception as e:
-        logger.warning("RoadRunner ideal .xodr export failed: %s", e)
-        result["roadrunner_ideal_xodr_available"] = False
-
-    # Capacity numbers sidecar -- a small JSON file next to the two .xodr
-    # files, carrying the real ideal-vs-reduced capacity (vehicles/hr)
-    # this job already calculated. The RoadRunner/MATLAB side reads this
-    # to decide how many vehicles to actually show in each 3D simulation,
-    # so the visual traffic density reflects your real IRC-based numbers
-    # instead of an arbitrary fixed vehicle count.
-    try:
-        capacity_path = job_dir / f"{Path(dest).stem}_roadrunner_capacity.json"
-        cap_calc = result.get("capacity_calculation") or {}
-        capacity_path.write_text(json.dumps({
-            "original_capacity_vehicles_hr": result.get("original_capacity_vehicles_hr"),
-            "reduced_capacity_vehicles_hr": result.get("reduced_capacity_vehicles_hr"),
-            "capacity_loss_pct": result.get("capacity_loss_pct"),
-            "free_flow_speed_kmh": result.get("free_flow_speed_kmh"),
-            "congested_speed_kmh": (result.get("traffic_regime") or {}).get("congested_speed_kmh"),
-            # Extra fields for the 2D roadtwin.m animation -- a fully
-            # deterministic MATLAB-only visualization (no RoadRunner app,
-            # no asset-library dependency) so vehicle placement/movement
-            # is 100% under our own control, never "random."
-            "total_width_m": cap_calc.get("total_width_m"),
-            "total_blocked_m": cap_calc.get("total_blocked_m"),
-            "width_factor": cap_calc.get("width_factor"),
-            "pothole_penalty": cap_calc.get("pothole_penalty"),
-            "num_lanes": (result.get("road_config") or {}).get("num_lanes"),
-            "defects_found": list((result.get("per_defect") or {}).keys()),
-            # Real per-instance defect data (type + accurate lateral
-            # position across the road width, in meters) -- used to place
-            # each defect marker at its REAL measured position in
-            # RoadRunner, not an arbitrary spot. Longitudinal (along-road)
-            # position is intentionally NOT included here: a single photo
-            # genuinely cannot measure that (see roadrunner_export.py's
-            # module docstring) -- only lateral position is real.
-            "defect_positions": get_defect_positions(result),
-        }), encoding="utf-8")
-    except Exception as e:
-        logger.warning("RoadRunner capacity sidecar export failed: %s", e)
-
-    # Defect coordinate Excel log -- a readable audit trail of every
-    # YOLOv8 detection on this road, with the exact s/t coordinates it
-    # was placed at in the .xodr above (see excel_export.py). Purely a
-    # human-readable side artifact for your report/viva -- it does not
-    # feed back into MATLAB or RoadRunner.
-    try:
-        excel_path = job_dir / f"{Path(dest).stem}_defects.xlsx"
-        export_defects_excel(result, str(excel_path))
-        result["defects_excel_available"] = True
-    except Exception as e:
-        logger.warning("Defect Excel export failed: %s", e)
-        result["defects_excel_available"] = False
-
-    # Generate Digital Twin data — pure-Python Greenshields model, runs
-    # synchronously in milliseconds (no MATLAB, no subprocess, no waiting).
-    # We still report "running" then let the frontend's existing poll hit
-    # "done" on its very first check, so the JS twin-panel code (built for
-    # an async MATLAB job) needs zero changes to work with this.
-    if _DT_ENABLED:
-        try:
-            dt_run_and_store(result)
-            result["digital_twin_status"] = "running"
-        except Exception as e:
-            logger.warning("Digital twin generation failed: %s", e)
-            result["digital_twin_status"] = "error"
-    else:
-        result["digital_twin_status"] = "unavailable"
-
+    _attach_outputs(result, job_dir, Path(dest).stem, safe_name)
     return result
 
 
@@ -537,24 +446,22 @@ def _run_batch_job(job_id: str, job_dir: Path,
         summary["road_config"]["data_collection_date"] = road_config["data_collection_date"]
         summary["road_config"]["analysis_date"] = road_config["analysis_date"]
 
-        # Department PDF + Digital Twin for batch: built from the single
-        # worst-case photo in the batch (highest capacity loss %), since
-        # that result already has the full road_config/irc_basis/per_defect
-        # shape both features need — the same shape a single-image analysis
-        # produces. An appendix table lists every photo's capacity loss so
-        # the report is honest about being one batch, not just one photo.
+        # Department PDF + twin are built from the bottleneck photo (lowest
+        # reduced capacity) — a stretch is governed by its weakest section.
+        # The appendix lists every photo so the report covers the batch.
         if per_image_full:
-            worst = max(per_image_full, key=lambda r: r.get("capacity_loss_pct", 0))
+            worst = min(per_image_full, key=lambda r: r.get("reduced_capacity_pcu_h", float("inf")))
             try:
                 pdf_path = job_dir / "batch_department_report.pdf"
                 generate_department_report_pdf(
                     worst, str(pdf_path),
                     site_label=f"Batch of {len(per_image_full)} photos "
-                               f"(worst case: {worst.get('image', '-')})",
+                               f"(bottleneck: {worst.get('image', '-')})",
                     appendix_title="All photos in this batch",
-                    appendix_headers=["image", "capacity_loss_pct", "defects_found"],
+                    appendix_headers=["image", "reduced_capacity_pcu_h", "capacity_loss_pct", "defects_found"],
                     appendix_rows=[
                         {"image": r.get("image", "-"),
+                         "reduced_capacity_pcu_h": r.get("reduced_capacity_pcu_h", "-"),
                          "capacity_loss_pct": f"{r.get('capacity_loss_pct', 0)}%",
                          "defects_found": ", ".join(r.get("per_defect", {}).keys()) or "none"}
                         for r in per_image_full
@@ -565,11 +472,8 @@ def _run_batch_job(job_id: str, job_dir: Path,
                 logger.warning("Batch department PDF generation failed: %s", e)
                 summary["department_report_available"] = False
 
-            if _DT_ENABLED:
-                try:
-                    dt_run_and_store(worst)
-                except Exception as e:
-                    logger.warning("Batch digital twin generation failed: %s", e)
+            # Twin of the governing (lowest-capacity) section.
+            summary["digital_twin"] = _twin(worst)
 
         summary["job_id"] = job_id
         JOBS[job_id] = {"status": "done", "result": summary}
@@ -581,26 +485,12 @@ def _run_batch_job(job_id: str, job_dir: Path,
 
 @app.post("/api/analyze/batch")
 async def analyze_batch(
-    background_tasks:  BackgroundTasks,
-    files:             List[UploadFile] = File(...),
-    total_width_m:     float = Form(...),
-    num_lanes:         int   = Form(...),
-    carriageway_key:   str   = Form(...),
-    fringe_condition:  str   = Form(...),
-    usable_shoulder_m: float = Form(...),
-    traffic_regime:    str   = Form("low"),
-    analysis_date:     str   = Form(""),
-    data_collection_date: str = Form(...),
+    background_tasks: BackgroundTasks,
+    files:            List[UploadFile] = File(...),
+    road_config:      dict = Depends(road_form),
 ):
     if not files:
         raise HTTPException(400, "Upload at least one image.")
-
-    road_config = _road_config_from_form(
-        total_width_m, num_lanes, carriageway_key,
-        fringe_condition, usable_shoulder_m, traffic_regime,
-        chainage_m=0.0, analysis_date=analysis_date,
-        data_collection_date=data_collection_date,
-    )
 
     job_id, job_dir = _new_job("batch")
     image_paths = []
@@ -637,25 +527,23 @@ def _run_video_job(job_id: str, job_dir: Path, video_path: str,
         summary["road_config"]["data_collection_date"] = road_config["data_collection_date"]
         summary["road_config"]["analysis_date"] = road_config["analysis_date"]
 
-        # Department PDF + Digital Twin for video: built from the single
-        # worst-case sampled frame (highest capacity loss %) for the same
-        # reason as batch mode above. The appendix lists every unique
+        # Same bottleneck rule as batch mode. The appendix lists every unique
         # tracked defect instance across the whole video (not just the
         # worst frame), using the same deduplicated tracking data already
         # computed by analyse_video — so a pothole seen in 40 frames is
         # reported once, not 40 times.
         if frame_results_full:
-            worst = max(frame_results_full, key=lambda r: r.get("capacity_loss_pct", 0))
+            worst = min(frame_results_full, key=lambda r: r.get("reduced_capacity_pcu_h", float("inf")))
             unique_defects = summary.get("unique_defect_instances", [])
             try:
                 pdf_path = job_dir / "video_department_report.pdf"
                 generate_department_report_pdf(
                     worst, str(pdf_path),
                     site_label=f"Video: {summary.get('video', '-')} "
-                               f"(worst frame at {worst.get('timestamp_sec', '-')}s)",
+                               f"(bottleneck frame at {worst.get('timestamp_sec', '-')}s)",
                     appendix_title="Unique defect instances tracked across the full video",
                     appendix_headers=["cls_name", "times_seen", "first_seen_sec",
-                                       "last_seen_sec", "max_blocked_m"],
+                                       "last_seen_sec", "max_width_m"],
                     appendix_rows=unique_defects,
                 )
                 summary["department_report_available"] = True
@@ -663,11 +551,8 @@ def _run_video_job(job_id: str, job_dir: Path, video_path: str,
                 logger.warning("Video department PDF generation failed: %s", e)
                 summary["department_report_available"] = False
 
-            if _DT_ENABLED:
-                try:
-                    dt_run_and_store(worst)
-                except Exception as e:
-                    logger.warning("Video digital twin generation failed: %s", e)
+            # Twin of the governing (lowest-capacity) section.
+            summary["digital_twin"] = _twin(worst)
 
         summary["job_id"] = job_id
         JOBS[job_id] = {"status": "done", "result": summary}
@@ -679,24 +564,13 @@ def _run_video_job(job_id: str, job_dir: Path, video_path: str,
 
 @app.post("/api/analyze/video")
 async def analyze_video(
-    background_tasks:  BackgroundTasks,
-    file:              UploadFile = File(...),
-    total_width_m:     float = Form(...),
-    num_lanes:         int   = Form(...),
-    carriageway_key:   str   = Form(...),
-    fringe_condition:  str   = Form(...),
-    usable_shoulder_m: float = Form(...),
-    sample_every_sec:  float = Form(1.0),
-    traffic_regime:    str   = Form("low"),
-    analysis_date:     str   = Form(""),
-    data_collection_date: str = Form(...),
+    background_tasks: BackgroundTasks,
+    file:             UploadFile = File(...),
+    road_config:      dict = Depends(road_form),
+    sample_every_sec: float = Form(1.0),
 ):
-    road_config = _road_config_from_form(
-        total_width_m, num_lanes, carriageway_key,
-        fringe_condition, usable_shoulder_m, traffic_regime,
-        chainage_m=0.0, analysis_date=analysis_date,
-        data_collection_date=data_collection_date,
-    )
+    if not (0.2 <= sample_every_sec <= 30):
+        raise HTTPException(400, "sample_every_sec must be between 0.2 and 30.")
 
     job_id, job_dir = _new_job("video")
     safe_name = _safe_filename(file.filename)
@@ -817,11 +691,24 @@ def get_roadrunner_ideal_xodr(job_id: str):
 # whatever the job actually generated. Listed by filename, not glob,
 # since these are fixed helper scripts, not per-job output.
 _BUNDLE_STATIC_FILES = [
+    # entry point + launchers
+    "run_twin_safely.m",
+    "run_ideal_digital_twin.bat",
+    "run_nonideal_digital_twin.bat",
+    "run_2d_digital_twin.bat",
+    # RoadRunner 3D twin and everything it calls
     "auto_import_roadrunner.m",
     "add_vehicles_ideal.m",
     "add_vehicles_nonideal.m",
-    "run_ideal_digital_twin.bat",
-    "run_nonideal_digital_twin.bat",
+    "build_traffic.m",
+    "add_defects_to_scene.m",
+    "twin_config.m",
+    "twin_assets.m",
+    # MATLAB-only 2D twin and Simulink queue model
+    "roadtwin.m",
+    "create_digital_twin_model.m",
+    "run_digital_twin.m",
+    "DIGITAL_TWIN_README.md",
 ]
 
 
@@ -877,16 +764,14 @@ def get_digital_twin_bundle(job_id: str):
                 zf.write(src, arcname=name)
         zf.writestr(
             "HOW_TO_USE.txt",
-            "1. Extract this zip anywhere on your machine.\n"
-            "2. Set the MATLAB_EXE environment variable to your matlab.exe "
-            "path (see the .bat files for the default location they try "
-            "first).\n"
-            "3. Double-click run_ideal_digital_twin.bat to open the "
-            "defect-free version of this road in RoadRunner.\n"
-            "4. Double-click run_nonideal_digital_twin.bat to open the "
-            "version with the detected defects placed on it.\n"
-            "5. Both scripts read the matching .xodr/.json in this same "
-            "folder automatically — keep everything together.\n",
+            "1. Extract this zip into an empty folder. Keep every file together.\r\n"
+            "2. Double-click run_2d_digital_twin.bat first: it needs only MATLAB\r\n"
+            "   and shows the ideal vs current road animation.\r\n"
+            "3. For RoadRunner: double-click run_ideal_digital_twin.bat, then\r\n"
+            "   run_nonideal_digital_twin.bat. The first run asks for your RoadRunner\r\n"
+            "   project folder and remembers it (roadrunner_project.txt).\r\n"
+            "4. If MATLAB is not found, set MATLAB_EXE to your matlab.exe path.\r\n"
+            "5. If anything fails, a popup appears and the details are in twin_log.txt.\r\n",
         )
     buf.seek(0)
 
@@ -979,31 +864,60 @@ async def export_roadrunner_corridor_capacity(request: Request):
 # ----------------------------------------------------------------
 # Health check
 # ----------------------------------------------------------------
+# ----------------------------------------------------------------
+# Field validation (Indo-HCM Annex 5C-5E): capacity from a survey video
+# ----------------------------------------------------------------
+@app.post("/api/field/analyse")
+def field_analyse(
+    file:       UploadFile = File(..., description="vehicles.csv: vehicle_type,t_entry_s,t_exit_s"),
+    trap_m:     float = Form(...),
+    road_type:  str   = Form(...),
+    pcu_method: str   = Form("table"),
+):
+    if road_type not in hcm.ROAD_TYPES:
+        raise HTTPException(400, f"Unknown road_type '{road_type}'.")
+    if pcu_method not in ("table", "se"):
+        raise HTTPException(400, "pcu_method must be 'table' or 'se'.")
+    job_id, job_dir = _new_job("field")
+    dest = job_dir / "vehicles.csv"
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    try:
+        res = fv.analyse_site(str(dest), trap_m, road_type, pcu_method)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, f"Could not read survey file: {e}")
+    res["job_id"] = job_id
+    return res
+
+
+class _ComparePairs(BaseModel):
+    predicted: List[float]
+    observed: List[float]
+
+
+@app.post("/api/field/compare")
+def field_compare(body: _ComparePairs):
+    """Dashboard-predicted vs field values (capacity, or capacity loss %)."""
+    if len(body.predicted) != len(body.observed):
+        raise HTTPException(400, "predicted and observed must have the same length.")
+    try:
+        return fv.error_metrics(body.predicted, body.observed)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/health")
 def health():
-    return {
-        "status":       "ok",
-        "model_loaded": Path(MODEL_PATH).exists(),
-        "model_path":   MODEL_PATH,
-        "dt_enabled":   _DT_ENABLED,
-    }
+    return {"status": "ok", "model_loaded": Path(MODEL_PATH).exists(), "model_path": MODEL_PATH}
 
 
 # ----------------------------------------------------------------
-# Digital Twin endpoints
+# Digital Twin — returned inline with every analysis ("digital_twin");
+# this endpoint only re-serves the most recent one.
 # ----------------------------------------------------------------
-@app.get("/api/digital-twin/status")
-def digital_twin_status():
-    if not _DT_ENABLED:
-        raise HTTPException(503, "Digital Twin engine not available on this server.")
-    return dt_get_twin_status()
-
-
 @app.get("/api/digital-twin/latest")
 def digital_twin_latest():
-    if not _DT_ENABLED:
-        raise HTTPException(503, "Digital Twin engine not available on this server.")
     data = dt_get_latest_twin_data()
     if data is None:
-        raise HTTPException(404, "No digital twin simulation has been run yet.")
+        raise HTTPException(404, "No digital twin has been generated yet.")
     return data

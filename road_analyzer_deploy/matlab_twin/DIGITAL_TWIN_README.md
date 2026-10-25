@@ -1,216 +1,71 @@
-# Digital Twin Integration Guide
-## Indian Road Capacity Analyzer → MATLAB Simulink Digital Twin
+# Digital Twin — MATLAB / RoadRunner side
 
----
+The web dashboard computes the twin in Python (`road_analyzer/digital_twin_engine.py`)
+and needs no MATLAB. The scripts in this folder reproduce or visualise the same
+result locally.
 
-## What you're getting
+## What the twin models
 
-| File | Purpose |
-|---|---|
-| `create_digital_twin_model.m` | Run once to generate `road_digital_twin.slx` |
-| `run_digital_twin.m` | Runs the Simulink simulation after every analysis |
-| `digital_twin_bridge.py` | Python ↔ MATLAB bridge (triggers MATLAB, serves results) |
-| `app.py` | Updated FastAPI app with `/api/digital-twin/*` endpoints |
-| `dt_panel.html` | HTML panel to paste into `index.html` |
-| `dt_styles.css` | CSS for the digital twin panel |
-| `dt_app_addition.js` | JavaScript to paste into `app.js` |
+Both roads carry the **same demand** `q` (PCU/h): the observed volume if one was
+entered, otherwise the LOS-C service volume of the ideal road, `0.70 × C0`.
 
----
+| | Ideal road | Current road |
+|---|---|---|
+| Capacity | `C0` (Indo-HCM Table 5.4 or Eq. 5.4) | `C = C0 × F_OP × F_BS × F_AC` (Eq. 5.5) `× F_W × F_R` (project extensions) |
+| Free-flow speed | operating speed `v_f` | `v_f × roughness speed ratio` (1 unless IRI > 3 is entered) |
+| Fundamental diagram | Greenshields `v = v_f (1 − k/k_j)`, `k_j = 4 C0 / v_f` | same form, `k_j' = 4 C / v_f'` |
 
-## Step 1 — Copy files into your repo
+* `q ≤ C`: no queue; speed and density from the uncongested branch.
+* `q > C`: the section is a bottleneck. Stored queue `n(t) = (q − C) t`;
+  the queue tail moves upstream at the LWR shockwave speed
+  `w = (C − q) / (k_Q − k_A)`, where `k_A` is the arriving density and `k_Q`
+  the queued density on the congested branch at flow `C`.
 
-```
-your-repo/
-├── road_analyzer_deploy/
-│   └── road_analyzer/
-│       ├── app.py                    ← Replace with the new app.py
-│       ├── digital_twin_bridge.py    ← NEW — copy here
-│       └── static/
-│           ├── index.html            ← Add dt_panel.html content inside it
-│           ├── style.css             ← Add dt_styles.css content at the bottom
-│           └── app.js                ← Add dt_app_addition.js content at the bottom
-│
-└── matlab_twin/                      ← NEW folder — create this
-    ├── create_digital_twin_model.m   ← Copy here
-    └── run_digital_twin.m            ← Copy here
-```
+A capacity loss therefore shows up as **slower traffic and a growing queue**,
+not as fewer vehicles on the road.
 
----
-
-## Step 2 — Set up the matlab_twin folder
-
-```bash
-# From your repo root:
-mkdir matlab_twin
-# Copy the two .m files into matlab_twin/
-```
-
----
-
-## Step 3 — Update index.html
-
-Open `road_analyzer/static/index.html`.
-
-1. In the `<head>`, the CSS is already linked. Add this before `</head>`:
-```html
-<link rel="stylesheet" href="/static/style.css">
-```
-(already there — just add the dt_styles.css content **at the bottom** of `style.css`)
-
-2. Find the line `</div>  <!-- end .wrap -->` and paste the entire
-   contents of `dt_panel.html` just **before** that closing tag.
-
----
-
-## Step 4 — Update app.js
-
-Paste the entire contents of `dt_app_addition.js` at the **bottom** of `app.js`.
-
-Then find your existing function that handles a successful analysis result
-(look for where `result` is passed to the display function) and add:
-
-```javascript
-// RIGHT after you display the normal analysis result:
-if (result.digital_twin_status === 'running') {
-    dtShowPanel();
-    dtStartPolling();
-}
-```
-
----
-
-## Step 5 — Generate the Simulink model (do this once in MATLAB)
-
-```matlab
-% In MATLAB command window:
-cd('path/to/your-repo/matlab_twin')
-create_digital_twin_model
-```
-
-This creates `road_digital_twin.slx` in the `matlab_twin/` folder.
-
----
-
-## Step 6 — Set MATLAB path (so Python can call it)
-
-### Linux/Mac:
-```bash
-export MATLAB_EXE="/usr/local/MATLAB/R2026a/bin/matlab"
-```
-
-### Windows:
-```cmd
-set MATLAB_EXE=C:\Program Files\MATLAB\R2026a\bin\matlab.exe
-```
-
-Add this to your `.env` file or Render environment variables.
-
----
-
-## Step 7 — Run your app
-
-```bash
-cd road_analyzer_deploy
-uvicorn road_analyzer.app:app --reload --port 8000
-```
-
-Upload a road image → the analysis runs as before →
-MATLAB launches automatically in the background →
-the Digital Twin panel appears on the dashboard with:
-
-- ✅ Ideal road vs Defect road side-by-side
-- ✅ Capacity timeline chart (Simulink output)
-- ✅ Vehicle speed degradation (Greenshields calibration)
-- ✅ LOS meter (A → F animated)
-- ✅ Animated vehicle flow (more vehicles = higher volume)
-- ✅ Pothole depth speed impact indicator
-
----
-
-## How the simulation works (for your viva)
-
-```
-Python analysis result (JSON)
-        ↓
-  digital_twin_bridge.py
-        ↓ (subprocess)
-  MATLAB R2026a
-        ↓
-  run_digital_twin.m
-     - Reads ideal_cap, defect_cap, cap_loss_pct, LOS, pothole_speed_impact
-     - Creates timeseries inputs → Simulink workspace
-     - Runs road_digital_twin.slx (60-second simulation)
-        ↓
-     Simulink model:
-       [Ideal DSV] → [Transfer Fcn τ=5s]  → Ideal flow curve
-       [Defect DSV] → [Transfer Fcn τ=30s] → Defect flow curve (sluggish = congestion)
-       [Pothole impact] → [Greenshields speed model] → Vehicle speed
-       [LOS numeric] → [Lookup Table] → LOS signal
-        ↓
-     MATLAB writes dt_output.json
-        ↓
-  FastAPI serves /api/digital-twin/latest
-        ↓
-  Dashboard JS polls → renders twin panel
-```
-
-### Why Transfer Functions?
-- The first-order lag (τ) models **traffic flow inertia** — ideal roads respond quickly to capacity,
-  defect roads respond slowly (congestion takes time to build and dissipate).
-- This is a standard traffic engineering simplification (analogous to the LWR model).
-
-### Calibration model
-- IRC:106-1990 design load factor = **0.7** (roads designed for 70% of DSV)
-- Greenshields model: `v = v_free × (1 - V/C)`
-- Pothole speed penalty: `speed_pct_lost = cap_loss_pct × 0.6` (conservative proxy)
-
----
-
-## Deployment on Render
-
-MATLAB is NOT available on Render's free tier.
-
-Options:
-1. **Run MATLAB locally** — run `run_digital_twin.m` manually, copy `dt_output.json` to the server
-2. **Use MATLAB Online + REST API** — MATLAB Online has a REST API (R2024a+)
-3. **Pre-compute** — for a demo, pre-generate dt_output.json for a few test cases
-
-For a final-year project demo, option 1 or 3 is perfectly fine.
-State clearly in your viva: "MATLAB runs locally, Python reads the output".
-
----
-
-## RoadRunner 3D scene: visibility and traffic settings
-
-Everything about how the RoadRunner scene *looks* is set in **`twin_config.m`** -
-edit the numbers there, no other file needs to change.
+## Files
 
 | File | Purpose |
 |---|---|
-| `twin_config.m` | Traffic density, vehicle mix, speeds, and how big each defect is drawn |
-| `twin_assets.m` | Finds the vehicle / prop assets that really exist in your RoadRunner project |
-| `build_traffic.m` | Places dense, mixed, moving traffic (cars, two-wheelers, trucks, buses, vans) |
-| `add_vehicles_ideal.m` / `add_vehicles_nonideal.m` | Thin wrappers around `build_traffic.m` |
-| `add_defects_to_scene.m` | Draws each defect as an enlarged cluster of markers |
+| `create_digital_twin_model.m` | Builds `road_digital_twin.slx`: two point queues `dQ/dt = (q − C)/3600`, `Q ≥ 0` |
+| `run_digital_twin.m` | Runs the model for one `*_roadrunner_capacity.json` (or `*_analysis.json`) and writes `dt_output.json` |
+| `roadtwin.m` | 2-D MATLAB animation, ideal vs current road, speeds and spacing from the twin |
+| `auto_import_roadrunner.m` | Imports the `.xodr` into RoadRunner and places traffic |
+| `build_traffic.m` | Places vehicles at the twin density: spacing = `1000 / (k_PCU / avg PCU)` m |
+| `add_vehicles_ideal.m`, `add_vehicles_nonideal.m` | Thin wrappers around `build_traffic.m` |
+| `add_defects_to_scene.m` | Draws each detected obstruction at its measured lateral position |
+| `twin_config.m` | Vehicle mix, lengths, minimum gap, defect marker sizes |
+| `twin_assets.m` | Finds the vehicle / prop assets in your RoadRunner project |
+| `run_ideal_digital_twin.bat`, `run_nonideal_digital_twin.bat` | One-click launchers (set `MATLAB_EXE` if MATLAB is not in the default path) |
 
-**Defects.** A real pothole (~0.4 m) or barricade is too small to see on a road
-model, so each is drawn over an *enlarged footprint*:
-`max(measured size x scale, minimum size)`. Potholes become a ring of cones,
-barricades a row of barrier pieces across the blocked width, illegal parking a
-parked vehicle, garbage a grid of barrels. The console prints measured size vs.
-drawn size for every defect, so the enlargement is never hidden - say so in your
-viva: *"markers are exaggerated for visibility; the lateral position is real."*
+## Use
 
-**Traffic.** Vehicles are packed lane by lane with a real gap (no overlaps), in
-the mix set in `twin_config.m`. The defect road shows
-`reduced capacity / original capacity` of the ideal road's traffic, at the real
-congested speed. Vehicles get a speed and a route, so they drive when you press
-Play.
+1. Analyse a photo on the dashboard and download the **Digital Twin Bundle (.zip)**.
+2. Extract it into an **empty folder**; keep every file together.
+3. Double-click **`run_2d_digital_twin.bat`** first. It needs only MATLAB and
+   proves the setup works.
+4. For RoadRunner: **`run_ideal_digital_twin.bat`**, then **`run_nonideal_digital_twin.bat`**.
+   The first run asks for your RoadRunner project folder and saves it in
+   `roadrunner_project.txt`.
+5. Optional Simulink check: in MATLAB, `run_digital_twin('<photo>_roadrunner_capacity.json')`.
 
-**Limits to state honestly**
-- A single photo gives a ~40 m road, so vehicles can only drive a few seconds
-  before reaching the end. Use the multi-photo corridor export for a longer road.
-- Along-road spacing between defects is cosmetic (one photo cannot measure it);
-  left-right position is real.
-- If your RoadRunner release does not accept `Speed` on a route point, the script
-  warns you; set Initial Speed on the vehicles in RoadRunner Scenario instead.
+| Setting | How it is found |
+|---|---|
+| MATLAB | `MATLAB_EXE` env var → `matlab` on PATH → newest `C:\Program Files\MATLAB\R20*` |
+| RoadRunner project | `RR_PROJECT_FOLDER` env var → `roadrunner_project.txt` → folder picker |
+| RoadRunner install | `RR_INSTALL_FOLDER` env var → newest `C:\Program Files\RoadRunner R20*` → `roadrunnerSetup` default |
+
+**If nothing seems to happen:** every run writes `twin_log.txt` in the same
+folder and shows a popup on error. Send that file when asking for help.
+
+## Limits
+
+* One photo gives one cross-section. The `.xodr` road is a straight 40 m
+  segment; along-road spacing of defects is cosmetic, lateral position is measured.
+* Defect markers in RoadRunner are enlarged for visibility (`twin_config.m`).
+* The vehicle mix in `twin_config.m` is an assumption; replace it with a
+  classified count for the site.
+* These `.m` files were revised without a MATLAB licence available; run
+  `create_digital_twin_model` once and fix any block-parameter name your
+  release reports.

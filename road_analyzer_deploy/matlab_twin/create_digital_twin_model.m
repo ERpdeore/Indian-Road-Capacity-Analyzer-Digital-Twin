@@ -1,229 +1,89 @@
 %% ================================================================
-%% Indian Road Capacity Analyzer — Digital Twin Builder
+%% Indian Road Capacity Analyzer — Simulink queue model
 %% create_digital_twin_model.m
 %%
-%% Run this script ONCE in MATLAB R2024a/R2026a to generate
-%% the Simulink model file  road_digital_twin.slx
+%% Run ONCE to generate road_digital_twin.slx; run_digital_twin.m then
+%% simulates it for each analysis.
 %%
-%% After the .slx file is created, use run_digital_twin.m to
-%% actually simulate and export results to the web dashboard.
+%% Model (deterministic point queue, same as the Python twin):
+%%     dQ/dt = (q - C) / 3600     [PCU/s],  Q >= 0
+%% for two capacities fed with the SAME demand q:
+%%     ideal road  : C = C0 (Indo-HCM base capacity)
+%%     current road: C = reduced capacity from the obstructions
+%% Q is the number of PCU stored upstream of the section. When q <= C the
+%% integrator sits at its lower limit 0 (no queue).
+%%
+%% Inputs come from the struct simIn in the base workspace
+%% (simIn.demand_pcu_h, simIn.ideal_cap, simIn.defect_cap).
+%%
+%% Replaces a model that passed capacity through first-order lags
+%% (tau = 5 s / 30 s) — capacity does not "ramp up" from zero, so those
+%% curves had no physical meaning — and that mapped capacity-loss % to an
+%% LOS letter, which needs a V/C ratio.
 %% ================================================================
 
 clc; clear; close all;
-fprintf('Building Digital Twin Simulink model...\n');
-
 MODEL_NAME = 'road_digital_twin';
+fprintf('Building %s.slx ...\n', MODEL_NAME);
 
-%% ---- close existing open copy so we can overwrite cleanly ----
-if bdIsLoaded(MODEL_NAME)
-    close_system(MODEL_NAME, 0);
-end
-
-%% ---- create blank model ----
+if bdIsLoaded(MODEL_NAME), close_system(MODEL_NAME, 0); end
 new_system(MODEL_NAME);
 open_system(MODEL_NAME);
-
-%% ================================================================
-%% SUBSYSTEM LAYOUT  (pixel positions for the Simulink canvas)
-%%
-%%  [Ideal Road Subsystem]   [Defect Road Subsystem]
-%%       |                          |
-%%  [Ideal Capacity Out]    [Defect Capacity Out]
-%%       \                         /
-%%        ----> [Mux] --> [To File / To Workspace]
-%% ================================================================
-
-%% ---- helper: position array [left top right bottom] ----
 POS = @(x,y,w,h) [x, y, x+w, y+h];
 
-%% ================================================================
-%% BLOCK 1: Simulation Clock  (so plots have a time axis in seconds)
-%% ================================================================
-add_block('simulink/Sources/Clock', [MODEL_NAME '/Clock'], ...
-    'Position', POS(30, 50, 30, 30));
+%% ---- sources ----
+add_block('simulink/Sources/Constant', [MODEL_NAME '/Demand_pcu_h'], ...
+    'Value', 'simIn.demand_pcu_h', 'Position', POS(30, 60, 110, 30));
+add_block('simulink/Sources/Constant', [MODEL_NAME '/IdealCap_pcu_h'], ...
+    'Value', 'simIn.ideal_cap', 'Position', POS(30, 140, 110, 30));
+add_block('simulink/Sources/Constant', [MODEL_NAME '/DefectCap_pcu_h'], ...
+    'Value', 'simIn.defect_cap', 'Position', POS(30, 260, 110, 30));
 
-%% ================================================================
-%% BLOCK 2: Road Configuration (Constant blocks reading base workspace)
-%%   BUG FIX: "From Workspace" blocks require properly time-stamped
-%%   data (a timeseries or a Structure-With-Time / [time,data] matrix).
-%%   These are plain scalars set once per run, so "From Workspace"
-%%   throws "Invalid data was returned for parameter 'VariableName'"
-%%   at simulation start. A Constant block's Value field is evaluated
-%%   as a MATLAB expression against the base workspace at model
-%%   compile time, so it can read "simIn.ideal_dsv" etc. directly and
-%%   correctly, with no time-series formatting required at all.
-%%   MATLAB populates a struct "simIn" (via run_digital_twin.m) before
-%%   sim() is called, so the model stays data-driven, not hardcoded.
-%% ================================================================
-add_block('simulink/Sources/Constant', ...
-    [MODEL_NAME '/RoadConfig_ideal_DSV'], ...
-    'Value', 'simIn.ideal_dsv', ...
-    'Position', POS(30, 130, 120, 30));
+%% ---- ideal road queue ----
+add_block('simulink/Math Operations/Sum', [MODEL_NAME '/Excess_ideal'], ...
+    'Inputs', '+-', 'Position', POS(200, 90, 30, 40));
+add_block('simulink/Math Operations/Gain', [MODEL_NAME '/PerSecond_ideal'], ...
+    'Gain', '1/3600', 'Position', POS(270, 95, 60, 30));
+add_block('simulink/Continuous/Integrator', [MODEL_NAME '/Queue_ideal'], ...
+    'InitialCondition', '0', 'LimitOutput', 'on', ...
+    'LowerSaturationLimit', '0', 'UpperSaturationLimit', 'inf', ...
+    'Position', POS(370, 95, 40, 30));
 
-add_block('simulink/Sources/Constant', ...
-    [MODEL_NAME '/RoadConfig_defect_DSV'], ...
-    'Value', 'simIn.defect_dsv', ...
-    'Position', POS(30, 200, 120, 30));
+%% ---- current (defect) road queue ----
+add_block('simulink/Math Operations/Sum', [MODEL_NAME '/Excess_defect'], ...
+    'Inputs', '+-', 'Position', POS(200, 210, 30, 40));
+add_block('simulink/Math Operations/Gain', [MODEL_NAME '/PerSecond_defect'], ...
+    'Gain', '1/3600', 'Position', POS(270, 215, 60, 30));
+add_block('simulink/Continuous/Integrator', [MODEL_NAME '/Queue_defect'], ...
+    'InitialCondition', '0', 'LimitOutput', 'on', ...
+    'LowerSaturationLimit', '0', 'UpperSaturationLimit', 'inf', ...
+    'Position', POS(370, 215, 40, 30));
 
-add_block('simulink/Sources/Constant', ...
-    [MODEL_NAME '/RoadConfig_cap_loss_pct'], ...
-    'Value', 'simIn.cap_loss_pct', ...
-    'Position', POS(30, 270, 120, 30));
+%% ---- outputs ----
+add_block('simulink/Signal Routing/Mux', [MODEL_NAME '/OutputMux'], ...
+    'Inputs', '2', 'Position', POS(470, 100, 10, 140));
+add_block('simulink/Sinks/To Workspace', [MODEL_NAME '/SimOut'], ...
+    'VariableName', 'dt_simout', 'SampleTime', '60', ...
+    'SaveFormat', 'Structure With Time', 'Position', POS(540, 155, 100, 30));
+add_block('simulink/Sinks/Scope', [MODEL_NAME '/Scope_Queue'], ...
+    'Position', POS(540, 60, 40, 40));
 
-add_block('simulink/Sources/Constant', ...
-    [MODEL_NAME '/RoadConfig_los_numeric'], ...
-    'Value', 'simIn.los_numeric', ...
-    'Position', POS(30, 340, 120, 30));
+%% ---- wiring ----
+add_line(MODEL_NAME, 'Demand_pcu_h/1',    'Excess_ideal/1',  'autorouting', 'on');
+add_line(MODEL_NAME, 'IdealCap_pcu_h/1',  'Excess_ideal/2',  'autorouting', 'on');
+add_line(MODEL_NAME, 'Demand_pcu_h/1',    'Excess_defect/1', 'autorouting', 'on');
+add_line(MODEL_NAME, 'DefectCap_pcu_h/1', 'Excess_defect/2', 'autorouting', 'on');
+add_line(MODEL_NAME, 'Excess_ideal/1',     'PerSecond_ideal/1');
+add_line(MODEL_NAME, 'PerSecond_ideal/1',  'Queue_ideal/1');
+add_line(MODEL_NAME, 'Excess_defect/1',    'PerSecond_defect/1');
+add_line(MODEL_NAME, 'PerSecond_defect/1', 'Queue_defect/1');
+add_line(MODEL_NAME, 'Queue_ideal/1',  'OutputMux/1', 'autorouting', 'on');
+add_line(MODEL_NAME, 'Queue_defect/1', 'OutputMux/2', 'autorouting', 'on');
+add_line(MODEL_NAME, 'OutputMux/1', 'SimOut/1',      'autorouting', 'on');
+add_line(MODEL_NAME, 'OutputMux/1', 'Scope_Queue/1', 'autorouting', 'on');
 
-add_block('simulink/Sources/Constant', ...
-    [MODEL_NAME '/RoadConfig_pothole_speed_impact'], ...
-    'Value', 'simIn.pothole_speed_pct', ...
-    'Position', POS(30, 410, 120, 30));
+%% ---- settings: one-hour horizon ----
+set_param(MODEL_NAME, 'StopTime', '3600', 'Solver', 'ode45', 'MaxStep', '10');
 
-%% ================================================================
-%% BLOCK 3: Transfer Function  —  Traffic Flow Dynamics
-%%   Models how traffic flow responds to capacity (first-order lag).
-%%   Ideal road:  fast response  (τ = 5s)
-%%   Defect road: sluggish response (τ = 30s, higher delay)
-%% ================================================================
-
-%% Ideal road flow dynamics
-add_block('simulink/Continuous/Transfer Fcn', ...
-    [MODEL_NAME '/IdealFlow_TF'], ...
-    'Numerator', '[1]', ...
-    'Denominator', '[5 1]', ...
-    'Position', POS(230, 130, 100, 40));
-
-%% Defect road flow dynamics (heavier lag = congestion buildup)
-add_block('simulink/Continuous/Transfer Fcn', ...
-    [MODEL_NAME '/DefectFlow_TF'], ...
-    'Numerator', '[1]', ...
-    'Denominator', '[30 1]', ...
-    'Position', POS(230, 200, 100, 40));
-
-%% ================================================================
-%% BLOCK 4: Pothole Speed Degradation
-%%   Vehicle speed = Vfree * (1 - pothole_speed_impact/100)
-%%   Using a Gain block to scale.
-%% ================================================================
-
-%% Free-flow speed constant (50 km/h urban arterial default — IRC:106)
-add_block('simulink/Sources/Constant', ...
-    [MODEL_NAME '/FreeFlowSpeed_kmh'], ...
-    'Value', '50', ...
-    'Position', POS(30, 490, 80, 30));
-
-%% Convert pct_impact to fraction
-add_block('simulink/Math Operations/Gain', ...
-    [MODEL_NAME '/PotholeImpact_Gain'], ...
-    'Gain', '0.01', ...
-    'Position', POS(230, 410, 60, 30));
-
-%% 1 - fraction
-add_block('simulink/Math Operations/Sum', ...
-    [MODEL_NAME '/SpeedFactor_Sum'], ...
-    'Inputs', '+-', ...
-    'Position', POS(350, 480, 40, 40));
-
-add_block('simulink/Sources/Constant', ...
-    [MODEL_NAME '/Unity'], ...
-    'Value', '1', ...
-    'Position', POS(230, 490, 60, 30));
-
-%% Vehicle speed (km/h) = FreeFlowSpeed * SpeedFactor
-add_block('simulink/Math Operations/Product', ...
-    [MODEL_NAME '/VehicleSpeed_Product'], ...
-    'Position', POS(450, 475, 60, 40));
-
-%% ================================================================
-%% BLOCK 5: LOS  Staircase — maps LOS numeric to label
-%%   LOS A=1, B=2, C=3, D=4, E=5, F=6  (integer from Python bridge)
-%%   Lookup Table saturates: ensures output stays 1-6.
-%% ================================================================
-add_block('simulink/Lookup Tables/1-D Lookup Table', ...
-    [MODEL_NAME '/LOS_Lookup'], ...
-    'BreakpointsForDimension1', '[1 2 3 4 5 6]', ...
-    'Table',                    '[1 2 3 4 5 6]', ...
-    'ExtrapMethod', 'Clip', ...
-    'Position', POS(230, 340, 100, 40));
-
-%% ================================================================
-%% BLOCK 6: Mux all signals → single bus → To Workspace
-%% ================================================================
-add_block('simulink/Signal Routing/Mux', ...
-    [MODEL_NAME '/OutputMux'], ...
-    'Inputs', '5', ...
-    'Position', POS(600, 150, 30, 350));
-
-%% ---- To Workspace (saves to base WS so run_digital_twin.m can read) ----
-add_block('simulink/Sinks/To Workspace', ...
-    [MODEL_NAME '/SimOut'], ...
-    'VariableName', 'dt_simout', ...
-    'SampleTime',  '-1', ...
-    'SaveFormat',  'Structure With Time', ...
-    'Position', POS(680, 290, 100, 40));
-
-%% ================================================================
-%% BLOCK 7: Scopes — 2 visual scopes for MATLAB-side display
-%% ================================================================
-add_block('simulink/Sinks/Scope', ...
-    [MODEL_NAME '/Scope_Capacity'], ...
-    'NumInputPorts', '2', ...
-    'Position', POS(680, 130, 60, 60));
-
-add_block('simulink/Sinks/Scope', ...
-    [MODEL_NAME '/Scope_Speed'], ...
-    'NumInputPorts', '1', ...
-    'Position', POS(680, 220, 60, 60));
-
-%% ================================================================
-%% WIRING  —  connect all blocks
-%% ================================================================
-
-%% Road config → Transfer Functions
-add_line(MODEL_NAME, 'RoadConfig_ideal_DSV/1',       'IdealFlow_TF/1');
-add_line(MODEL_NAME, 'RoadConfig_defect_DSV/1',      'DefectFlow_TF/1');
-add_line(MODEL_NAME, 'RoadConfig_cap_loss_pct/1',    'OutputMux/3');
-add_line(MODEL_NAME, 'RoadConfig_los_numeric/1',     'LOS_Lookup/1');
-add_line(MODEL_NAME, 'RoadConfig_pothole_speed_impact/1', 'PotholeImpact_Gain/1');
-
-%% Transfer Function outputs → Mux
-add_line(MODEL_NAME, 'IdealFlow_TF/1',   'OutputMux/1');
-add_line(MODEL_NAME, 'DefectFlow_TF/1',  'OutputMux/2');
-
-%% LOS → Mux
-add_line(MODEL_NAME, 'LOS_Lookup/1',     'OutputMux/4');
-
-%% Speed degradation chain
-add_line(MODEL_NAME, 'PotholeImpact_Gain/1', 'SpeedFactor_Sum/2');
-add_line(MODEL_NAME, 'Unity/1',              'SpeedFactor_Sum/1');
-add_line(MODEL_NAME, 'FreeFlowSpeed_kmh/1',  'VehicleSpeed_Product/1');
-add_line(MODEL_NAME, 'SpeedFactor_Sum/1',    'VehicleSpeed_Product/2');
-add_line(MODEL_NAME, 'VehicleSpeed_Product/1', 'OutputMux/5');
-
-%% Mux → outputs
-add_line(MODEL_NAME, 'OutputMux/1', 'SimOut/1');
-
-%% Scope connections (tapped from Mux input lines)
-add_line(MODEL_NAME, 'IdealFlow_TF/1',       'Scope_Capacity/1');
-add_line(MODEL_NAME, 'DefectFlow_TF/1',      'Scope_Capacity/2');
-add_line(MODEL_NAME, 'VehicleSpeed_Product/1', 'Scope_Speed/1');
-
-%% ================================================================
-%% MODEL SETTINGS
-%% ================================================================
-set_param(MODEL_NAME, ...
-    'StopTime',        '60', ...
-    'Solver',          'ode45', ...
-    'MaxStep',         '0.5', ...
-    'SaveTime',        'on', ...
-    'SaveOutput',      'on', ...
-    'SignalLogging',   'on', ...
-    'SignalLoggingName','logsout');
-
-%% ================================================================
-%% SAVE
-%% ================================================================
 save_system(MODEL_NAME, [MODEL_NAME '.slx']);
-fprintf('Model saved as  %s.slx\n', MODEL_NAME);
-fprintf('Next step: run  run_digital_twin.m\n');
+fprintf('Model saved as %s.slx. Next: run_digital_twin(<capacity json>)\n', MODEL_NAME);
