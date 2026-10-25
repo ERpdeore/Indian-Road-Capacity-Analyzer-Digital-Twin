@@ -1,7 +1,8 @@
 """
 road_analyzer.indo_hcm
 ======================
-Indo-HCM 2017 (CSIR-CRRI), Chapter 5 "Urban Roads" — and nothing else.
+Indo-HCM 2017 (CSIR-CRRI), Chapter 5 "Urban Roads", plus the single-lane and
+intermediate-lane roads of Chapter 2 (the only Indo-HCM source for them).
 
 Every constant below carries the table / equation / section it comes from.
 The project's own extensions live in road_analyzer/extensions.py. The only
@@ -13,6 +14,13 @@ Scope (Section 5.1)
   at least 1 km apart.
 * Road types: two-lane undivided, and 4/6/8/10-lane divided (5.1.2).
   No one-way, no 4-lane undivided, no intersections (Chapter 6 covers those).
+  Indo-HCM has no 4- or 6-lane UNDIVIDED class in any chapter.
+* Single-lane and intermediate-lane roads exist only in Chapter 2
+  (interurban roads). They are offered here with Chapter 2's own base
+  capacity, width factor, speed-capacity equation, roughness equation, PCUs
+  and LOS table. ASSUMPTION (stated on every result): interurban values are
+  applied to an urban street, and Chapter 5's side-friction factors are
+  applied to them although Chapter 2 does not calibrate any.
 * Plain terrain only (Table 5B.1; no rolling/mountainous sections studied).
 
 Method (Fig. 5.2)
@@ -99,6 +107,75 @@ ROAD_TYPES: Dict[str, dict] = {
     },
 }
 DSV_VC_RATIO = 0.70   # every row of Table 5.4: DSV / capacity = 0.70
+for _k, _rt in ROAD_TYPES.items():
+    _rt.update(chapter=5, capacity_source="Table 5.4", dsv_vc_ratio=DSV_VC_RATIO,
+               los_table="divided" if _rt["divided"] else "undivided",
+               los_table_ref="5.7" if _rt["divided"] else "5.6")
+
+# ------------------------------------------------------------------
+# Chapter 2 — single-lane and intermediate-lane roads (interurban)
+#   2.3.2 / 2.3.3 and base-section rules: single lane 3.75 m, intermediate
+#   5.5-6.0 m (base 5.5 m), both carrying two-way traffic.
+#   2.10.1: base capacity 800 PCU/h at 50 km/h (single), 2150 PCU/h at
+#   75 km/h (intermediate), both directions together.
+#   Eq. 2.12 / 2.11: capacity from operating speed of standard cars.
+#   Note: Eq. 2.11 at 75 km/h gives 2060, not the 2150 the manual states;
+#   the stated base value is used for C0 (docs/METHODOLOGY.md section 7).
+#   DSV: Chapter 2 gives DSV for these roads only in PCU/day for two-lane
+#   roads. CHOICE: the upper V/C of LOS C in the chapter's own LOS table
+#   (Table 2.10: 0.50, Table 2.9: 0.60) is used as the service-volume ratio.
+# ------------------------------------------------------------------
+CH2_NOTE = ("Indo-HCM gives this road type only in Chapter 2 (interurban roads). Its values are "
+            "applied to an urban street as a project assumption.")
+ROAD_TYPES.update({
+    "single_lane": {
+        "label": "Single-lane (Ch. 2)", "lanes": 1, "divided": False,
+        "basis": "both directions", "paved_width_m": 3.75, "ref_width_m": 3.75,
+        "paved_width_range_m": (3.50, 4.20),
+        "capacity_pcu_h": 800, "lane_capacity_pcu_h": 800, "dsv_pcu_h": 400,
+        "chapter": 2, "capacity_source": "Section 2.10.1 (800 PCU/h at 50 km/h)",
+        "dsv_vc_ratio": 0.50, "los_table": "single", "los_table_ref": "2.10",
+        "base_operating_speed_kmh": 50.0,
+        "speed_eq": {"a": 12.4, "b": 187.0, "eq": "Eq. 2.12"},
+        "condition": CH2_NOTE,
+    },
+    "intermediate_lane": {
+        "label": "Intermediate-lane (Ch. 2)", "lanes": 2, "divided": False,
+        "basis": "both directions", "paved_width_m": 5.5, "ref_width_m": 5.5,
+        "paved_width_range_m": (5.50, 6.00),
+        "capacity_pcu_h": 2150, "lane_capacity_pcu_h": 1075, "dsv_pcu_h": 1290,
+        "chapter": 2, "capacity_source": "Section 2.10.1 (2150 PCU/h at 75 km/h)",
+        "dsv_vc_ratio": 0.60, "los_table": "intermediate", "los_table_ref": "2.9",
+        "base_operating_speed_kmh": 75.0,
+        "speed_eq": {"a": 16.4, "b": 830.0, "eq": "Eq. 2.11"},
+        "condition": CH2_NOTE,
+    },
+})
+
+# Table 2.6 — adjustment factor for carriageway width (f_w), both directions
+WIDTH_FACTOR_TABLE_2_6 = {
+    "single_lane":       [(3.50, 0.76), (3.75, 1.00), (4.00, 1.24), (4.20, 1.43)],
+    "intermediate_lane": [(5.50, 1.00), (5.60, 1.03), (5.80, 1.09), (6.00, 1.15)],
+}
+
+
+def carriageway_width_factor(road_type: str, paved_width_m: float) -> dict:
+    """Table 2.6 f_w. CHOICE: linear interpolation between printed widths;
+    outside the printed range the end value is used (no extrapolation)."""
+    rows = WIDTH_FACTOR_TABLE_2_6[road_type]
+    w = float(paved_width_m)
+    note = None
+    if w <= rows[0][0] or w >= rows[-1][0]:
+        f = rows[0][1] if w <= rows[0][0] else rows[-1][1]
+        if not (rows[0][0] - 1e-9 <= w <= rows[-1][0] + 1e-9):
+            note = (f"Width {w:g} m is outside the {rows[0][0]:g}-{rows[-1][0]:g} m of Table 2.6; "
+                    f"the end value f_w = {f:.2f} is used.")
+    else:
+        for (w0, f0), (w1, f1) in zip(rows, rows[1:]):
+            if w0 <= w <= w1:
+                f = f0 + (f1 - f0) * (w - w0) / (w1 - w0)
+                break
+    return {"f_w": f, "note": note}
 
 
 def check_road_width(road_type: str, paved_width_m: float) -> Optional[str]:
@@ -115,6 +192,11 @@ def check_road_width(road_type: str, paved_width_m: float) -> Optional[str]:
                     f"intermediate widths; check the road type.")
         return None
     lo, hi = rt["paved_width_range_m"]
+    if rt["chapter"] == 2:
+        if not (lo <= paved_width_m <= hi):
+            return (f"Paved width {paved_width_m:g} m is outside {lo:g}-{hi:g} m for a "
+                    f"{rt['label'].split(' (')[0].lower()} road (Table 2.6); check the road type.")
+        return None
     if not (lo <= paved_width_m <= hi):
         return (f"Paved width {paved_width_m:g} m is outside {lo:g}-{hi:g} m for a two-lane "
                 f"undivided road (Table 5B.1).")
@@ -144,18 +226,24 @@ def operating_speed_from_lane_capacity(c_lane: float) -> float:
     return (float(c_lane) - SPEED_MODEL_B) / SPEED_MODEL_A
 
 
-def base_capacity(road_type: str, operating_speed_kmh: Optional[float] = None) -> dict:
+def base_capacity(road_type: str, operating_speed_kmh: Optional[float] = None,
+                  paved_width_m: Optional[float] = None) -> dict:
     """
     C0 for one analysis unit.
       * divided road + operating speed measured on a BASE section
             -> Eq. 5.4 x lanes per direction   (site-specific route offered by 5.4.5)
       * otherwise -> Table 5.4
     Two-lane undivided roads have no speed model: Table 5.4 only.
+    Chapter 2 roads (single / intermediate lane): Section 2.10.1 value, or
+    Eq. 2.12 / 2.11 from a measured operating speed, times the Table 2.6
+    carriageway-width factor f_w.
     """
     rt = ROAD_TYPES[road_type]
     notes: List[str] = []
     if rt.get("condition"):
         notes.append(rt["condition"])
+    if rt["chapter"] == 2:
+        return _base_capacity_ch2(road_type, operating_speed_kmh, paved_width_m, notes)
     if operating_speed_kmh and not rt["divided"]:
         notes.append("Eq. 5.4 applies to divided roads only; Table 5.4 used for two-lane undivided.")
         operating_speed_kmh = None
@@ -173,6 +261,29 @@ def base_capacity(road_type: str, operating_speed_kmh: Optional[float] = None) -
     return {"c0_pcu_h": float(rt["capacity_pcu_h"]), "lane_capacity_pcu_h": float(rt["lane_capacity_pcu_h"]),
             "method": "Table 5.4", "operating_speed_kmh": None,
             "detail": f"Table 5.4, {rt['label']} ({rt['basis']})", "notes": notes}
+
+
+def _base_capacity_ch2(road_type: str, v: Optional[float], width: Optional[float],
+                       notes: List[str]) -> dict:
+    rt = ROAD_TYPES[road_type]
+    w = width if width else rt["paved_width_m"]
+    fw = carriageway_width_factor(road_type, w)
+    if fw["note"]:
+        notes.append(fw["note"])
+    if v:
+        se = rt["speed_eq"]
+        c_std = se["b"] + se["a"] * float(v)
+        method = se["eq"]
+        detail = (f"{se['eq']}: {se['b']:g} + {se['a']:g} x {v:g} = {c_std:.0f} PCU/h; "
+                  f"x f_w {fw['f_w']:.2f} (Table 2.6, {w:g} m)")
+    else:
+        c_std = float(rt["capacity_pcu_h"])
+        method = "Section 2.10.1"
+        detail = (f"{rt['capacity_source']} x f_w {fw['f_w']:.2f} (Table 2.6, {w:g} m)")
+    c0 = c_std * fw["f_w"]
+    return {"c0_pcu_h": c0, "lane_capacity_pcu_h": c0 / rt["lanes"], "method": method,
+            "operating_speed_kmh": float(v) if v else None, "f_w_table_2_6": fw["f_w"],
+            "detail": detail, "notes": notes}
 
 
 # ------------------------------------------------------------------
@@ -262,6 +373,20 @@ PCU_TABLE_5_3 = {   # median values by road width; None = '-'
                         "bicycle": None, "cycle_rickshaw": None},
 }
 
+# Table 2.4 — Chapter 2 medians. Single lane has its own column;
+# intermediate lane shares the two-lane column.
+# CHOICE: 'car' = standard car 1.00 (big cars 1.60 are not a separate class
+# here); mini bus has no Table 2.4 value, so the Table 5.2 undivided median
+# 1.80 is used.
+PCU_TABLE_2_4 = {
+    "single_lane":       {"two_wheeler": 0.25, "auto": 1.20, "car": 1.00, "bus": 4.50, "mini_bus": 1.80,
+                          "lcv": 2.70, "tat": 4.80, "mat": 5.00, "tractor_trailer": 7.00,
+                          "bicycle": 0.40, "cycle_rickshaw": 2.10},
+    "intermediate_lane": {"two_wheeler": 0.30, "auto": 1.20, "car": 1.00, "bus": 4.50, "mini_bus": 1.80,
+                          "lcv": 3.00, "tat": 5.00, "mat": 6.00, "tractor_trailer": 7.00,
+                          "bicycle": 0.40, "cycle_rickshaw": 2.50},
+}
+
 # Table 5A.1 plan areas (m^2); car = weighted small+big car area (5.4.2)
 PLAN_AREA_M2 = {"two_wheeler": 1.20, "auto": 4.48, "car": 6.19, "bus": 24.54, "mini_bus": 14.58,
                 "lcv": 12.81, "tat": 17.63, "mat": 29.52, "tractor_trailer": 16.28,
@@ -273,6 +398,8 @@ def pcu_values(road_type: str, purpose: str = "evaluation") -> Dict[str, float]:
     'planning' -> Table 5.2. CHOICE: where Table 5.3 has '-', the Table 5.2
     median for the same divided/undivided class is used (the manual gives no
     rule for this case)."""
+    if road_type in PCU_TABLE_2_4:
+        return dict(PCU_TABLE_2_4[road_type])
     divided = ROAD_TYPES[road_type]["divided"]
     t52 = PCU_TABLE_5_2["divided" if divided else "undivided"]
     if purpose == "planning":
@@ -293,7 +420,8 @@ def flow_pcu(counts_veh_h: Dict[str, float], road_type: str, purpose: str = "eva
     if unknown:
         raise ValueError(f"No Indo-HCM PCU for {unknown} on {road_type}. Valid: {sorted(pcu)}")
     return {"flow_pcu_h": sum(n * pcu[k] for k, n in counts_veh_h.items()),
-            "pcu_used": {k: pcu[k] for k in counts_veh_h}, "table": "5.3" if purpose == "evaluation" else "5.2"}
+            "pcu_used": {k: pcu[k] for k in counts_veh_h},
+            "table": "2.4" if road_type in PCU_TABLE_2_4 else ("5.3" if purpose == "evaluation" else "5.2")}
 
 
 def dynamic_pcu(v_subject_kmh: float, v_car_kmh: float, vehicle: str) -> float:
@@ -330,19 +458,34 @@ def se_shares(counts_veh_h: Dict[str, float]) -> tuple:
 # LOS — Tables 5.6 (two-lane undivided) and 5.7 (multilane divided)
 # (letter, upper V/C, lower % of FFS)
 # ------------------------------------------------------------------
+# Chapter 2: Table 2.9 (intermediate and two-lane, V/C column) and
+# Table 2.10 (single lane). No % of FFS bands (None).
 LOS_TABLES = {
-    "undivided": [("A", 0.35, 89), ("B", 0.55, 55), ("C", 0.70, 21), ("D", 0.85, 12), ("E", 1.00, 6)],
-    "divided":   [("A", 0.15, 84), ("B", 0.45, 76), ("C", 0.75, 59), ("D", 0.85, 41), ("E", 1.00, 22)],
+    "undivided":    [("A", 0.35, 89), ("B", 0.55, 55), ("C", 0.70, 21), ("D", 0.85, 12), ("E", 1.00, 6)],
+    "divided":      [("A", 0.15, 84), ("B", 0.45, 76), ("C", 0.75, 59), ("D", 0.85, 41), ("E", 1.00, 22)],
+    "intermediate": [("A", 0.25, None), ("B", 0.45, None), ("C", 0.60, None), ("D", 0.75, None),
+                     ("E", 1.00, None)],
+    "single":       [("A", 0.15, None), ("B", 0.30, None), ("C", 0.50, None), ("D", 0.80, None),
+                     ("E", 1.00, None)],
 }
+LOS_A_INCLUSIVE = {"single"}   # Table 2.10 prints A as '<= 0.15'; the others as '< limit'
 
 
-def los_from_vc(vc: float, divided: bool) -> str:
-    """Band edges as printed: A is '< limit' (strict); B-E include their upper
-    value ('0.15 - 0.45' etc.); F is '> 1.00'.
-    CHOICE: Table 5.6 leaves a printing gap (A < 0.35, B 0.36-0.55); values in
-    such gaps go to the better band."""
-    bands = LOS_TABLES["divided" if divided else "undivided"]
-    if vc < bands[0][1]:
+def _los_key(table) -> str:
+    if isinstance(table, bool):
+        return "divided" if table else "undivided"
+    return table
+
+
+def los_from_vc(vc: float, divided=None, table: Optional[str] = None) -> str:
+    """Pass `table` (a LOS_TABLES key) or `divided` (True = Table 5.7,
+    False = Table 5.6; a table key is also accepted here). Band edges as printed: A is '< limit' (strict) except Table
+    2.10 ('<= 0.15'); B-E include their upper value; F is '> 1.00'.
+    CHOICE: printing gaps (e.g. Table 5.6 A < 0.35, B 0.36-0.55) go to the
+    better band."""
+    key = table or _los_key(divided)
+    bands = LOS_TABLES[key]
+    if vc < bands[0][1] or (key in LOS_A_INCLUSIVE and vc <= bands[0][1]):
         return "A"
     for letter, upper, _ in bands[1:]:
         if vc <= upper:
@@ -350,11 +493,14 @@ def los_from_vc(vc: float, divided: bool) -> str:
     return "F"
 
 
-def los_from_speed(stream_speed_kmh: float, ffs_kmh: float, divided: bool) -> str:
-    """Stream (space-mean) speed as % of free-flow speed. A is '> limit'
-    (strict); integer gaps in the printed bands go to the worse band."""
+def los_from_speed(stream_speed_kmh: float, ffs_kmh: float, table) -> str:
+    """Stream (space-mean) speed as % of free-flow speed (Chapter 5 tables
+    only). A is '> limit' (strict); integer gaps go to the worse band."""
     pct = stream_speed_kmh / ffs_kmh * 100
-    bands = LOS_TABLES["divided" if divided else "undivided"]
+    key = _los_key(table)
+    if LOS_TABLES[key][0][2] is None:
+        raise ValueError(f"LOS table '{key}' has no speed bands; use V/C.")
+    bands = LOS_TABLES[key]
     if pct > bands[0][2]:
         return "A"
     for letter, _, lower in bands[1:]:

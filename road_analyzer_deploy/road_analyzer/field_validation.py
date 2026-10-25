@@ -89,6 +89,13 @@ def capacity_from_operating_speed(vehicles: List[dict], road_type: str) -> dict:
     if op["operating_speed_kmh"] is None:
         out["capacity_pcu_h"] = None
         return out
+    if rt["chapter"] == 2:
+        se = rt["speed_eq"]
+        out["method"] = f"A: operating speed + {se['eq']}"
+        out["capacity_pcu_h"] = se["b"] + se["a"] * op["operating_speed_kmh"]
+        out["note"] = ("Standard-width capacity; multiply by the Table 2.6 width factor for the "
+                       "site's carriageway width.")
+        return out
     if not rt["divided"]:
         out["capacity_pcu_h"] = None
         out["warning"] = ("Eq. 5.4 applies to divided roads only; use method B for a two-lane "
@@ -118,6 +125,9 @@ def five_minute_periods(vehicles: List[dict], road_type: str, trap_m: float,
     if t0 + (last + 1) * INTERVAL_S > t_end + 1e-9 and len(bins) > 1:
         bins.pop(last)
     divided = hcm.ROAD_TYPES[road_type]["divided"]
+    if pcu_method == "se" and hcm.ROAD_TYPES[road_type]["chapter"] == 2:
+        raise ValueError("Se (Eq. 5.2/5.3) is calibrated for Chapter 5 urban roads only; "
+                         "use pcu_method='table' (Table 2.4) for single/intermediate lane roads.")
     out = []
     for i in sorted(bins):
         vs = bins[i]

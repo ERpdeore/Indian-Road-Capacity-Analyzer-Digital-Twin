@@ -19,7 +19,9 @@ EX551 = {"two_wheeler": 1441, "auto": 379, "car": 1985, "mini_bus": 44, "bus": 5
 # ---------------- tables ----------------
 def test_table_5_4_dsv_is_70_percent_of_capacity():
     for rt in hcm.ROAD_TYPES.values():
-        assert rt["dsv_pcu_h"] == pytest.approx(0.70 * rt["capacity_pcu_h"])
+        assert rt["dsv_pcu_h"] == pytest.approx(rt["dsv_vc_ratio"] * rt["capacity_pcu_h"])
+        if rt["chapter"] == 5:
+            assert rt["dsv_vc_ratio"] == 0.70
         assert rt["capacity_pcu_h"] == pytest.approx(rt["lane_capacity_pcu_h"] * rt["lanes"])
 
 
@@ -250,3 +252,63 @@ def test_partial_last_period_dropped():
     fv.add_speeds_and_headways(vs, 60)
     periods = fv.five_minute_periods(vs, "divided_4lane", 60)
     assert len(periods) == 1 and periods[0]["flow_pcu_h"] == pytest.approx(1800)
+
+
+# ---------------- Chapter 2: single and intermediate lane ----------------
+def test_ch2_base_capacity_at_standard_width():
+    assert hcm.base_capacity("single_lane", None, 3.75)["c0_pcu_h"] == pytest.approx(800)
+    assert hcm.base_capacity("intermediate_lane", None, 5.5)["c0_pcu_h"] == pytest.approx(2150)
+
+
+def test_ch2_table_2_6_width_factor():
+    assert hcm.carriageway_width_factor("single_lane", 4.0)["f_w"] == pytest.approx(1.24)
+    assert hcm.carriageway_width_factor("intermediate_lane", 5.7)["f_w"] == pytest.approx(1.06)
+    clamp = hcm.carriageway_width_factor("single_lane", 3.0)
+    assert clamp["f_w"] == pytest.approx(0.76) and clamp["note"]
+    assert hcm.base_capacity("single_lane", None, 4.2)["c0_pcu_h"] == pytest.approx(800 * 1.43)
+
+
+def test_ch2_speed_equations():
+    assert hcm.base_capacity("single_lane", 50, 3.75)["c0_pcu_h"] == pytest.approx(187 + 12.4 * 50)
+    assert hcm.base_capacity("intermediate_lane", 75, 5.5)["c0_pcu_h"] == pytest.approx(830 + 16.4 * 75)
+
+
+def test_ch2_los_tables():
+    assert hcm.los_from_vc(0.15, "single") == "A"          # Table 2.10: A is <= 0.15
+    assert hcm.los_from_vc(0.31, "single") == "C"
+    assert hcm.los_from_vc(0.81, "single") == "E"
+    assert hcm.los_from_vc(0.25, "intermediate") == "B"    # Table 2.9: A is < 0.25
+    assert hcm.los_from_vc(0.60, "intermediate") == "C"
+    assert hcm.los_from_vc(1.01, "intermediate") == "F"
+
+
+def test_ch2_pcu_table_2_4():
+    assert hcm.pcu_values("single_lane")["two_wheeler"] == 0.25
+    assert hcm.pcu_values("intermediate_lane")["two_wheeler"] == 0.30
+    assert hcm.flow_pcu({"bus": 10}, "intermediate_lane")["table"] == "2.4"
+
+
+def test_ch2_roughness_uses_eq_2_19_2_20():
+    f = ext.roughness_factor(7.0, 50, "single_lane")["F_R"]
+    assert f == pytest.approx((945 - 25 * 7) / (945 - 25 * 3))
+    f = ext.roughness_factor(5.0, 75, "intermediate_lane")["F_R"]
+    assert f == pytest.approx((2956 - 199 * 5) / (2956 - 199 * 3))
+
+
+def test_ch2_full_pipeline_and_los_table_ref():
+    inp = core.resolve_road_inputs({"road_type": "single_lane", "total_width_m": 3.75,
+                                    "observed_volume_pcu_h": 300, "bus_stop": "kerbside_low"})
+    assert inp["v_ref"] == 50 and inp["lanes"] == 1
+    cap = core.compute_capacity(inp, [], False)
+    assert cap["c_hcm"] == pytest.approx(640)
+    assert cap["los"]["table"] == "2.10" and cap["los"]["los_hcm"] == "C"   # 300/640 = 0.47
+    assert any("Chapter 2 has no side-friction" in n for n in cap["notes"])
+
+
+def test_ch2_field_method_a_and_se_rejected():
+    vs = [{"type": "car", "t_in": 10.0 * i, "t_out": 10.0 * i + 4.32} for i in range(120)]
+    fv.add_speeds_and_headways(vs, 60)
+    a = fv.capacity_from_operating_speed(vs, "single_lane")
+    assert a["capacity_pcu_h"] == pytest.approx(187 + 12.4 * a["operating_speed_kmh"])
+    with pytest.raises(ValueError):
+        fv.five_minute_periods(vs, "single_lane", 60, "se")

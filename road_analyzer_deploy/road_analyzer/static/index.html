@@ -112,7 +112,7 @@
             <div class="field">
               <label for="total_width_m">Paved carriageway width, kerb to kerb (m)</label>
               <input type="number" id="total_width_m" name="total_width_m"
-                     step="0.1" min="2" max="25" value="7.0" required>
+                     step="0.01" min="2" max="25" value="7.0" required>
               <div class="field-hint" id="width-hint">Divided road: one direction only</div>
             </div>
             <div class="field">
@@ -146,13 +146,13 @@
               <label for="operating_speed_kmh">Operating speed at a base section (km/h)</label>
               <input type="number" id="operating_speed_kmh" name="operating_speed_kmh"
                      step="0.1" min="10" max="100" placeholder="85th %ile free car speed">
-              <div class="field-hint" id="speed-hint">≥ 100 cars with headway > 8 s, on a friction-free stretch of this road. Divided roads only (Eq. 5.4, 40–80 km/h)</div>
+              <div class="field-hint" id="speed-hint">≥ 100 cars with headway > 8 s, on a friction-free stretch of this road (Eq. 5.4 divided roads, Eq. 2.11/2.12 single and intermediate lane)</div>
             </div>
             <div class="field">
               <label for="observed_volume_pcu_h">Observed volume (PCU/h)</label>
               <input type="number" id="observed_volume_pcu_h" name="observed_volume_pcu_h"
                      step="1" min="1" placeholder="Peak 5-min count × 12, Table 5.3 PCUs">
-              <div class="field-hint">Same direction basis as the road type. Gives V/C and LOS (Tables 5.6 / 5.7)</div>
+              <div class="field-hint">Same direction basis as the road type. Gives V/C and LOS (Tables 5.6 / 5.7; single and intermediate lane: Tables 2.10 / 2.9)</div>
             </div>
           </div>
 
@@ -255,7 +255,7 @@
   </div>
 
   <footer>
-    Indo-HCM capacity: C<sub>HCM</sub> = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), with C0 from Table 5.4 or Eq. 5.4.
+    Indo-HCM capacity: C<sub>HCM</sub> = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), with C0 from Table 5.4 or Eq. 5.4 (single and intermediate lane: Indo-HCM Chapter 2, Section 2.10.1 or Eq. 2.11/2.12, times the Table 2.6 width factor).
     Project extensions multiply it by F<sub>W</sub> (lost width) and F<sub>R</sub> (roughness) for obstructions Indo-HCM does not cover; these need field validation.
     Pothole size follows IRC:82-2015 by width only. A pilot tool, not a substitute for a traffic survey.
   </footer>

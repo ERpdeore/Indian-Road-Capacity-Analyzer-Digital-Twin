@@ -70,6 +70,33 @@ Or, divided roads only, from the measured operating speed V at a **base section*
 
 Verified against manual Examples 5.5.1–5.5.4 in `tests/test_indo_hcm.py`.
 
+## 3A. Single-lane and intermediate-lane roads (Indo-HCM Chapter 2)
+
+Chapter 5 has no single-lane or intermediate-lane class. Indo-HCM covers them only in
+**Chapter 2 (interurban roads)**, so the dashboard takes them from there. Indo-HCM has
+no 4-lane or 6-lane **undivided** class in any chapter, so those are not offered.
+
+| Item | Single lane | Intermediate lane | Source |
+|---|---|---|---|
+| Carriageway | 3.75 m, two-way | 5.5–6.0 m, two-way | 2.3.2, 2.3.3 |
+| Base capacity C (both directions) | 800 PCU/h at 50 km/h | 2150 PCU/h at 75 km/h | 2.10.1 |
+| From operating speed V | C = 187 + 12.4 V | C = 830 + 16.4 V | Eq. 2.12 / 2.11 |
+| Width factor f_w | 3.50 m 0.76 · 3.75 1.00 · 4.00 1.24 · 4.20 1.43 | 5.5 m 1.00 · 5.6 1.03 · 5.8 1.09 · 6.0 1.15 | Table 2.6 |
+| Roughness | C = 945 − 25 IRI | C = 2956 − 199 IRI | Eq. 2.20 / 2.19 |
+| PCU | Table 2.4 single-lane medians | Table 2.4 two-lane/intermediate medians | Table 2.4 |
+| LOS (V/C) | A ≤ 0.15, B ≤ 0.30, C ≤ 0.50, D ≤ 0.80, E ≤ 1.00 | A < 0.25, B ≤ 0.45, C ≤ 0.60, D ≤ 0.75, E ≤ 1.00 | Tables 2.10 / 2.9 |
+
+C0 = base capacity × f_w (linear interpolation between printed widths; end value outside
+the range). Roughness is used in relative form, F_R = C(IRI) / C(3), above IRI 3.
+
+**Assumptions to state** (shown on every result for these roads):
+1. Chapter 2 values come from interurban (rural) roads and are applied to an urban street.
+2. Chapter 2 has no side-friction factors; Chapter 5's F_OP, F_BS, F_AC are applied.
+3. Service volume: Chapter 2 gives no hourly DSV for these roads; the LOS-C upper V/C of
+   the chapter's own table is used (0.50 single, 0.60 intermediate).
+4. PCU: "car" = standard car 1.00; mini bus has no Table 2.4 value, Table 5.2's 1.80 is used.
+5. Se (Eq. 5.2/5.3) is not used for these roads.
+
 ## 4. Project extensions (`extensions.py`) — not Indo-HCM
 
 Indo-HCM has **no factor** for vendors, carts, garbage, barricades or potholes.
@@ -147,5 +174,6 @@ Checked against the manual's own tables and arithmetic.
 | 5.4.7.1 | parking: "Table 5.8" long-term, "Table 5.9" short-term | Tables 5.9 (length) and 5.10 (manoeuvres) |
 | Table citations in 5.4.4.2 and Examples 5.5.1–5.5.4 | DSV "in Tables 5.6/5.7"; capacity "Table 5.3"; LOS "Table 7"/"5.6"; PCU "Tables 5.1/5.2"; "vide Table 5.11" | DSV and capacity: Table 5.4; divided LOS: Table 5.7; PCU: Table 5.3 (existing) or 5.2 (planning) |
 | Shares in Eq. 5.2/5.3 (p. 5-7) | "Percentage composition" | must be fractions (Example 5.5.1 uses 0.360); percentages give Se ≈ −29 |
+| Eq. 2.11 (p. 2-16) | "base capacity of intermediate lane road at 75 km/h is around 2150" | 830 + 16.4 × 75 = 2060; the code uses the stated 2150 as the base value and Eq. 2.11 only for a measured speed |
 | Trap length | 5.3: 50–75 m | Annex 5C: 60–75 m (manual is inconsistent) |
 | Free-flow definition | 5.2.2 "time gap > 8 s"; 5E.5 "headway ≥ 8 s" | code uses headway > 8 s to the vehicle ahead |

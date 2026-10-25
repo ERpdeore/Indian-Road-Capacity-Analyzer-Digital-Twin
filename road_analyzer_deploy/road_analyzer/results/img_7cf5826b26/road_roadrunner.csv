@@ -1,0 +1,4 @@
+defect_type,left_m,right_m,width_m,conf
+street_vendor,0.0,0.562,0.562,0.9
+pothole,1.607,1.821,0.214,0.8
+illegal_parking,3.107,3.75,0.643,0.9

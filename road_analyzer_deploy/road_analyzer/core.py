@@ -249,7 +249,7 @@ def resolve_road_inputs(road_config: dict) -> dict:
         notes.append(w)
 
     measured = _opt(road_config.get("operating_speed_kmh"))
-    base = hcm.base_capacity(road_type, measured)
+    base = hcm.base_capacity(road_type, measured, width)
     notes += base["notes"]
 
     # Speed used by the twin and the roughness factor: the measured
@@ -258,6 +258,9 @@ def resolve_road_inputs(road_config: dict) -> dict:
     # (clamped to the 40-80 km/h validity range).
     if measured:
         v_ref, v_src = measured, "measured operating speed (base section)"
+    elif rt["chapter"] == 2:
+        v_ref = rt["base_operating_speed_kmh"]
+        v_src = "speed at which Indo-HCM Section 2.10.1 states the base capacity (not measured)"
     else:
         lo, hi = hcm.SPEED_MODEL_RANGE_KMH
         v_ref = min(max(hcm.operating_speed_from_lane_capacity(rt["lane_capacity_pcu_h"]), lo), hi)
@@ -292,7 +295,11 @@ def compute_capacity(inputs: dict, width_intervals: List[Tuple[float, float]],
 
     fw = ext.width_factor(width_intervals, inputs["total_width_m"], c0, inputs["divided"],
                           inputs["width_method"])
-    fr = ext.roughness_factor(inputs["iri"], inputs["v_ref"])
+    fr = ext.roughness_factor(inputs["iri"], inputs["v_ref"], inputs["road_type"])
+    rt = inputs["road"]
+    if rt["chapter"] == 2 and any(v != 1.0 for v in hcm_cap["factors"].values()):
+        notes.append("Chapter 2 has no side-friction factors; the Chapter 5 urban factors "
+                     "(Tables 5.9-5.12) are applied to this road as a project assumption.")
     for n in (fw.get("note"), fr.get("note")):
         if n:
             notes.append(n)
@@ -305,13 +312,13 @@ def compute_capacity(inputs: dict, width_intervals: List[Tuple[float, float]],
     }
     v = inputs["observed_volume"]
     if v is not None:
-        d = inputs["divided"]
+        d = rt["los_table"]
         out["los"] = {"observed_volume_pcu_h": v,
                       "vc_base": v / c0, "los_base": hcm.los_from_vc(v / c0, d),
                       "vc_hcm": v / c_hcm, "los_hcm": hcm.los_from_vc(v / c_hcm, d),
                       "vc_ext": v / c_ext if c_ext > 0 else None,   # None = fully blocked
                       "los_ext": hcm.los_from_vc(v / c_ext, d) if c_ext > 0 else "F",
-                      "table": "5.7" if d else "5.6"}
+                      "table": rt["los_table_ref"]}
     return out
 
 
@@ -470,6 +477,7 @@ class RoadAnalyzer:
                 "standard": hcm.SOURCE,
                 "road_type": inputs["road_type"], "road_type_label": rt["label"],
                 "direction_basis": rt["basis"], "divided": rt["divided"],
+                "indo_hcm_chapter": rt["chapter"], "dsv_vc_ratio": rt["dsv_vc_ratio"],
                 "base_capacity_method": inputs["base"]["method"],
                 "base_capacity_detail": inputs["base"]["detail"],
                 "operating_speed_kmh": round(inputs["v_ref"], 1),
@@ -499,8 +507,8 @@ class RoadAnalyzer:
             "capacity_loss_pcu_h": round(c0 - c_ext, 1),
             "capacity_loss_pct": round((c0 - c_ext) / c0 * 100, 1),
             "indo_hcm_loss_pct": round((c0 - c_hcm) / c0 * 100, 1),
-            "dsv_los_c_ideal_pcu_h": round(c0 * hcm.DSV_VC_RATIO, 0),
-            "dsv_los_c_reduced_pcu_h": round(c_ext * hcm.DSV_VC_RATIO, 0),
+            "dsv_los_c_ideal_pcu_h": round(c0 * rt["dsv_vc_ratio"], 0),
+            "dsv_los_c_reduced_pcu_h": round(c_ext * rt["dsv_vc_ratio"], 0),
             "indicative_vehicles": {
                 "avg_pcu_per_vehicle": round(avg_pcu, 3),
                 "base_capacity_veh_h": round(c0 / avg_pcu, 0),

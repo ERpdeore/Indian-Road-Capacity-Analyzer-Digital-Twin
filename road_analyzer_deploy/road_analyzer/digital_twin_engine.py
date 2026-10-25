@@ -106,8 +106,10 @@ def generate_twin_data(result: dict) -> dict:
     if los.get("observed_volume_pcu_h"):
         demand, demand_src = float(los["observed_volume_pcu_h"]), "observed volume entered by user"
     else:
-        demand = c0 * hcm.DSV_VC_RATIO
-        demand_src = "ASSUMED: design service volume of the ideal road (0.70 x C0, Table 5.4)"
+        ratio = float(basis.get("dsv_vc_ratio") or hcm.DSV_VC_RATIO)
+        demand = c0 * ratio
+        demand_src = (f"ASSUMED: service volume of the ideal road ({ratio:.2f} x C0, "
+                      f"{'Table 5.4' if ratio == hcm.DSV_VC_RATIO else 'LOS-C upper V/C, Indo-HCM Ch. 2'})")
 
     warnings = []
     arrival = demand
@@ -115,7 +117,7 @@ def generate_twin_data(result: dict) -> dict:
         arrival = c0
         warnings.append(f"Entered volume {demand:.0f} PCU/h exceeds the Indo-HCM base capacity "
                         f"{c0:.0f} PCU/h. Either the count is on a different direction basis, or the "
-                        f"site carries more than Table 5.4 assumes (measure the operating speed). "
+                        f"site carries more than the Indo-HCM base value assumes (measure the operating speed). "
                         f"The twin caps arriving flow at C0.")
     if c <= 0:
         warnings.append("Usable width is zero: the section is fully blocked in this model.")

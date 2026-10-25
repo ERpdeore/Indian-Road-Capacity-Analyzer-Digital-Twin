@@ -1,0 +1,239 @@
+{
+  "image": "road.jpg",
+  "image_size_px": {
+    "width": 1400,
+    "height": 800
+  },
+  "road_config": {
+    "total_width_m": 5.8,
+    "road_type": "intermediate_lane",
+    "iri_m_per_km": null,
+    "width_method": "proportional",
+    "operating_speed_kmh": null,
+    "observed_volume_pcu_h": 300.0,
+    "on_street_parking": "none",
+    "bus_stop": "none",
+    "access_points": "none",
+    "chainage_m": 0.0,
+    "analysis_date": "2026-10-25",
+    "data_collection_date": "2026-10-25",
+    "num_lanes": 2
+  },
+  "capacity_basis": {
+    "standard": "Indo-HCM 2017 (CSIR-CRRI), Chapter 5 Urban Roads",
+    "road_type": "intermediate_lane",
+    "road_type_label": "Intermediate-lane (Ch. 2)",
+    "direction_basis": "both directions",
+    "divided": false,
+    "indo_hcm_chapter": 2,
+    "dsv_vc_ratio": 0.6,
+    "base_capacity_method": "Section 2.10.1",
+    "base_capacity_detail": "Section 2.10.1 (2150 PCU/h at 75 km/h) x f_w 1.09 (Table 2.6, 5.8 m)",
+    "operating_speed_kmh": 75.0,
+    "operating_speed_source": "speed at which Indo-HCM Section 2.10.1 states the base capacity (not measured)",
+    "width_method": "proportional",
+    "warnings": [
+      "Indo-HCM gives this road type only in Chapter 2 (interurban roads). Its values are applied to an urban street as a project assumption.",
+      "Parking was detected but its intensity was not surveyed; the mildest Indo-HCM class (Table 5.9, < 25% of length, 0.70) is assumed. Measure it on site.",
+      "Chapter 2 has no side-friction factors; the Chapter 5 urban factors (Tables 5.9-5.12) are applied to this road as a project assumption."
+    ]
+  },
+  "capacity_calculation": {
+    "base_capacity_pcu_h": 2343.5,
+    "indo_hcm_factors": {
+      "F_OP": 0.7,
+      "F_BS": 1.0,
+      "F_AC": 1.0
+    },
+    "extension_factors": {
+      "F_W": 0.679,
+      "F_R": 1.0
+    },
+    "factors": {
+      "F_OP": 0.7,
+      "F_BS": 1.0,
+      "F_AC": 1.0,
+      "F_W": 0.679,
+      "F_R": 1.0
+    },
+    "parking_class_used": "len_lt25",
+    "roughness": {
+      "F_R": 1.0,
+      "speed_ratio": 1.0,
+      "applied": false
+    },
+    "worst_pothole_size": "medium",
+    "total_width_m": 5.8,
+    "obstruction_width_m": 1.2,
+    "blocked_incl_shy_m": 1.7,
+    "effective_width_m": 3.6,
+    "formula_indo_hcm": "C_HCM = 2344 x F_OP 0.700 x F_BS 1.000 x F_AC 1.000 = 1640 PCU/h (Eq. 5.5)",
+    "formula": "C = 1640 x F_W 0.679 x F_R 1.000 = 1114 PCU/h (with extensions)"
+  },
+  "base_capacity_pcu_h": 2343.5,
+  "indo_hcm_capacity_pcu_h": 1640.4,
+  "reduced_capacity_pcu_h": 1113.8,
+  "capacity_loss_pcu_h": 1229.7,
+  "capacity_loss_pct": 52.5,
+  "indo_hcm_loss_pct": 30.0,
+  "dsv_los_c_ideal_pcu_h": 1406.0,
+  "dsv_los_c_reduced_pcu_h": 668.0,
+  "indicative_vehicles": {
+    "avg_pcu_per_vehicle": 0.894,
+    "base_capacity_veh_h": 2621.0,
+    "reduced_capacity_veh_h": 1246.0,
+    "note": "ASSUMED traffic mix (extensions.ASSUMED_COMPOSITION) with Indo-HCM Table 5.3 PCUs. Replace with a classified count."
+  },
+  "level_of_service": {
+    "observed_volume_pcu_h": 300.0,
+    "vc_base": 0.128,
+    "los_base": "A",
+    "vc_hcm": 0.183,
+    "los_hcm": "A",
+    "vc_ext": 0.269,
+    "los_ext": "B",
+    "table": "2.9"
+  },
+  "operating_speed_kmh": 75.0,
+  "overall_guidance": {
+    "band": "Severe",
+    "action": "Over half the capacity lost. Escalate to traffic/municipal authority.",
+    "basis": "project reporting thresholds"
+  },
+  "effective_width_m": 3.6,
+  "vehicle_veto_suppressed": 0,
+  "per_defect": {
+    "street_vendor": {
+      "count": 1,
+      "blocked_m": 0.87,
+      "factor": 0.836,
+      "mechanism": "F_W usable width (project extension)",
+      "factor_basis": "extension",
+      "capacity_loss_pcu": 384.7,
+      "capacity_loss_pct": 16.4,
+      "severity": "URGENT",
+      "severity_basis": "capacity-loss project thresholds (5% / 15%)",
+      "code_ref": "Street Vendors (Protection of Livelihood and Regulation of Street Vending) Act, 2014",
+      "action": "Relocation drive coordinated with the Town Vending Committee.",
+      "detections": [
+        {
+          "conf": 0.9,
+          "width_m": 0.87,
+          "left_m": 0.0,
+          "right_m": 0.87,
+          "bbox_px": [
+            0.0,
+            330.0,
+            210.0,
+            700.0
+          ]
+        }
+      ]
+    },
+    "pothole": {
+      "count": 1,
+      "blocked_m": 0.83,
+      "factor": 0.843,
+      "mechanism": "F_W usable width (project extension)",
+      "factor_basis": "extension",
+      "capacity_loss_pcu": 367.6,
+      "capacity_loss_pct": 15.7,
+      "severity": "URGENT",
+      "severity_basis": "IRC:82 size class (medium, width-only proxy)",
+      "code_ref": "IRC:82-2015 cl. 7.5.3 (potholes), cl. 5.3 (prompt rectification)",
+      "action": "Cut to regular shape, clean, tack coat and fill with premix per IRC:82 cl. 7.5.3.5. Distress affecting riding quality should be rectified straightaway (cl. 5.3).",
+      "detections": [
+        {
+          "conf": 0.8,
+          "width_m": 0.33,
+          "left_m": 2.49,
+          "right_m": 2.82,
+          "bbox_px": [
+            600.0,
+            640.0,
+            680.0,
+            690.0
+          ],
+          "size_class": "medium"
+        }
+      ],
+      "size_summary": {
+        "worst_size_class": "medium",
+        "counts": {
+          "small": 0,
+          "medium": 1,
+          "large": 0
+        },
+        "classification": "IRC:82-2015 cl. 7.5.3.4 width thresholds (depth not measured); used for repair priority only"
+      }
+    },
+    "illegal_parking": {
+      "count": 1,
+      "blocked_m": 0.99,
+      "factor": 0.7,
+      "mechanism": "F_OP Indo-HCM Table 5.9 Low",
+      "factor_basis": "Indo-HCM",
+      "capacity_loss_pcu": 703.1,
+      "capacity_loss_pct": 30.0,
+      "severity": "URGENT",
+      "severity_basis": "capacity-loss project thresholds (5% / 15%)",
+      "code_ref": "Motor Vehicles Act 1988 s.122; IRC:67 (signs), IRC:35 (markings)",
+      "action": "Towing enforcement under MV Act s.122; consider bollards on the stretch.",
+      "detections": [
+        {
+          "conf": 0.9,
+          "width_m": 0.99,
+          "left_m": 4.81,
+          "right_m": 5.8,
+          "bbox_px": [
+            1160.0,
+            380.0,
+            1400.0,
+            720.0
+          ]
+        }
+      ]
+    }
+  },
+  "roadrunner_obstacles": [
+    {
+      "defect_type": "street_vendor",
+      "left_m": 0.0,
+      "right_m": 0.87,
+      "width_m": 0.87,
+      "conf": 0.9,
+      "bbox_px": [
+        0.0,
+        330.0,
+        210.0,
+        700.0
+      ]
+    },
+    {
+      "defect_type": "pothole",
+      "left_m": 2.486,
+      "right_m": 2.817,
+      "width_m": 0.331,
+      "conf": 0.8,
+      "bbox_px": [
+        600.0,
+        640.0,
+        680.0,
+        690.0
+      ]
+    },
+    {
+      "defect_type": "illegal_parking",
+      "left_m": 4.806,
+      "right_m": 5.8,
+      "width_m": 0.994,
+      "conf": 0.9,
+      "bbox_px": [
+        1160.0,
+        380.0,
+        1400.0,
+        720.0
+      ]
+    }
+  ]
+}

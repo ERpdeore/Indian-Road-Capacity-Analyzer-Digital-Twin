@@ -124,9 +124,32 @@ def width_factor(intervals: List[Tuple[float, float]], width_m: float, c_base: f
 BASE_IRI_LIMIT = 3.0
 
 
-def roughness_factor(iri_m_per_km: Optional[float], operating_speed_kmh: float) -> dict:
+# Chapter 2 roads have their own capacity-roughness equations, used in the
+# same relative form (CHOICE: referenced to IRI 3, as above):
+#   single lane       C = 945 - 25 IRI    (Eq. 2.20)
+#   intermediate lane C = 2956 - 199 IRI  (Eq. 2.19), speed V = 91 - 6.7 IRI (Eq. 2.16)
+CH2_ROUGHNESS = {
+    "single_lane":       {"cap": (945.0, 25.0), "eq": "Eq. 2.20", "speed": None},
+    "intermediate_lane": {"cap": (2956.0, 199.0), "eq": "Eq. 2.19", "speed": (91.0, 6.7)},
+}
+
+
+def roughness_factor(iri_m_per_km: Optional[float], operating_speed_kmh: float,
+                     road_type: Optional[str] = None) -> dict:
     if not iri_m_per_km or iri_m_per_km <= BASE_IRI_LIMIT:
         return {"F_R": 1.0, "speed_ratio": 1.0, "applied": False}
+    if road_type in CH2_ROUGHNESS:
+        m = CH2_ROUGHNESS[road_type]
+        a, b = m["cap"]
+        f = max(a - b * iri_m_per_km, 0.0) / (a - b * BASE_IRI_LIMIT)
+        if m["speed"]:
+            sa, sb = m["speed"]
+            r = max(sa - sb * iri_m_per_km, 0.1 * sa) / (sa - sb * BASE_IRI_LIMIT)
+        else:
+            r = f   # CHOICE: no single-lane speed-roughness equation; speed scaled like capacity
+        return {"F_R": f, "speed_ratio": r, "applied": True,
+                "reduced_speed_kmh": operating_speed_kmh * r,
+                "source": f"Indo-HCM {m['eq']} relative to IRI {BASE_IRI_LIMIT:g}", "note": None}
     r = (104 - 6.8 * iri_m_per_km) / (104 - 6.8 * BASE_IRI_LIMIT)
     r = max(r, 0.1)
     v0 = operating_speed_kmh

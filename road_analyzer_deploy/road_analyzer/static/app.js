@@ -218,13 +218,21 @@
   // ----------------------------------------------------------------
   const FALLBACK_CONFIG = {   // must match road_analyzer/indo_hcm.py
     road_types: [   // Indo-HCM Table 5.4
-      { key: "undivided_2lane", label: "Two-lane undivided", lanes: 2, divided: false, basis: "both directions", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2400, dsv_pcu_h: 1680 },
-      { key: "divided_4lane", label: "Four-lane divided", lanes: 2, divided: true, basis: "one direction", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2700, dsv_pcu_h: 1890 },
-      { key: "divided_6lane", label: "Six-lane divided", lanes: 3, divided: true, basis: "one direction", paved_width_m: 10.5, ref_width_m: 11.0, capacity_pcu_h: 4200, dsv_pcu_h: 2940 },
-      { key: "divided_8lane", label: "Eight-lane divided", lanes: 4, divided: true, basis: "one direction", paved_width_m: 14.0, ref_width_m: 14.5, capacity_pcu_h: 6800, dsv_pcu_h: 4760,
+      { key: "undivided_2lane", label: "Two-lane undivided", lanes: 2, divided: false, basis: "both directions", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2400, dsv_pcu_h: 1680, chapter: 5, capacity_source: "Table 5.4", dsv_vc_ratio: 0.70, los_table_ref: "5.6" },
+      { key: "divided_4lane", label: "Four-lane divided", lanes: 2, divided: true, basis: "one direction", paved_width_m: 7.0, ref_width_m: 7.5, capacity_pcu_h: 2700, dsv_pcu_h: 1890, chapter: 5, capacity_source: "Table 5.4", dsv_vc_ratio: 0.70, los_table_ref: "5.7" },
+      { key: "divided_6lane", label: "Six-lane divided", lanes: 3, divided: true, basis: "one direction", paved_width_m: 10.5, ref_width_m: 11.0, capacity_pcu_h: 4200, dsv_pcu_h: 2940, chapter: 5, capacity_source: "Table 5.4", dsv_vc_ratio: 0.70, los_table_ref: "5.7" },
+      { key: "divided_8lane", label: "Eight-lane divided", lanes: 4, divided: true, basis: "one direction", paved_width_m: 14.0, ref_width_m: 14.5, capacity_pcu_h: 6800, dsv_pcu_h: 4760, chapter: 5, capacity_source: "Table 5.4", dsv_vc_ratio: 0.70, los_table_ref: "5.7",
         condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
-      { key: "divided_10lane", label: "Ten-lane divided", lanes: 5, divided: true, basis: "one direction", paved_width_m: 17.5, ref_width_m: 18.0, capacity_pcu_h: 10000, dsv_pcu_h: 7000,
+      { key: "divided_10lane", label: "Ten-lane divided", lanes: 5, divided: true, basis: "one direction", paved_width_m: 17.5, ref_width_m: 18.0, capacity_pcu_h: 10000, dsv_pcu_h: 7000, chapter: 5, capacity_source: "Table 5.4", dsv_vc_ratio: 0.70, los_table_ref: "5.7",
         condition: "Valid only where signal spacing is 1-3 km (Section 5.4.4.2)." },
+      { key: "single_lane", label: "Single-lane (Ch. 2)", lanes: 1, divided: false, basis: "both directions", paved_width_m: 3.75, ref_width_m: 3.75, capacity_pcu_h: 800, dsv_pcu_h: 400,
+        chapter: 2, capacity_source: "Section 2.10.1 (800 PCU/h at 50 km/h)", dsv_vc_ratio: 0.50, los_table_ref: "2.10", paved_width_range_m: [3.5, 4.2],
+        speed_eq: { a: 12.4, b: 187, eq: "Eq. 2.12" }, width_factor_table: [[3.5, 0.76], [3.75, 1.0], [4.0, 1.24], [4.2, 1.43]],
+        condition: "Indo-HCM gives this road type only in Chapter 2 (interurban roads). Its values are applied to an urban street as a project assumption." },
+      { key: "intermediate_lane", label: "Intermediate-lane (Ch. 2)", lanes: 2, divided: false, basis: "both directions", paved_width_m: 5.5, ref_width_m: 5.5, capacity_pcu_h: 2150, dsv_pcu_h: 1290,
+        chapter: 2, capacity_source: "Section 2.10.1 (2150 PCU/h at 75 km/h)", dsv_vc_ratio: 0.60, los_table_ref: "2.9", paved_width_range_m: [5.5, 6.0],
+        speed_eq: { a: 16.4, b: 830, eq: "Eq. 2.11" }, width_factor_table: [[5.5, 1.0], [5.6, 1.03], [5.8, 1.09], [6.0, 1.15]],
+        condition: "Indo-HCM gives this road type only in Chapter 2 (interurban roads). Its values are applied to an urban street as a project assumption." },
     ],
     speed_model: { a: 20.11, b: 210.8, range_kmh: [40, 80] },
     on_street_parking: [
@@ -293,25 +301,53 @@
     }
   }
 
+  // Table 2.6 width factor, as indo_hcm.carriageway_width_factor()
+  function ch2WidthFactor(rows, w) {
+    if (!(w > 0)) w = rows[0][0];
+    if (w <= rows[0][0]) return rows[0][1];
+    if (w >= rows[rows.length - 1][0]) return rows[rows.length - 1][1];
+    for (let i = 1; i < rows.length; i++) {
+      const [w0, f0] = rows[i - 1], [w1, f1] = rows[i];
+      if (w <= w1) return f0 + (f1 - f0) * (w - w0) / (w1 - w0);
+    }
+    return 1;
+  }
+
   // Mirrors indo_hcm.base_capacity() so the user sees C0 before uploading.
+  let lastRoadType = null;
   function updateDsvPreview() {
     if (!configData || !roadTypeSel) return;
     const rt = (configData.road_types || []).find((o) => o.key === roadTypeSel.value);
     if (!rt) { dsvPreview.style.display = "none"; return; }
     const sm = configData.speed_model || { a: 20.11, b: 210.8, range_kmh: [40, 80] };
+    const ch2 = rt.chapter === 2;
 
-    // Eq. 5.4 exists only for divided roads
+    // New road type: start from its standard width
+    if (lastRoadType !== null && lastRoadType !== rt.key && widthInput) widthInput.value = rt.paved_width_m;
+    lastRoadType = rt.key;
+
+    // Speed equation: Eq. 5.4 (divided roads) or Eq. 2.12 / 2.11 (Chapter 2 roads)
+    const speedOk = rt.divided || ch2;
     if (speedInput) {
-      speedInput.disabled = !rt.divided;
-      if (!rt.divided) speedInput.value = "";
+      speedInput.disabled = !speedOk;
+      if (!speedOk) speedInput.value = "";
       const sh = document.getElementById("speed-hint");
-      if (sh) sh.textContent = rt.divided
-        ? "≥ 100 cars with headway > 8 s, on a friction-free stretch of this road (Eq. 5.4, valid 40–80 km/h)"
-        : "Not used: Indo-HCM Eq. 5.4 applies to divided roads only. Two-lane undivided uses Table 5.4 (2400 PCU/h).";
+      if (sh) sh.textContent = ch2
+        ? `≥ 100 cars with headway ≥ 8 s on a base stretch (Indo-HCM ${rt.speed_eq.eq}: C = ${rt.speed_eq.b} + ${rt.speed_eq.a} × speed)`
+        : rt.divided
+          ? "≥ 100 cars with headway > 8 s, on a friction-free stretch of this road (Eq. 5.4, valid 40–80 km/h)"
+          : "Not used: Indo-HCM Eq. 5.4 applies to divided roads only. Two-lane undivided uses Table 5.4 (2400 PCU/h).";
     }
     const v = parseFloat(speedInput && speedInput.value);
-    let c0 = rt.capacity_pcu_h, how = "Indo-HCM Table 5.4";
-    if (rt.divided && v > 0) {
+    const w = parseFloat(widthInput && widthInput.value);
+    let c0 = rt.capacity_pcu_h, how = `Indo-HCM ${rt.capacity_source || "Table 5.4"}`;
+    if (ch2) {
+      const fw = ch2WidthFactor(rt.width_factor_table, w);
+      let cs = rt.capacity_pcu_h;
+      if (v > 0) { cs = rt.speed_eq.b + rt.speed_eq.a * v; how = `Indo-HCM ${rt.speed_eq.eq}: ${rt.speed_eq.b} + ${rt.speed_eq.a} × ${v} = ${Math.round(cs)}`; }
+      c0 = cs * fw;
+      how += ` × width factor ${fw.toFixed(2)} (Table 2.6)`;
+    } else if (rt.divided && v > 0) {
       const lane = sm.a * v + sm.b;
       c0 = Math.round(lane * rt.lanes);
       how = `Indo-HCM Eq. 5.4: ${sm.a} × ${v} + ${sm.b} = ${Math.round(lane)} PCU/h/lane × ${rt.lanes}`;
@@ -319,17 +355,24 @@
     }
     dsvValueEl.textContent = Math.round(c0).toLocaleString("en-IN");
     document.getElementById("dsv-unit").textContent = `PCU/h, ${rt.basis}`;
-    const dsv = Math.round(c0 * (configData.dsv_vc_ratio || 0.7));
-    document.getElementById("dsv-note").textContent =
-      `${how} · Design Service Volume (LOS-C, 0.70 C) ${dsv.toLocaleString("en-IN")} PCU/h`;
+    const ratio = rt.dsv_vc_ratio || configData.dsv_vc_ratio || 0.7;
+    const dsv = Math.round(c0 * ratio);
+    document.getElementById("dsv-note").textContent = ch2
+      ? `${how} · LOS-C service volume (${ratio.toFixed(2)} C, Table ${rt.los_table_ref}) ${dsv.toLocaleString("en-IN")} PCU/h`
+      : `${how} · Design Service Volume (LOS-C, 0.70 C) ${dsv.toLocaleString("en-IN")} PCU/h`;
     if (roadTypeHint) {
-      roadTypeHint.textContent = `${rt.lanes} lanes, ${rt.basis}; Indo-HCM paved width ${rt.paved_width_m} m ± 0.5 m (Table 5B.1)` +
-        (rt.condition ? ` · ${rt.condition}` : "");
+      roadTypeHint.textContent = ch2
+        ? `Two-way traffic on ${rt.paved_width_m} m; Indo-HCM Table 2.6 covers ${rt.paved_width_range_m[0]}–${rt.paved_width_range_m[1]} m · ${rt.condition}`
+        : `${rt.lanes} lanes, ${rt.basis}; Indo-HCM paved width ${rt.paved_width_m} m ± 0.5 m (Table 5B.1)` +
+          (rt.condition ? ` · ${rt.condition}` : "");
     }
-    const w = parseFloat(widthInput && widthInput.value);
     if (widthHint && w > 0) {
       let ok, msg;
-      if (rt.divided) {
+      if (ch2) {
+        const [lo, hi] = rt.paved_width_range_m;
+        ok = w >= lo && w <= hi;
+        msg = ok ? `within Table 2.6 (${lo}–${hi} m)` : `outside ${lo}–${hi} m of Table 2.6 — check road type`;
+      } else if (rt.divided) {
         ok = Math.abs(w - rt.paved_width_m) <= 0.5;
         msg = ok ? "fits this Indo-HCM road class" : `outside ${rt.paved_width_m - 0.5}–${rt.paved_width_m + 0.5} m — check road type`;
       } else {
@@ -1089,7 +1132,7 @@
       indo_hcm_capacity_pcu_h: hcm, reduced_capacity_pcu_h: red,
       capacity_loss_pcu_h: base - red, capacity_loss_pct: w.capacity_loss_pct,
       indo_hcm_loss_pct: Math.round((base - hcm) / base * 1000) / 10,
-      dsv_los_c_reduced_pcu_h: Math.round(red * 0.7),
+      dsv_los_c_reduced_pcu_h: Math.round(red * ((orig.capacity_basis || {}).dsv_vc_ratio || 0.7)),
       level_of_service: w.level_of_service, overall_guidance: w.overall_guidance,
       effective_width_m: w.width.usable_width_m, indicative_vehicles: iv };
   }
