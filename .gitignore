@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+road_analyzer_deploy/road_analyzer/results/img_*/
+road_analyzer_deploy/road_analyzer/results/batch_*/
+road_analyzer_deploy/road_analyzer/results/video_*/
+road_analyzer_deploy/road_analyzer/results/field_*/

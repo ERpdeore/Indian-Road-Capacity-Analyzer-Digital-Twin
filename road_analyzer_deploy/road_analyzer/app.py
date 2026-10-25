@@ -381,6 +381,12 @@ def config_options():
             {"key": k, "label": v["label"], "lanes": v["lanes"], "divided": v["divided"],
              "basis": v["basis"], "paved_width_m": v["paved_width_m"], "ref_width_m": v["ref_width_m"],
              "capacity_pcu_h": v["capacity_pcu_h"], "dsv_pcu_h": v["dsv_pcu_h"],
+             "chapter": v["chapter"], "capacity_source": v["capacity_source"],
+             "dsv_vc_ratio": v["dsv_vc_ratio"], "los_table": v["los_table"],
+             "los_table_ref": v["los_table_ref"],
+             "paved_width_range_m": v.get("paved_width_range_m"),
+             "speed_eq": v.get("speed_eq"),
+             "width_factor_table": hcm.WIDTH_FACTOR_TABLE_2_6.get(k),
              "condition": v.get("condition", "")}
             for k, v in hcm.ROAD_TYPES.items()
         ],
@@ -965,8 +971,10 @@ def whatif(body: _WhatIf):
         "overall_guidance": get_overall_guidance((c0 - c_ext) / c0 * 100),
         "notes": cap["notes"],
     }
+    result["dsv_vc_ratio"] = inp["road"]["dsv_vc_ratio"]
     twin_input = {**result, "capacity_basis": {"operating_speed_kmh": inp["v_ref"],
-                                               "operating_speed_source": inp["v_ref_source"]},
+                                               "operating_speed_source": inp["v_ref_source"],
+                                               "dsv_vc_ratio": inp["road"]["dsv_vc_ratio"]},
                   "road_config": {"num_lanes": inp["lanes"]},
                   "capacity_calculation": {"roughness": cap["roughness"]}}
     result["digital_twin"] = dt_generate(twin_input)
