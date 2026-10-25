@@ -3,220 +3,263 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Road Capacity Analyzer</title>
-<meta name="description" content="Capacity loss of Indian urban roads from a road photo, by Indo-HCM 2017.">
+<title>Indian Road Capacity Analyzer</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
-<header class="masthead">
-  <a class="wordmark" href="/">
-    <svg class="wordmark-kerb" viewBox="0 0 24 24" aria-hidden="true"><path d="M0 0h6v24H0zM12 0h6v24h-6z"/></svg>
-    Road Capacity Analyzer
-  </a>
-  <p class="masthead-basis">Urban roads, Indo-HCM 2017 Chapter 5</p>
-</header>
-
-<main class="workspace">
-
-  <!-- ===================== INPUTS ===================== -->
-  <form class="panel" id="config-form" novalidate>
-
-    <fieldset class="mode" id="mode-switch">
-      <legend class="sr-only">What are you analysing?</legend>
-      <label><input type="radio" name="mode" value="image" checked><span>One photo</span></label>
-      <label><input type="radio" name="mode" value="batch"><span>Several photos</span></label>
-      <label><input type="radio" name="mode" value="video"><span>Video</span></label>
-    </fieldset>
-
-    <label class="drop" id="drop" for="file-input">
-      <span class="drop-title" id="drop-title">Choose a road photo</span>
-      <span class="drop-hint" id="drop-hint">or drop it here</span>
-      <span class="drop-files" id="drop-filelist"></span>
-    </label>
-    <input type="file" id="file-input" accept="image/*" class="sr-only">
-    <button type="button" id="camera-btn" class="btn-quiet">Take a photo with the camera</button>
-
-    <div class="field" id="video-sample-row" hidden>
-      <label for="sample-every-sec">Analyse one frame every</label>
-      <select id="sample-every-sec">
-        <option value="0.5">0.5 s</option>
-        <option value="1" selected>1 s</option>
-        <option value="2">2 s</option>
-        <option value="5">5 s</option>
-      </select>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">Indian Road Capacity Analyzer</div>
     </div>
-
-    <details class="tips">
-      <summary>How to take the photo</summary>
-      <p>Stand at the road edge or median and look along the road. Frame it so the two kerbs sit at the left and right edges of the photo: the app treats the photo's width as the carriageway width. Widths are estimates; perspective is not corrected.</p>
-    </details>
-
-    <fieldset class="group">
-      <legend>Road</legend>
-      <div class="field">
-        <label for="road_type">Road type</label>
-        <select id="road_type" name="road_type" required></select>
-        <p class="hint" id="road-type-hint"></p>
-      </div>
-      <div class="field">
-        <label for="total_width_m">Carriageway width, kerb to kerb</label>
-        <div class="unit-input"><input type="number" id="total_width_m" name="total_width_m" step="0.1" min="2" max="25" value="7.0" required><span>m</span></div>
-        <p class="hint" id="width-hint">Divided road: one direction only.</p>
-      </div>
-      <div class="field-pair">
-        <div class="field">
-          <label for="data_collection_date">Photo taken on</label>
-          <input type="date" id="data_collection_date" name="data_collection_date" required>
-        </div>
-        <div class="field">
-          <label for="analysis_date">Analysed on</label>
-          <input type="date" id="analysis_date" name="analysis_date" required>
-        </div>
-      </div>
-      <div class="field">
-        <label for="chainage_m">Distance from survey start</label>
-        <div class="unit-input"><input type="number" id="chainage_m" name="chainage_m" step="1" min="0" value="0"><span>m</span></div>
-        <p class="hint">Puts photos in order when you join them into a corridor.</p>
-      </div>
-    </fieldset>
-
-    <fieldset class="group">
-      <legend>Side friction on this segment</legend>
-      <p class="group-note">Indo-HCM factors. Leave as none if absent.</p>
-      <div class="field">
-        <label for="on_street_parking">On-street parking</label>
-        <select id="on_street_parking" name="on_street_parking"></select>
-      </div>
-      <div class="field">
-        <label for="bus_stop">Bus stop</label>
-        <select id="bus_stop" name="bus_stop"></select>
-      </div>
-      <div class="field">
-        <label for="access_points">Side roads and gates</label>
-        <select id="access_points" name="access_points"></select>
-      </div>
-    </fieldset>
-
-    <fieldset class="group">
-      <legend>Measured on site</legend>
-      <p class="group-note">Optional. Each one makes the result specific to this road.</p>
-      <div class="field">
-        <label for="operating_speed_kmh">Free speed of cars, 85th percentile</label>
-        <div class="unit-input"><input type="number" id="operating_speed_kmh" name="operating_speed_kmh" step="0.1" min="10" max="100" placeholder="—"><span>km/h</span></div>
-        <p class="hint" id="speed-hint">At least 100 cars with a gap of more than 8 s, on a clear stretch.</p>
-      </div>
-      <div class="field">
-        <label for="observed_volume_pcu_h">Peak-hour traffic</label>
-        <div class="unit-input"><input type="number" id="observed_volume_pcu_h" name="observed_volume_pcu_h" step="1" min="1" placeholder="—"><span>PCU/h</span></div>
-        <p class="hint">Gives level of service. You can also try values with the slider after the analysis.</p>
-      </div>
-    </fieldset>
-
-    <details class="group group-collapsible">
-      <summary>Project extensions</summary>
-      <p class="group-note">Not part of Indo-HCM. They cover obstructions the manual does not.</p>
-      <div class="field">
-        <label for="width_method">How lost width reduces capacity</label>
-        <select id="width_method" name="width_method"></select>
-      </div>
-      <div class="field">
-        <label for="iri_m_per_km">Road roughness, IRI</label>
-        <div class="unit-input"><input type="number" id="iri_m_per_km" name="iri_m_per_km" step="0.1" min="0" max="20" placeholder="—"><span>m/km</span></div>
-        <p class="hint">Only counts above 3, the Indo-HCM limit for a good surface.</p>
-      </div>
-    </details>
-
-    <button type="submit" class="btn-run" id="run-btn"><span id="run-btn-label">Analyse photo</span></button>
-    <p class="model-status" id="model-status" role="status"></p>
-  </form>
-
-  <!-- ===================== RESULTS ===================== -->
-  <section class="stage" aria-live="polite">
-
-    <div class="status" id="status-panel" hidden><span class="status-bar"></span><span id="status-text">Working</span></div>
-    <div class="error" id="error-box" role="alert" hidden></div>
-
-    <figure class="road" id="road-figure">
-      <div class="photo" id="photo-wrap">
-        <p class="photo-empty" id="photo-empty">Your photo appears here, lined up with the road drawing below. Each obstruction found in it drops onto the drawing at its position across the road.</p>
-        <img id="photo" alt="" hidden>
-        <svg id="photo-boxes" class="photo-boxes" aria-hidden="true"></svg>
-      </div>
-      <svg id="xsection" class="xsection" role="img" aria-labelledby="xsection-title">
-        <title id="xsection-title">Plan of the carriageway</title>
-      </svg>
-      <figcaption id="xsection-caption" class="xsection-caption"></figcaption>
-    </figure>
-
-    <section class="chain-wrap" aria-labelledby="chain-title">
-      <div class="section-head">
-        <h2 id="chain-title">Capacity</h2>
-        <button type="button" class="btn-quiet" id="whatif-reset" hidden>Back to the surveyed road</button>
-      </div>
-      <ol class="chain" id="chain"></ol>
-      <p class="chain-note" id="chain-note"></p>
-    </section>
-
-    <section class="demand" id="demand" hidden aria-labelledby="demand-title">
-      <div class="section-head">
-        <h2 id="demand-title">Traffic on the road</h2>
-        <p class="section-sub">Capacity belongs to the road. Traffic changes through the day. Move the slider to see when the lost capacity starts to hurt.</p>
-      </div>
-      <div class="demand-control">
-        <label for="demand-slider" class="demand-label">Traffic <output id="demand-out">—</output> PCU/h</label>
-        <input type="range" id="demand-slider" min="0" max="3000" step="10">
-        <div class="demand-marks" id="demand-marks"></div>
-      </div>
-      <div class="los" id="los"></div>
-      <div class="twin-figures" id="twin-figures"></div>
-      <div class="charts">
-        <figure class="chart">
-          <svg id="chart-speed" viewBox="0 0 480 260" role="img" aria-labelledby="chart-speed-t"><title id="chart-speed-t">Speed against traffic flow</title></svg>
-          <figcaption>Speed at each traffic flow. The dots are this traffic level; a curve that stops short means that road cannot carry it.</figcaption>
-        </figure>
-        <figure class="chart">
-          <svg id="chart-queue" viewBox="0 0 480 260" role="img" aria-labelledby="chart-queue-t"><title id="chart-queue-t">Queue length over one hour</title></svg>
-          <figcaption>Length of the queue behind the road section over one hour at this traffic level.</figcaption>
-        </figure>
-      </div>
-      <details class="assumptions" id="twin-assumptions"></details>
-    </section>
-
-    <section class="defects" id="defects" hidden aria-labelledby="defects-title">
-      <div class="section-head">
-        <h2 id="defects-title">What was found</h2>
-        <p class="section-sub">Each row's capacity loss is for that obstruction alone. Together they multiply, so they do not add up. Switch one off to see the road without it.</p>
-      </div>
-      <div class="table-scroll"><table class="defect-table" id="defect-table"></table></div>
-    </section>
-
-    <section class="multi" id="multi" hidden></section>
-
-    <section class="downloads" id="downloads" hidden aria-labelledby="downloads-title">
-      <h2 id="downloads-title">Files</h2>
-      <div class="download-row" id="download-row"></div>
-    </section>
-
-    <details class="assumptions" id="warnings" hidden></details>
-  </section>
-</main>
-
-<div class="camera" id="camera-modal" hidden>
-  <div class="camera-inner">
-    <video id="camera-video" autoplay playsinline muted></video>
-    <canvas id="camera-canvas" hidden></canvas>
-    <div class="camera-actions">
-      <button type="button" class="btn-run" id="camera-capture-btn">Use this photo</button>
-      <button type="button" class="btn-quiet" id="camera-cancel-btn">Cancel</button>
-    </div>
+    <div class="topbar-sub">Urban road capacity by Indo-HCM 2017, with obstruction detection and a digital twin</div>
   </div>
-</div>
 
-<footer class="footer">
-  <p>Indo-HCM capacity: C = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), with C0 from Table 5.4 or the speed model Eq. 5.4. Project extensions multiply it by F<sub>W</sub> for lost width and F<sub>R</sub> for roughness; these need field validation. A pilot tool, not a substitute for a traffic survey.</p>
-</footer>
+  <div class="wrap">
 
-<script src="/static/app.js"></script>
+    <!-- ============ INPUT PANEL ============ -->
+    <section class="card input-panel" id="input-panel">
+
+      <div class="mode-switch" id="mode-switch" role="tablist">
+        <button class="mode-btn active" data-mode="image" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9633;</span>
+          <span>Single image</span>
+        </button>
+        <button class="mode-btn" data-mode="batch" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9638;</span>
+          <span>Batch (folder)</span>
+        </button>
+        <button class="mode-btn" data-mode="video" role="tab">
+          <span class="mode-icon" aria-hidden="true">&#9654;</span>
+          <span>Video</span>
+        </button>
+      </div>
+
+      <div class="panel-body">
+
+        <!-- LEFT: drop zone -->
+        <div class="dropzone-col">
+          <label class="drop" id="drop" for="file-input">
+            <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M20 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <div class="drop-title" id="drop-title">Drop a road image here, or click to browse</div>
+            <div class="drop-hint" id="drop-hint">JPG / PNG &middot; camera looking along the road, both edges at the frame borders</div>
+            <div class="drop-filelist" id="drop-filelist"></div>
+          </label>
+          <input type="file" id="file-input" accept="image/*">
+
+          <button type="button" id="camera-btn" class="camera-btn">
+            Take Photo
+          </button>
+
+          <div id="camera-modal" class="camera-modal" style="display:none;">
+            <div class="camera-modal-inner">
+              <video id="camera-video" autoplay playsinline muted></video>
+              <canvas id="camera-canvas" style="display:none;"></canvas>
+              <div class="camera-modal-actions">
+                <button type="button" id="camera-capture-btn">Capture</button>
+                <button type="button" id="camera-cancel-btn">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- video sample rate row (hidden by default) -->
+          <div class="field-row" id="video-sample-row" style="display:none;">
+            <label class="field-label" for="sample-every-sec">Sample every</label>
+            <select id="sample-every-sec" class="field-select">
+              <option value="0.5">0.5 sec</option>
+              <option value="1" selected>1 sec</option>
+              <option value="2">2 sec</option>
+              <option value="5">5 sec</option>
+            </select>
+            <span class="field-hint">Lower = more thorough, slower to process</span>
+          </div>
+
+          <!-- photo tips -->
+          <div class="photo-tips-box">
+            <div class="photo-tips-title">For the best detection</div>
+            <ul class="photo-tips-list">
+              <li>Look <b>along</b> the road, not across it — the app maps image width to carriageway width</li>
+              <li>Frame the shot so the two carriageway edges (kerbs) sit at the left and right borders</li>
+              <li>Hold the camera level, ~1.5 m high, from the road edge or median</li>
+              <li>Obstruction widths are estimates — perspective is not corrected</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- RIGHT: road parameters form -->
+        <form class="config-col" id="config-form">
+          <div class="config-title">Road details</div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="data_collection_date">Date of data collection</label>
+              <input type="date" id="data_collection_date" name="data_collection_date" required>
+              <div class="field-hint" id="collection-date-hint">Date the photo/video was taken — today or earlier</div>
+            </div>
+            <div class="field">
+              <label for="analysis_date">Date of analysis</label>
+              <input type="date" id="analysis_date" name="analysis_date" required>
+              <div class="field-hint">Not in the future, not before the collection date</div>
+            </div>
+            <div class="field field-wide">
+              <label for="road_type">Road type (Indo-HCM Table 5.4)</label>
+              <select id="road_type" name="road_type" required></select>
+              <div class="field-hint" id="road-type-hint"></div>
+            </div>
+            <div class="field">
+              <label for="total_width_m">Paved carriageway width, kerb to kerb (m)</label>
+              <input type="number" id="total_width_m" name="total_width_m"
+                     step="0.1" min="2" max="25" value="7.0" required>
+              <div class="field-hint" id="width-hint">Divided road: one direction only</div>
+            </div>
+            <div class="field">
+              <label for="chainage_m">Chainage from survey start (m)</label>
+              <input type="number" id="chainage_m" name="chainage_m" step="1" min="0" value="0">
+              <div class="field-hint">Orders photos in the RoadRunner corridor; not used for capacity</div>
+            </div>
+          </div>
+
+          <details class="config-group" open><summary class="config-title">Side friction (Indo-HCM Eq. 5.5) <span class="config-hint">leave as none if absent</span></summary>
+          <div class="field-grid">
+            <div class="field field-wide">
+              <label for="on_street_parking">On-street parking F<sub>OP</sub> (Tables 5.9 / 5.10)</label>
+              <select id="on_street_parking" name="on_street_parking"></select>
+              <div class="field-hint">Long-term: kerb length occupied ÷ segment length. Short-term: park-in + park-out per km per hour</div>
+            </div>
+            <div class="field">
+              <label for="bus_stop">Bus stop F<sub>BS</sub> (Table 5.11)</label>
+              <select id="bus_stop" name="bus_stop"></select>
+            </div>
+            <div class="field">
+              <label for="access_points">Access points F<sub>AC</sub> (Table 5.12)</label>
+              <select id="access_points" name="access_points"></select>
+            </div>
+          </div>
+
+          </details>
+          <details class="config-group" open><summary class="config-title">Field data <span class="config-hint">optional</span></summary>
+          <div class="field-grid">
+            <div class="field">
+              <label for="operating_speed_kmh">Operating speed at a base section (km/h)</label>
+              <input type="number" id="operating_speed_kmh" name="operating_speed_kmh"
+                     step="0.1" min="10" max="100" placeholder="85th %ile free car speed">
+              <div class="field-hint" id="speed-hint">≥ 100 cars with headway > 8 s, on a friction-free stretch of this road. Divided roads only (Eq. 5.4, 40–80 km/h)</div>
+            </div>
+            <div class="field">
+              <label for="observed_volume_pcu_h">Observed volume (PCU/h)</label>
+              <input type="number" id="observed_volume_pcu_h" name="observed_volume_pcu_h"
+                     step="1" min="1" placeholder="Peak 5-min count × 12, Table 5.3 PCUs">
+              <div class="field-hint">Same direction basis as the road type. Gives V/C and LOS (Tables 5.6 / 5.7)</div>
+            </div>
+          </div>
+
+          </details>
+          <details class="config-group"><summary class="config-title">Project extensions <span class="config-hint">not part of Indo-HCM</span></summary>
+          <div class="field-grid">
+            <div class="field">
+              <label for="width_method">Width-loss method (F<sub>W</sub>)</label>
+              <select id="width_method" name="width_method"></select>
+              <div class="field-hint">For vendors, carts, garbage, barricades, potholes</div>
+            </div>
+            <div class="field">
+              <label for="iri_m_per_km">Roughness IRI (m/km) — optional (F<sub>R</sub>)</label>
+              <input type="number" id="iri_m_per_km" name="iri_m_per_km" step="0.1" min="0" max="20"
+                     placeholder="Section average, e.g. phone app">
+              <div class="field-hint">Applied only above IRI 3 (Indo-HCM base limit, Table 5B.1)</div>
+            </div>
+          </div>
+
+          </details>
+
+          <!-- Live base-capacity preview -->
+          <div class="dsv-preview" id="dsv-preview" style="display:none;">
+            <span class="dsv-label">Base capacity C0, Indo-HCM, before side friction</span>
+            <div class="dsv-row">
+              <span class="dsv-value" id="dsv-value">—</span>
+              <span class="dsv-unit" id="dsv-unit">PCU / h</span>
+            </div>
+            <div class="dsv-note" id="dsv-note"></div>
+          </div>
+
+          <button type="submit" class="run-btn" id="run-btn">
+            <span id="run-btn-label">Run analysis</span>
+          </button>
+          <div class="model-status" id="model-status" role="status"></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ============ STATUS ============ -->
+    <section class="card status-panel" id="status-panel" style="display:none;">
+      <div class="status-spinner" aria-hidden="true"></div>
+      <div class="status-text" id="status-text">Working…</div>
+    </section>
+
+    <div id="error-box" class="error-box" style="display:none;"></div>
+
+    <!-- ============ RESULTS ============ -->
+    <section id="results-root"></section>
+
+    <!-- ============ DIGITAL TWIN PANEL ============ -->
+    <section class="card dt-panel" id="dt-panel" style="display:none;">
+      <div class="dt-header">
+        <div class="dt-title">Digital Twin — same demand, ideal road vs current road</div>
+        <div class="dt-status-badge done" id="dt-status-badge">Computed</div>
+      </div>
+      <div class="dt-subtitle" id="dt-demand-line">—</div>
+      <div class="dt-demand">
+        <label for="dt-demand-slider">Try a different traffic level: <strong><output id="dt-demand-out">—</output> PCU/h</strong></label>
+        <input type="range" id="dt-demand-slider" min="0" max="3000" step="10">
+        <div class="dt-demand-scale"><span>0</span><span id="dt-demand-max">—</span></div>
+      </div>
+      <div class="dt-road-compare">
+        <div class="dt-road-card ideal">
+          <div class="dt-road-label">Ideal road, no obstructions</div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-ideal-cap">—</span><span class="dt-stat-unit">PCU/h</span><span class="dt-stat-label">Capacity C0</span></div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-ideal-vc">—</span><span class="dt-stat-unit"></span><span class="dt-stat-label">Demand / capacity</span></div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-ideal-speed">—</span><span class="dt-stat-unit">km/h</span><span class="dt-stat-label">Stream speed at demand</span></div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-ideal-queue">—</span><span class="dt-stat-unit">m</span><span class="dt-stat-label">Queue after horizon</span></div>
+        </div>
+        <div class="dt-vs-divider">
+          <div class="dt-loss-badge">
+            <div class="dt-loss-pct" id="dt-loss-pct">—%</div>
+            <div class="dt-loss-label">Capacity lost</div>
+          </div>
+        </div>
+        <div class="dt-road-card defect">
+          <div class="dt-road-label">Current road, with detected obstructions</div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-cap">—</span><span class="dt-stat-unit">PCU/h</span><span class="dt-stat-label">Capacity incl. extensions</span></div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-vc">—</span><span class="dt-stat-unit"></span><span class="dt-stat-label">Demand / capacity</span></div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-speed">—</span><span class="dt-stat-unit">km/h</span><span class="dt-stat-label" id="dt-defect-speed-label">Speed at the section</span></div>
+          <div class="dt-road-stat"><span class="dt-stat-value" id="dt-defect-queue">—</span><span class="dt-stat-unit">m</span><span class="dt-stat-label">Queue after horizon</span></div>
+        </div>
+      </div>
+      <div class="dt-chart-section">
+        <div class="dt-charts-row">
+          <div class="dt-chart-wrap">
+            <div class="dt-chart-label">Queue length upstream (m) vs time (min)</div>
+            <canvas id="dt-cap-chart" width="500" height="200"></canvas>
+          </div>
+          <div class="dt-chart-wrap">
+            <div class="dt-chart-label">Speed (km/h) against flow (PCU/h)</div>
+            <canvas id="dt-spd-chart" width="500" height="200"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="dt-speed-section" id="dt-notes"></div>
+    </section>
+
+  </div>
+
+  <footer>
+    Indo-HCM capacity: C<sub>HCM</sub> = C0 × F<sub>OP</sub> × F<sub>BS</sub> × F<sub>AC</sub> (Eq. 5.5), with C0 from Table 5.4 or Eq. 5.4.
+    Project extensions multiply it by F<sub>W</sub> (lost width) and F<sub>R</sub> (roughness) for obstructions Indo-HCM does not cover; these need field validation.
+    Pothole size follows IRC:82-2015 by width only. A pilot tool, not a substitute for a traffic survey.
+  </footer>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>
