@@ -819,11 +819,18 @@
         <div class="depth-summary">
           <span class="depth-sev depth-${size.worst_size_class}">${size.worst_size_class.toUpperCase()} POTHOLE</span>
           <span class="depth-detail">small ${size.counts.small} · medium ${size.counts.medium} · large ${size.counts.large}
-            · ${size.classification}</span>
+            · ${size.classification}${size.found_in_zoomed_tiles ? ` · ${size.found_in_zoomed_tiles} found only in the zoomed second look` : ""}</span>
+        </div>` : "";
+      const dsum = d.depth_summary;
+      const depthIndHTML = dsum ? `
+        <div class="depth-summary">
+          <span class="depth-detail"><strong>Depth indicator (MiDaS):</strong>
+            deep ${dsum.counts.deep} · shallow ${dsum.counts.shallow} · not distinct ${dsum.counts.not_distinct}
+            · ${dsum.note}</span>
         </div>` : "";
       const rec = d.rectification;
       const rectHTML = rec ? `
-        <div class="defect-action" style="border-top:1px solid #333;margin-top:8px;padding-top:8px;">
+        <div class="defect-action" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;">
           <strong>${rec.rectification_category}</strong> — ${rec.priority}
           ${rec.escalation_note ? `<div style="font-size:0.8em;opacity:0.8;margin-top:4px;">${rec.escalation_note}</div>` : ""}
           <div style="font-size:0.85em;opacity:0.85;margin-top:4px;">${rec.method}</div>
@@ -845,7 +852,7 @@
             <div class="m"><div class="v">${fmt(d.capacity_loss_pct,1)}%</div><div class="l">of C0 if alone</div></div>
             <div class="m"><div class="v">${fmt(d.factor,3)}</div><div class="l">factor alone</div></div>
           </div>
-          ${depthHTML}
+          ${depthHTML}${depthIndHTML}
           ${rectHTML}
           <div class="defect-action">${d.action || "No specific action mapped - flag for manual inspection."}</div>
           <div class="defect-code">${d.code_ref || ""}</div>

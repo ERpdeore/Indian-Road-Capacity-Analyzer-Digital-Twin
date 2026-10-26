@@ -192,6 +192,73 @@ def iou(boxA: Tuple[float, float, float, float],
     return inter / denom if denom > 0 else 0.0
 
 
+TILE_CLASSES = ("pothole",)   # small objects worth a second, zoomed-in look
+TILE_GRID = 2                  # 2 x 2 tiles
+TILE_OVERLAP = 0.25            # each tile overlaps its neighbour by 25 %
+TILE_MIN_EDGE_PX = 640         # tiles are used only if each tile is at least this big
+TILE_EDGE_PX = 3               # a tile box touching a cut edge is a partial object
+
+
+def tile_windows(w: int, h: int, grid: int = TILE_GRID,
+                 overlap: float = TILE_OVERLAP) -> List[Tuple[int, int, int, int]]:
+    """Overlapping (x1, y1, x2, y2) windows covering the image."""
+    tw = int(round(w / (grid - (grid - 1) * overlap)))
+    th = int(round(h / (grid - (grid - 1) * overlap)))
+    xs = [min(int(round(i * tw * (1 - overlap))), w - tw) for i in range(grid)]
+    ys = [min(int(round(j * th * (1 - overlap))), h - th) for j in range(grid)]
+    return [(x, y, x + tw, y + th) for y in ys for x in xs]
+
+
+def _containment(small, big) -> float:
+    """Share of box `small` lying inside box `big`."""
+    iw = max(0.0, min(small[2], big[2]) - max(small[0], big[0]))
+    ih = max(0.0, min(small[3], big[3]) - max(small[1], big[1]))
+    a = (small[2] - small[0]) * (small[3] - small[1])
+    return iw * ih / a if a > 0 else 0.0
+
+
+def merge_tiled(full: List[dict], tiles: List[Tuple[Tuple[int, int, int, int], List[dict]]],
+                image_wh: Tuple[int, int], classes: Tuple[str, ...] = TILE_CLASSES,
+                iou_threshold: float = 0.5) -> Tuple[List[dict], int]:
+    """Add small-object boxes found in zoomed tiles to the full-image boxes.
+
+    At 640 px a shallow or distant pothole can be a few pixels wide; in a
+    tile it is ~2x larger, so the detector sees it. Only `classes` are taken
+    from tiles (a barricade cut in half by a tile would give a wrong box).
+    A tile box is dropped when it touches a cut edge of its tile, overlaps a
+    kept box of the same class (IoU), or lies mostly inside one (a large
+    pothole must not be split into parts). Where the same pothole is seen in
+    both, the more confident view is kept. Returns (boxes, number of kept
+    boxes that came from a tile)."""
+    W, H = image_wh
+    cand = []
+    for (x0, y0, x1, y1), dets in tiles:
+        for d in dets:
+            if d["cls_name"] not in classes:
+                continue
+            bx1, by1, bx2, by2 = d["xyxy"]
+            cut = ((bx1 <= TILE_EDGE_PX and x0 > 0) or (by1 <= TILE_EDGE_PX and y0 > 0) or
+                   (bx2 >= (x1 - x0) - TILE_EDGE_PX and x1 < W) or
+                   (by2 >= (y1 - y0) - TILE_EDGE_PX and y1 < H))
+            if cut:
+                continue
+            cand.append({**d, "xyxy": (bx1 + x0, by1 + y0, bx2 + x0, by2 + y0), "from_tile": True})
+    # Greedy NMS over full-image + tile boxes of the tile classes: the most
+    # confident view of each pothole wins (a pothole at 0.26 in the full
+    # image is often 0.8+ in its tile, and then passes the threshold).
+    pool = sorted([d for d in full if d["cls_name"] in classes] + cand, key=lambda d: -d["conf"])
+    kept = [d for d in full if d["cls_name"] not in classes]
+    chosen: List[dict] = []
+    for d in pool:
+        if any(k["cls_name"] == d["cls_name"] and
+               (iou(k["xyxy"], d["xyxy"]) >= iou_threshold or _containment(d["xyxy"], k["xyxy"]) > 0.7
+                or _containment(k["xyxy"], d["xyxy"]) > 0.7) for k in chosen):
+            continue
+        chosen.append(d)
+    added = sum(1 for d in chosen if d.get("from_tile"))
+    return kept + chosen, added
+
+
 def suppress_cross_class(detections: List[dict],
                          classes: Tuple[str, ...] = tuple(OBSTRUCTION_CLASSES),
                          iou_threshold: float = CROSS_CLASS_IOU) -> Tuple[List[dict], int]:
@@ -363,14 +430,21 @@ def compute_capacity(inputs: dict, width_intervals: List[Tuple[float, float]],
 # RoadAnalyzer — YOLO model loaded once, reused across requests
 # ================================================================
 class RoadAnalyzer:
-    def __init__(self, model_path: str, enable_depth: bool = False):
+    def __init__(self, model_path: str, enable_depth: Optional[bool] = None,
+                 tiled: Optional[bool] = None):
         # MiDaS relative depth is optional and slow on CPU; it only refines
         # the pothole size class, it never produces a depth in mm.
         from ultralytics import YOLO
         self.model_path = str(model_path)
         self.model = YOLO(self.model_path)
         self._call_count = 0
-        self.enable_depth = enable_depth
+        # ROAD_ENABLE_DEPTH=1 turns on the MiDaS depth indicator (needs ~150 MB
+        # more RAM and downloads MiDaS on first use); ROAD_TILED=0 turns off
+        # the zoomed second look for small potholes (5 detector passes -> 1).
+        env_on = lambda k, d: os.environ.get(k, d).strip().lower() in ("1", "true", "yes", "on")
+        self.enable_depth = env_on("ROAD_ENABLE_DEPTH", "0") if enable_depth is None else enable_depth
+        self.tiled = env_on("ROAD_TILED", "1") if tiled is None else tiled
+        self.last_tile_additions = 0
         self._depth_estimator: Optional["PotholeDepthEstimator"] = None
         names = set(self.model.names.values()) if isinstance(self.model.names, dict) else set(self.model.names)
         missing = set(CLASS_NAMES) - names
@@ -394,18 +468,27 @@ class RoadAnalyzer:
     def _detect(self, image_bgr, image_label: str = "") -> Tuple[List[dict], int]:
         self._call_count += 1
         floor = min(0.25, min(self.thresholds.values()))
-        pred = self.model.predict(image_bgr, conf=floor, verbose=False,
-                                  imgsz=self.imgsz, device="cpu", half=False)[0]
-        boxes = pred.boxes
-        raw = []
-        if boxes is not None:
-            for box in boxes:
-                cls_name = self.model.names[int(box.cls[0])]
-                conf = float(box.conf[0])
-                if conf < self.thresholds.get(cls_name, DEFAULT_CONF):
-                    continue
-                raw.append({"cls_name": cls_name, "conf": conf,
-                            "xyxy": tuple(float(v) for v in box.xyxy[0])})
+
+        def boxes_of(pred) -> List[dict]:
+            out = []
+            if pred.boxes is not None:
+                for box in pred.boxes:
+                    out.append({"cls_name": self.model.names[int(box.cls[0])],
+                                "conf": float(box.conf[0]),
+                                "xyxy": tuple(float(v) for v in box.xyxy[0])})
+            return out
+
+        full = boxes_of(self.model.predict(image_bgr, conf=floor, verbose=False,
+                                           imgsz=self.imgsz, device="cpu")[0])
+        added = 0
+        h, w = image_bgr.shape[:2]
+        if self.tiled and max(h, w) >= 2 * TILE_MIN_EDGE_PX:
+            wins = tile_windows(w, h)
+            crops = [image_bgr[y0:y1, x0:x1] for x0, y0, x1, y1 in wins]
+            preds = self.model.predict(crops, conf=floor, verbose=False, imgsz=self.imgsz, device="cpu")
+            full, added = merge_tiled(full, [(win, boxes_of(p)) for win, p in zip(wins, preds)], (w, h))
+        raw = [d for d in full if d["conf"] >= self.thresholds.get(d["cls_name"], DEFAULT_CONF)]
+        self.last_tile_additions = sum(1 for d in raw if d.get("from_tile"))
         raw, merged = suppress_cross_class(raw)
         kept, vetoed = apply_vehicle_veto(raw)
         vetoed += merged
@@ -464,10 +547,9 @@ class RoadAnalyzer:
             if name == "pothole":
                 pc = ext.pothole_size_class(w_m)
                 if idx in midas:
-                    rec["relative_depth_score"] = midas[idx]["relative_depth_score"]
-                    if rank.get(midas[idx]["size_class"], -1) > rank[pc]:
-                        pc = midas[idx]["size_class"]
+                    rec["depth_indicator"] = midas[idx]   # separate from the IRC size class
                 rec["size_class"] = pc
+                rec["found_by"] = "zoomed tile" if d.get("from_tile") else "full image"
                 if worst_pothole is None or rank[pc] > rank[worst_pothole]:
                     worst_pothole = pc
             e = defect_data.setdefault(name, {"count": 0, "intervals": [], "detections": []})
@@ -511,7 +593,16 @@ class RoadAnalyzer:
                     "counts": {k: cls.count(k) for k in ("small", "medium", "large")},
                     "classification": "IRC:82-2015 cl. 7.5.3.4 width thresholds (depth not measured); "
                                       "used for repair priority only",
+                    "found_in_zoomed_tiles": sum(1 for x in info["detections"]
+                                                 if x.get("found_by") == "zoomed tile"),
                 }
+                di = [x["depth_indicator"] for x in info["detections"] if "depth_indicator" in x]
+                if di:
+                    per_defect[name]["depth_summary"] = {
+                        "counts": {c: sum(1 for x in di if x["depth_class"] == c)
+                                   for _, c in DEPTH_BANDS},
+                        "note": DEPTH_NOTE,
+                    }
 
         rt = inputs["road"]
         f_all = {**cap["hcm_factors"], **cap["ext_factors"]}
@@ -727,22 +818,85 @@ class RoadAnalyzer:
 
 
 # ================================================================
-# Optional MiDaS relative depth (refines pothole size class only)
+# Optional MiDaS depth indicator for potholes
+# ----------------------------------------------------------------
+# What MiDaS gives: RELATIVE inverse depth (bigger = nearer the camera),
+# known only up to an unknown scale and shift. It can therefore say
+# "this patch lies further from the camera than the road around it",
+# never "this pothole is 40 mm deep". The output is an INDICATOR, kept
+# separate from the IRC:82 size class (width-based), and never in mm.
+#
+# Method, per pothole box:
+#  1. Take a ring of road around the box (other potholes masked out).
+#  2. The road surface is roughly a plane, and in inverse depth a plane
+#     is linear in image x, y. Fit d = a + b x + c y to the ring (least
+#     squares, refit once without outliers). This removes the strong
+#     near-to-far gradient that made the old ring-mean comparison wrong.
+#  3. Residual inside the box: r = plane - d  (> 0 = further than the
+#     road surface there = a depression).
+#  4. Noise of the road surface: sigma = 1.4826 x MAD of ring residuals.
+#  5. Score = 75th percentile of r inside / sigma: how many "noise
+#     units" the depression stands out. Area % = share of box pixels
+#     with r > 2 sigma.
+# Classes (UNCALIBRATED; calibrate with ruler depths from site, see
+# DEPTH_BANDS): not_distinct < 2 <= shallow < 5 <= deep.
+# "not_distinct" means the photo cannot separate it from flat road:
+# it may be shallow, or a patch/stain. Check on site.
 # ================================================================
-MIDAS_SIZE_BANDS = [(0.15, "small"), (0.35, "medium"), (float("inf"), "large")]
+DEPTH_BANDS = [(2.0, "not_distinct"), (5.0, "shallow"), (float("inf"), "deep")]
+DEPTH_RING = 0.6          # ring width as a share of the box size
+DEPTH_NOTE = ("MiDaS relative depth indicator: how clearly the pothole lies below the "
+              "surrounding road surface in the photo. Unitless and uncalibrated; not a depth in mm. "
+              "IRC:82 severity still needs a depth measured on site.")
 
 
-def classify_relative_depth(score: float) -> dict:
-    score = max(0.0, float(score))
-    for upper, cls in MIDAS_SIZE_BANDS:
-        if score < upper:
-            return {"size_class": cls, "relative_depth_score": round(score, 3)}
-    return {"size_class": "large", "relative_depth_score": round(score, 3)}
+def depth_indicator(depth_map, box_xyxy, other_boxes=()) -> dict:
+    """Plane-corrected depression score for one box on a MiDaS inverse-depth map."""
+    import numpy as np
+    h, w = depth_map.shape[:2]
+    x1, y1, x2, y2 = [int(round(v)) for v in box_xyxy]
+    x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+    empty = {"depth_class": "not_distinct", "depth_score": 0.0, "depression_area_pct": 0.0,
+             "reliable": False}
+    if x2 - x1 < 4 or y2 - y1 < 4:
+        return empty
+    mx = max(4, int((x2 - x1) * DEPTH_RING))
+    my = max(4, int((y2 - y1) * DEPTH_RING))
+    rx1, ry1, rx2, ry2 = max(0, x1 - mx), max(0, y1 - my), min(w, x2 + mx), min(h, y2 + my)
+    yy, xx = np.mgrid[ry1:ry2, rx1:rx2]
+    patch = depth_map[ry1:ry2, rx1:rx2].astype(np.float64)
+    inside = (xx >= x1) & (xx < x2) & (yy >= y1) & (yy < y2)
+    ring = ~inside
+    for ob in other_boxes:
+        ox1, oy1, ox2, oy2 = ob
+        ring &= ~((xx >= ox1) & (xx < ox2) & (yy >= oy1) & (yy < oy2))
+    if ring.sum() < 30:
+        return empty
+    A = np.column_stack([np.ones(ring.sum()), xx[ring], yy[ring]])
+    d = patch[ring]
+    coef, *_ = np.linalg.lstsq(A, d, rcond=None)
+    res = d - A @ coef
+    mad = np.median(np.abs(res - np.median(res)))
+    keep = np.abs(res) <= 3 * 1.4826 * mad + 1e-12
+    if keep.sum() >= 30:
+        coef, *_ = np.linalg.lstsq(A[keep], d[keep], rcond=None)
+        res = d[keep] - A[keep] @ coef
+    sigma = 1.4826 * np.median(np.abs(res - np.median(res)))
+    sigma = max(sigma, 1e-3 * (np.ptp(patch) + 1e-12))
+    plane_in = coef[0] + coef[1] * xx[inside] + coef[2] * yy[inside]
+    r = plane_in - patch[inside]                       # > 0: further than the road plane
+    score = float(np.percentile(r, 75) / sigma)
+    area = float((r > 2 * sigma).mean() * 100)
+    cls = next(c for upper, c in DEPTH_BANDS if score < upper)
+    return {"depth_class": cls, "depth_score": round(max(score, 0.0), 2),
+            "depression_area_pct": round(area, 1),
+            "reliable": bool(ring.sum() >= 200 and (x2 - x1) * (y2 - y1) >= 400)}
 
 
 class PotholeDepthEstimator:
-    """Monocular RELATIVE depth: unitless, scale-free. Never converted to mm."""
-    MARGIN_RATIO = 0.35
+    """MiDaS_small, loaded on first use. MIDAS_REPO may point to a local
+    clone of github.com/isl-org/MiDaS (offline servers); otherwise it is
+    fetched through torch.hub."""
 
     def __init__(self, device: str = "cpu"):
         self.device = device
@@ -753,11 +907,16 @@ class PotholeDepthEstimator:
         if self._model is not None:
             return
         import torch.hub as hub
-        self._model = hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
+        local = os.environ.get("MIDAS_REPO")
+        if local:
+            src = dict(repo_or_dir=local, source="local")
+        else:
+            src = dict(repo_or_dir="intel-isl/MiDaS:master", skip_validation=True)
+        self._model = hub.load(model="MiDaS_small", trust_repo=True, **src)
         self._model.to(self.device).eval()
-        self._transform = hub.load("intel-isl/MiDaS", "transforms", trust_repo=True).small_transform
+        self._transform = hub.load(model="transforms", trust_repo=True, **src).small_transform
 
-    def estimate_batch(self, image_bgr, boxes_xyxy) -> List[dict]:
+    def depth_map(self, image_bgr):
         import torch
         self._ensure_loaded()
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -765,26 +924,8 @@ class PotholeDepthEstimator:
             pred = self._model(self._transform(rgb).to(self.device))
             pred = torch.nn.functional.interpolate(pred.unsqueeze(1), size=rgb.shape[:2],
                                                    mode="bicubic", align_corners=False).squeeze()
-        depth = pred.cpu().numpy()
-        return [self._score_box(depth, b, image_bgr.shape[:2]) for b in boxes_xyxy]
+        return pred.cpu().numpy()
 
-    def _score_box(self, depth_map, box_xyxy, image_hw) -> dict:
-        import numpy as np
-        h, w = image_hw
-        x1, y1, x2, y2 = [int(round(v)) for v in box_xyxy]
-        x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
-        if x2 <= x1 or y2 <= y1:
-            return {"size_class": "small", "relative_depth_score": 0.0}
-        mx = max(2, int((x2 - x1) * self.MARGIN_RATIO))
-        my = max(2, int((y2 - y1) * self.MARGIN_RATIO))
-        rx1, ry1, rx2, ry2 = max(0, x1 - mx), max(0, y1 - my), min(w, x2 + mx), min(h, y2 + my)
-        inside = depth_map[y1:y2, x1:x2]
-        outer = depth_map[ry1:ry2, rx1:rx2]
-        mask = np.ones_like(outer, dtype=bool)
-        mask[y1 - ry1:y2 - ry1, x1 - rx1:x2 - rx1] = False
-        ring = outer[mask]
-        if ring.size < 10 or inside.size == 0:
-            return {"size_class": "small", "relative_depth_score": 0.0}
-        dip = float(np.percentile(ring, 10)) - float(np.percentile(inside, 10))
-        scale = float(np.std(ring)) or 1.0
-        return classify_relative_depth(max(0.0, dip / (scale * 4.0)))
+    def estimate_batch(self, image_bgr, boxes_xyxy) -> List[dict]:
+        dm = self.depth_map(image_bgr)
+        return [depth_indicator(dm, b, [o for o in boxes_xyxy if o is not b]) for b in boxes_xyxy]

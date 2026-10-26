@@ -79,6 +79,30 @@ On the Render free server (512 MB), 1024 px inference may be slow or run out of 
 Set the environment variable `ROAD_INFER_IMGSZ=640` if it does. Accuracy on small
 potholes then drops.
 
+## Labelling rules (the part that fixes shallow potholes and barricade mix-ups)
+
+The model can only learn what the labels show. Before training, go through the audit
+sheets with these rules:
+
+**Shallow potholes**
+- Box **every** pothole you can see, including shallow ones with ragged edges, a darker
+  base or exposed aggregate, and ones filled with water. Many Roboflow sets box only deep,
+  obvious potholes. The model then learns that shallow ones are road.
+- Do **not** box patches (a repaired square with straight edges), stains, wet patches,
+  shadows, manhole covers or speed-breaker paint. Add 300–500 photos of exactly these
+  things with **no boxes** (an empty `.txt` file). That teaches "this is not a pothole".
+- Include your own Nashik photos of shallow potholes. Even 150–200 make a difference.
+
+**Barricades vs parked vehicles**
+- `barricade`: anything **placed** to block the road, such as metal or plastic barriers,
+  drums, cones, police barricades and jersey barriers.
+- `illegal_parking`: a **vehicle** standing still at the edge or on the carriageway.
+- If a dataset labels a barricade as "car" or "obstacle", fix it in Roboflow or set that
+  name to `drop` in `class_map.yaml`. A single dataset with mixed-up classes is enough to
+  cause the confusion.
+- Check `evaluate.py`'s "real barricade: N called illegal_parking" line after training.
+  It should go close to zero. If it doesn't, the labels still mix them up.
+
 ## What retraining cannot fix
 
 - **Pothole depth.** One ordinary photo cannot measure it. Severity stays width-based

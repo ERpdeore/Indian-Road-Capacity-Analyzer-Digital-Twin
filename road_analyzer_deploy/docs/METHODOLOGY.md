@@ -125,6 +125,19 @@ vehicle occupies. Each detected object feeds exactly one factor.
 **Pothole size** (IRC:82-2015, width only) sets repair priority; it does not
 change capacity separately — its capacity effect is through F_W.
 
+**Depth indicator** (optional, `ROAD_ENABLE_DEPTH=1`): MiDaS gives relative inverse depth
+(unknown scale and shift), so it cannot give millimetres. For each pothole a plane is fitted
+to the road ring around it (removing the near-to-far gradient). The score is how far the
+inside lies behind that plane, in units of the road-surface noise: < 2 not distinct, 2–5
+shallow, ≥ 5 deep. These bands are uncalibrated. To calibrate them, measure depths with a
+ruler at a few sites. The indicator is reported beside the IRC size class and never
+replaces it.
+
+**Small potholes** (`ROAD_TILED=1`, default): besides the full photo, the detector looks at
+four overlapping zoomed tiles. Only pothole boxes are taken from tiles, boxes cut by a tile
+edge are dropped, and where a pothole is seen twice the more confident view is kept. Cost:
+5 detector passes per photo instead of 1.
+
 ## 5. Field validation (`field_validation.py`)
 
 Survey (Annex 5C/5D): video over a 50–75 m trap, record each vehicle's type and
