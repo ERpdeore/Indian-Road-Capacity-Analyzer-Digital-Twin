@@ -579,9 +579,10 @@ class RoadAnalyzer:
     def analyse_video(self, video_path: str, road_config: dict, output_dir: str,
                       sample_every_sec: float = 1.0, track_iou_threshold: float = 0.3,
                       max_frames: Optional[int] = None) -> dict:
-        """Samples frames and analyses each as a cross-section. Valid for a
-        FIXED camera; with a moving camera every frame is a different
-        location and the per-frame numbers must be read as a chainage series."""
+        """Server-side fallback: the whole video was uploaded. Samples frames
+        and analyses each as a cross-section. Valid for a FIXED camera; with
+        a moving camera every frame is a different location and the
+        per-frame numbers must be read as a chainage series."""
         out_dir = Path(output_dir)
         frames_dir = out_dir / "frames"
         frames_dir.mkdir(parents=True, exist_ok=True)
@@ -591,40 +592,61 @@ class RoadAnalyzer:
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         interval = max(1, int(round(fps * sample_every_sec)))
-        frame_idx = sampled = 0
+
+        def frame_items():
+            frame_idx = sampled = 0
+            try:
+                while True:
+                    ok, frame = cap.read()
+                    if not ok:
+                        break
+                    if frame_idx % interval == 0:
+                        fp = frames_dir / f"frame_{sampled:05d}.jpg"
+                        cv2.imwrite(str(fp), frame)
+                        yield str(fp), frame_idx / fps, frame_idx
+                        sampled += 1
+                        if max_frames and sampled >= max_frames:
+                            break
+                    frame_idx += 1
+            finally:
+                cap.release()
+
+        return self.analyse_frame_sequence(
+            frame_items(), road_config, output_dir, Path(video_path).name,
+            fps=fps, total_frames=total_frames, sample_every_sec=sample_every_sec,
+            track_iou_threshold=track_iou_threshold)
+
+    def analyse_frame_sequence(self, frame_items, road_config: dict, output_dir: str,
+                               video_name: str, fps: Optional[float] = None,
+                               total_frames: Optional[int] = None,
+                               sample_every_sec: float = 1.0,
+                               track_iou_threshold: float = 0.3) -> dict:
+        """Shared video pipeline. `frame_items` yields (image_path,
+        timestamp_sec, frame_index). Used both for a server-decoded video
+        and for frames the browser extracted (so only the sampled frames
+        are uploaded, not the whole file)."""
+        out_dir = Path(output_dir)
         frames: List[dict] = []
         tracks: List[dict] = []
-        try:
-            while True:
-                ok, frame = cap.read()
-                if not ok:
-                    break
-                if frame_idx % interval == 0:
-                    t = frame_idx / fps
-                    fp = frames_dir / f"frame_{sampled:05d}.jpg"
-                    try:
-                        cv2.imwrite(str(fp), frame)
-                        r = self.analyse_image(str(fp), road_config, True, str(out_dir))
-                        r["timestamp_sec"] = round(t, 2)
-                        r["frame_index"] = frame_idx
-                        frames.append(r)
-                        self._update_tracks(tracks, r, t, track_iou_threshold)
-                    except Exception as e:
-                        logger.warning("Video frame %d failed: %s", frame_idx, e)
-                    sampled += 1
-                    if max_frames and sampled >= max_frames:
-                        break
-                frame_idx += 1
-        finally:
-            cap.release()
+        for fp, t, frame_idx in frame_items:
+            try:
+                r = self.analyse_image(str(fp), road_config, True, str(out_dir))
+                r["timestamp_sec"] = round(t, 2)
+                r["frame_index"] = frame_idx
+                frames.append(r)
+                self._update_tracks(tracks, r, t, track_iou_threshold)
+            except Exception as e:
+                logger.warning("Video frame %s failed: %s", frame_idx, e)
+        if not frames:
+            raise ValueError("No frame of the video could be analysed.")
 
         unique = [{"cls_name": t["cls_name"], "first_seen_sec": round(t["first"], 2),
                    "last_seen_sec": round(t["last"], 2), "times_seen": t["hits"],
                    "max_width_m": round(t["max_w"], 2)} for t in tracks]
         summary = self._summarise(frames)
         summary.update({
-            "mode": "video", "road_config": road_config, "video": Path(video_path).name,
-            "fps": round(fps, 2), "total_frames_in_video": total_frames,
+            "mode": "video", "road_config": road_config, "video": video_name,
+            "fps": round(fps, 2) if fps else None, "total_frames_in_video": total_frames,
             "sampled_every_sec": sample_every_sec, "frames_analysed": len(frames),
             "unique_defect_instances": unique, "unique_defect_count": len(unique),
             "frame_by_frame": [{"frame_index": r["frame_index"], "timestamp_sec": r["timestamp_sec"],

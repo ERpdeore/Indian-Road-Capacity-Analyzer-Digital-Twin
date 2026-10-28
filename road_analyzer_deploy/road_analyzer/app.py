@@ -257,6 +257,10 @@ def road_form(
     return cfg
 
 
+MAX_VIDEO_BYTES  = int(os.environ.get("MAX_VIDEO_MB", "150")) * 1024 * 1024
+MAX_VIDEO_FRAMES = 600
+
+
 def _new_job(prefix: str) -> tuple[str, Path]:
     job_id  = f"{prefix}_{uuid.uuid4().hex[:10]}"
     job_dir = RESULTS_DIR / job_id
@@ -524,15 +528,28 @@ async def analyze_batch(
 # ----------------------------------------------------------------
 # VIDEO MODE
 # ----------------------------------------------------------------
-def _run_video_job(job_id: str, job_dir: Path, video_path: str,
-                    road_config: dict, sample_every_sec: float):
+def _run_video_job(job_id: str, job_dir: Path, video_path: Optional[str],
+                    road_config: dict, sample_every_sec: float,
+                    frames: Optional[List[tuple]] = None, video_meta: Optional[dict] = None):
+    """video_path: whole video uploaded (server decodes it).
+    frames: [(jpg_path, timestamp_sec, frame_index)] extracted in the browser."""
     try:
         analyzer = get_analyzer()
-        summary  = analyzer.analyse_video(
-            video_path, road_config,
-            output_dir=str(job_dir),
-            sample_every_sec=sample_every_sec,
-        )
+        if frames is not None:
+            meta = video_meta or {}
+            summary = analyzer.analyse_frame_sequence(
+                frames, road_config, output_dir=str(job_dir),
+                video_name=meta.get("name", "video"), fps=meta.get("fps"),
+                sample_every_sec=sample_every_sec,
+            )
+            summary["video_duration_sec"] = meta.get("duration_sec")
+            summary["frames_extracted_in_browser"] = True
+        else:
+            summary = analyzer.analyse_video(
+                video_path, road_config,
+                output_dir=str(job_dir),
+                sample_every_sec=sample_every_sec,
+            )
         summary.pop("_json_path", None)
         frame_results_full = summary.pop("_frame_results_full", [])
 
@@ -592,15 +609,66 @@ async def analyze_video(
     job_id, job_dir = _new_job("video")
     safe_name = _safe_filename(file.filename)
     dest = job_dir / safe_name
+    written = 0
     with dest.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
+        while chunk := file.file.read(1024 * 1024):
+            written += len(chunk)
+            if written > MAX_VIDEO_BYTES:
+                out.close()
+                shutil.rmtree(job_dir, ignore_errors=True)
+                raise HTTPException(413, f"Video is larger than {MAX_VIDEO_BYTES // (1024*1024)} MB. "
+                                         "Trim it to the stretch you need or export at 720p.")
+            out.write(chunk)
 
     JOBS[job_id] = {"status": "running"}
     background_tasks.add_task(
         _run_video_job, job_id, job_dir, str(dest), road_config, sample_every_sec
     )
-    logger.info("Video job %s started", job_id)
+    logger.info("Video job %s started (%.1f MB uploaded)", job_id, written / 1e6)
     return {"job_id": job_id, "status": "running"}
+
+
+@app.post("/api/analyze/video-frames")
+async def analyze_video_frames(
+    background_tasks: BackgroundTasks,
+    files:            List[UploadFile] = File(...),
+    timestamps:       str = Form(..., description="JSON list of seconds, one per frame, same order as files"),
+    video_name:       str = Form("video"),
+    duration_sec:     Optional[float] = Form(None),
+    sample_every_sec: float = Form(1.0),
+    road_config:      dict = Depends(road_form),
+):
+    """Fast path: the browser decodes the video locally and uploads only
+    the sampled frames (about 100 KB each) instead of the whole file."""
+    if not (0.2 <= sample_every_sec <= 30):
+        raise HTTPException(400, "sample_every_sec must be between 0.2 and 30.")
+    try:
+        ts = [float(t) for t in json.loads(timestamps)]
+    except (ValueError, TypeError):
+        raise HTTPException(400, "timestamps must be a JSON list of numbers.")
+    if not files or len(ts) != len(files):
+        raise HTTPException(400, "Send one timestamp per frame.")
+    if len(files) > MAX_VIDEO_FRAMES:
+        raise HTTPException(400, f"Too many frames ({len(files)}); the limit is {MAX_VIDEO_FRAMES}. "
+                                 "Use a longer sampling interval or a shorter clip.")
+
+    job_id, job_dir = _new_job("video")
+    frames_dir = job_dir / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    frames = []
+    for i, (f, t) in enumerate(zip(files, ts)):
+        dest = frames_dir / f"frame_{i:05d}.jpg"
+        with dest.open("wb") as out:
+            shutil.copyfileobj(f.file, out)
+        frames.append((str(dest), t, i))
+
+    JOBS[job_id] = {"status": "running"}
+    meta = {"name": _safe_filename(video_name), "duration_sec": duration_sec}
+    background_tasks.add_task(
+        _run_video_job, job_id, job_dir, None, road_config, sample_every_sec, frames, meta
+    )
+    logger.info("Video-frames job %s started — %d frames", job_id, len(frames))
+    return {"job_id": job_id, "status": "running", "num_frames": len(frames)}
 
 
 # ----------------------------------------------------------------
@@ -932,6 +1000,10 @@ class _WhatIf(BaseModel):
     road_config: dict
     obstacles: List[dict] = []          # [{"defect_type", "left_m", "right_m"}] still on the road
     demand_pcu_h: Optional[float] = None
+    # "observed" = the volume the user typed in; "whatif" = the user moved the
+    # traffic slider. None/absent = no volume known: no LOS is computed and the
+    # twin falls back to its stated ASSUMED demand.
+    demand_kind: Optional[str] = None
 
 
 @app.post("/api/whatif")
@@ -939,7 +1011,9 @@ def whatif(body: _WhatIf):
     """Recompute capacity, LOS and the digital twin after the user removes
     obstructions or changes the traffic demand on the dashboard."""
     cfg = dict(body.road_config)
-    cfg["observed_volume_pcu_h"] = body.demand_pcu_h if body.demand_pcu_h and body.demand_pcu_h > 0 else None
+    kind = body.demand_kind if body.demand_kind in ("observed", "whatif") else None
+    has_demand = kind is not None and body.demand_pcu_h is not None and body.demand_pcu_h > 0
+    cfg["observed_volume_pcu_h"] = body.demand_pcu_h if has_demand else None
     try:
         inp = resolve_road_inputs(cfg)
     except ValueError as e:
@@ -967,7 +1041,7 @@ def whatif(body: _WhatIf):
         "extension_factors": rnd(cap["ext_factors"]),
         "parking_class_used": cap["parking_class_used"],
         "width": rnd(cap["width"]),
-        "level_of_service": rnd(cap["los"]) if "los" in cap else None,
+        "level_of_service": ({**rnd(cap["los"]), "demand_kind": kind} if "los" in cap else None),
         "overall_guidance": get_overall_guidance((c0 - c_ext) / c0 * 100),
         "notes": cap["notes"],
     }

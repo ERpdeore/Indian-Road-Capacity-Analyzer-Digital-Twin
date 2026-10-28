@@ -104,7 +104,9 @@ def generate_twin_data(result: dict) -> dict:
 
     los = result.get("level_of_service") or {}
     if los.get("observed_volume_pcu_h"):
-        demand, demand_src = float(los["observed_volume_pcu_h"]), "observed volume entered by user"
+        demand = float(los["observed_volume_pcu_h"])
+        demand_src = ("WHAT-IF: traffic level set on the dashboard slider, not measured"
+                      if los.get("demand_kind") == "whatif" else "observed volume entered by user")
     else:
         ratio = float(basis.get("dsv_vc_ratio") or hcm.DSV_VC_RATIO)
         demand = c0 * ratio
