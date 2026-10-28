@@ -252,19 +252,13 @@ def resolve_road_inputs(road_config: dict) -> dict:
     base = hcm.base_capacity(road_type, measured, width)
     notes += base["notes"]
 
-    # Speed used by the twin and the roughness factor: the measured
-    # operating speed (also on undivided roads, where it does not set C0),
-    # else the speed Eq. 5.4 associates with the Table 5.4 lane capacity
-    # (clamped to the 40-80 km/h validity range).
+    # Operating speed is used only when it was measured on site. It is never
+    # back-calculated from the Table 5.4 capacity (that would be circular) and
+    # never taken from the speed at which Section 2.10.1 states its capacity.
     if measured:
         v_ref, v_src = measured, "measured operating speed (base section)"
-    elif rt["chapter"] == 2:
-        v_ref = rt["base_operating_speed_kmh"]
-        v_src = "speed at which Indo-HCM Section 2.10.1 states the base capacity (not measured)"
     else:
-        lo, hi = hcm.SPEED_MODEL_RANGE_KMH
-        v_ref = min(max(hcm.operating_speed_from_lane_capacity(rt["lane_capacity_pcu_h"]), lo), hi)
-        v_src = "implied by Table 5.4 lane capacity through Eq. 5.4 (not measured)"
+        v_ref, v_src = None, "not measured"
 
     return {
         "road_type": road_type, "road": rt, "total_width_m": width, "lanes": rt["lanes"],
@@ -481,7 +475,7 @@ class RoadAnalyzer:
                 "indo_hcm_chapter": rt["chapter"], "dsv_vc_ratio": rt["dsv_vc_ratio"],
                 "base_capacity_method": inputs["base"]["method"],
                 "base_capacity_detail": inputs["base"]["detail"],
-                "operating_speed_kmh": round(inputs["v_ref"], 1),
+                "operating_speed_kmh": round(inputs["v_ref"], 1) if inputs["v_ref"] else None,
                 "operating_speed_source": inputs["v_ref_source"],
                 "width_method": cap["width"]["method"],
                 "warnings": inputs["notes"] + cap["notes"],
@@ -519,7 +513,7 @@ class RoadAnalyzer:
             },
             "level_of_service": ({k: (round(v, 3) if isinstance(v, float) else v)
                                   for k, v in cap["los"].items()} if "los" in cap else None),
-            "operating_speed_kmh": round(inputs["v_ref"], 1),
+            "operating_speed_kmh": round(inputs["v_ref"], 1) if inputs["v_ref"] else None,
             "overall_guidance": get_overall_guidance((c0 - c_ext) / c0 * 100),
             "effective_width_m": round(cap["width"]["usable_width_m"], 2),
             "vehicle_veto_suppressed": vetoed,

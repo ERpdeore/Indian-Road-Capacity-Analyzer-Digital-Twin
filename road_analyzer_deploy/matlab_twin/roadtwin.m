@@ -41,8 +41,8 @@ BLOCKED_M       = 1.5;
 FACTORS         = struct('F_OP',1,'F_BS',1,'F_AC',1,'F_W',0.79,'F_R',1);
 NUM_LANES       = 2;
 DEFECTS         = 'street vendor';
-FREE_SPD        = 56.6;     % speed Eq. 5.4 implies for 1350 PCU/h/lane
-DEMAND          = 1890;     % Design Service Volume, LOS-C (Table 5.4)
+FREE_SPD        = NaN;      % only the measured operating speed is used
+DEMAND          = NaN;      % only the observed volume entered by the user is used
 IDEAL_SPD       = 43.8;     % twin: speed at demand, ideal road
 CONG_SPD        = 37.9;     % twin: speed at the obstruction
 QUEUE_SPD       = 37.9;     % twin: speed in the upstream queue (= CONG_SPD if no queue)
@@ -69,7 +69,11 @@ if ~isempty(jsonPath) && isfile(jsonPath)
         NUM_LANES     = getf(cap, 'num_lanes', NUM_LANES);
         FREE_SPD      = getf(cap, 'operating_speed_kmh', FREE_SPD);
         AVG_PCU       = getf(cap, 'avg_pcu_per_vehicle', AVG_PCU);
-        if isfield(cap,'twin') && ~isempty(cap.twin)
+        if ~isfield(cap,'twin') || isempty(cap.twin)
+            error('roadtwin:noTwin', ['The analysis has no digital twin: enter the observed volume ' ...
+                  'and the measured operating speed for this road, then re-run the analysis.']);
+        end
+        if true
             DEMAND       = cap.twin.demand_pcu_h;
             IDEAL_SPD    = cap.twin.ideal.section_speed_kmh;
             K_IDEAL_LANE = cap.twin.ideal.section_density_pcu_km_lane;
@@ -94,13 +98,12 @@ if ~isempty(jsonPath) && isfile(jsonPath)
         usedRealData = true;
         fprintf('Loaded analysis data from: %s\n', jsonPath);
     catch e
-        fprintf('Could not read %s (%s) -- using demo numbers instead.\n', jsonPath, e.message);
+        rethrow(e);   % never fall back to demo traffic numbers
     end
-else
-    fprintf('No data file given/found -- using demo numbers.\n');
 end
 if ~usedRealData
-    fprintf('NOTE: DEMO numbers, not a real analysis. Pass a *_roadrunner_capacity.json path.\n');
+    error('roadtwin:noData', ['No analysis data. Pass the *_roadrunner_capacity.json of an analysis ' ...
+          'that has an entered observed volume and a measured operating speed.']);
 end
 
 SAVE_VIDEO    = true;

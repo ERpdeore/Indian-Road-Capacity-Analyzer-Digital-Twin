@@ -49,8 +49,9 @@ if isnan(q)
     demand_src = 'observed volume';
 end
 if isnan(q)
-    q = 0.70 * c0;
-    demand_src = 'ASSUMED: LOS-C service volume (0.70 x C0)';
+    % No volume is ever assumed: the user must enter one for this road.
+    error('run_digital_twin:noVolume', ...
+        'No observed volume in %s. Enter the observed volume (PCU/h) for this road and re-run the analysis.', json_path);
 end
 
 simIn = struct('demand_pcu_h', double(q), 'ideal_cap', double(c0), 'defect_cap', double(c));

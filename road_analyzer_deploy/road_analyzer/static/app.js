@@ -691,7 +691,14 @@
            <div class="val">${los.los_base} → ${los.los_hcm} → <span class="red">${los.los_ext}</span></div>
            <div class="val-sub">V/C ${fmt(los.vc_base, 2)} base · ${fmt(los.vc_hcm, 2)} Indo-HCM · ${fmt(los.vc_ext, 2)} with extensions</div></div>`
       : `<div class="item"><div class="label">Level of service</div>
-           <div class="val-sub">Enter an observed volume to get V/C and LOS</div></div>`;
+           <div class="val-sub">Awaiting volume input — enter the observed volume for this road to get V/C and LOS</div></div>`;
+    const twinMissing = [];
+    if (!los) twinMissing.push("observed volume");
+    if (basis.operating_speed_kmh == null) twinMissing.push("measured operating speed");
+    const twinWaitHTML = !data.digital_twin && twinMissing.length
+      ? `<div class="item"><div class="label">Digital twin</div>
+           <div class="val-sub">Not run — needs ${twinMissing.join(" and ")} for this road</div></div>`
+      : "";
 
     return `
       <div class="hero">
@@ -719,7 +726,7 @@
               <div class="val loss">${fmt(data.capacity_loss_pcu_h, 0)} PCU/h (${fmt(data.capacity_loss_pct, 1)}%)</div>
               <div class="val-sub">LOS-C service volume ${fmt(data.dsv_los_c_ideal_pcu_h, 0)} → ${fmt(data.dsv_los_c_reduced_pcu_h, 0)}</div>
             </div>
-            ${losHTML}
+            ${losHTML}${twinWaitHTML}
           </div>
           ${calc.formula_indo_hcm ? `<div class="formula-box mono">${calc.formula_indo_hcm}<br>${calc.formula}</div>` : ""}
           <div class="config-strip">${factorChips}</div>
@@ -1146,8 +1153,8 @@
     WI.obstacles = (result.roadrunner_obstacles || []).map((o) => ({ ...o }));
     WI.excluded = new Set();
     const lv = result.level_of_service;
-    WI.origDemand = lv && lv.observed_volume_pcu_h ? lv.observed_volume_pcu_h
-      : (result.digital_twin ? result.digital_twin.demand_pcu_h : Math.round(result.base_capacity_pcu_h * 0.7));
+    // Only a volume the user entered is used; none is ever assumed.
+    WI.origDemand = lv && lv.observed_volume_pcu_h ? lv.observed_volume_pcu_h : null;
     WI.demand = WI.origDemand;
     WI.origDemandKind = lv && lv.observed_volume_pcu_h ? "observed" : null;
     WI.demandKind = WI.origDemandKind;

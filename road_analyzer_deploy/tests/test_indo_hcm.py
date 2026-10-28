@@ -298,7 +298,7 @@ def test_ch2_roughness_uses_eq_2_19_2_20():
 def test_ch2_full_pipeline_and_los_table_ref():
     inp = core.resolve_road_inputs({"road_type": "single_lane", "total_width_m": 3.75,
                                     "observed_volume_pcu_h": 300, "bus_stop": "kerbside_low"})
-    assert inp["v_ref"] == 50 and inp["lanes"] == 1
+    assert inp["v_ref"] is None and inp["lanes"] == 1   # no speed is assumed
     cap = core.compute_capacity(inp, [], False)
     assert cap["c_hcm"] == pytest.approx(640)
     assert cap["los"]["table"] == "2.10" and cap["los"]["los_hcm"] == "C"   # 300/640 = 0.47
@@ -312,3 +312,32 @@ def test_ch2_field_method_a_and_se_rejected():
     assert a["capacity_pcu_h"] == pytest.approx(187 + 12.4 * a["operating_speed_kmh"])
     with pytest.raises(ValueError):
         fv.five_minute_periods(vs, "single_lane", 60, "se")
+
+
+# ------------------------------------------------------------------
+# No assumed site inputs: speed is never back-calculated, volume never assumed
+# ------------------------------------------------------------------
+def test_operating_speed_not_back_calculated_from_table_5_4():
+    inp = core.resolve_road_inputs({"road_type": "divided_4lane", "total_width_m": 7.0})
+    assert inp["v_ref"] is None and inp["v_ref_source"] == "not measured"
+    assert inp["c0"] == pytest.approx(2700)          # capacity still comes from Table 5.4
+
+
+def test_roughness_not_applied_without_measured_speed():
+    fr = ext.roughness_factor(6.0, None, "divided_4lane")
+    assert fr["F_R"] == 1.0 and fr["applied"] is False and "not measured" in fr["note"]
+
+
+def _twin_result(volume=None, speed=None):
+    return {"base_capacity_pcu_h": 2700.0, "reduced_capacity_pcu_h": 2100.0, "capacity_loss_pct": 22.2,
+            "capacity_basis": {"operating_speed_kmh": speed},
+            "level_of_service": {"observed_volume_pcu_h": volume} if volume else None,
+            "road_config": {"num_lanes": 2}}
+
+
+def test_twin_not_run_until_volume_and_speed_entered():
+    assert generate_twin_data(_twin_result()) is None
+    assert generate_twin_data(_twin_result(volume=1500)) is None
+    assert generate_twin_data(_twin_result(speed=60)) is None
+    twin = generate_twin_data(_twin_result(volume=1500, speed=60))
+    assert twin["demand_pcu_h"] == 1500 and twin["demand_source"] == "observed volume entered by user"
