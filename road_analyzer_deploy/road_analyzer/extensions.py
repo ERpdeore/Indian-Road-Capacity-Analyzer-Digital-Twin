@@ -134,10 +134,11 @@ CH2_ROUGHNESS = {
 }
 
 
-def roughness_factor(iri_m_per_km: Optional[float], operating_speed_kmh: float,
+def roughness_factor(iri_m_per_km: Optional[float], operating_speed_kmh: Optional[float],
                      road_type: Optional[str] = None) -> dict:
     if not iri_m_per_km or iri_m_per_km <= BASE_IRI_LIMIT:
         return {"F_R": 1.0, "speed_ratio": 1.0, "applied": False}
+    v_known = operating_speed_kmh is not None and operating_speed_kmh > 0
     if road_type in CH2_ROUGHNESS:
         m = CH2_ROUGHNESS[road_type]
         a, b = m["cap"]
@@ -148,10 +149,15 @@ def roughness_factor(iri_m_per_km: Optional[float], operating_speed_kmh: float,
         else:
             r = f   # CHOICE: no single-lane speed-roughness equation; speed scaled like capacity
         return {"F_R": f, "speed_ratio": r, "applied": True,
-                "reduced_speed_kmh": operating_speed_kmh * r,
+                "reduced_speed_kmh": operating_speed_kmh * r if v_known else None,
                 "source": f"Indo-HCM {m['eq']} relative to IRI {BASE_IRI_LIMIT:g}", "note": None}
     r = (104 - 6.8 * iri_m_per_km) / (104 - 6.8 * BASE_IRI_LIMIT)
     r = max(r, 0.1)
+    if not v_known:
+        # Eq. 5.4 needs the site's operating speed; no assumed speed is used.
+        return {"F_R": 1.0, "speed_ratio": r, "applied": False, "reduced_speed_kmh": None,
+                "note": f"IRI {iri_m_per_km:g} m/km was entered but the operating speed was not measured, "
+                        f"so the roughness factor F_R (Eq. 5.4) is not applied. Measure the operating speed."}
     v0 = operating_speed_kmh
     f = hcm.lane_capacity_from_operating_speed(v0 * r) / hcm.lane_capacity_from_operating_speed(v0)
     note = None

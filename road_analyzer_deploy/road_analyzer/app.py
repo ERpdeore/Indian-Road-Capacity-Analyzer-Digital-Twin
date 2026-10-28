@@ -294,6 +294,7 @@ def _capacity_sidecar(result: dict, twin: Optional[dict]) -> dict:
         # Lateral position across the carriageway is measured; along-road
         # position cannot be measured from one photo and is not included.
         "defect_positions": get_defect_positions(result),
+        # null until the user enters a volume and a measured speed
         "twin": None if twin is None else {
             "demand_pcu_h": twin["demand_pcu_h"],
             "demand_source": twin["demand_source"],

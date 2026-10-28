@@ -184,8 +184,8 @@ def generate_department_report_pdf(result: dict, output_path: str,
         ["Date of analysis", survey_date],
         ["Road type", f"{basis.get('road_type_label', '-')} — capacity basis: {basis.get('direction_basis', '-')}"],
         ["Carriageway width (measured)", f"{road_config.get('total_width_m', '-')} m"],
-        ["Operating speed", f"{basis.get('operating_speed_kmh', '-')} km/h "
-                            f"({basis.get('operating_speed_source', '-')})"],
+        ["Operating speed", (f"{basis['operating_speed_kmh']} km/h ({basis.get('operating_speed_source', '-')})"
+                             if basis.get("operating_speed_kmh") else "Not measured — enter the measured operating speed")],
         ["Base capacity C0", f"{result.get('base_capacity_pcu_h', '-')} PCU/h — {basis.get('base_capacity_detail', '')}"],
         ["Indo-HCM factors (Eq. 5.5)", ", ".join(f"{k} = {v}" for k, v in (calc.get("indo_hcm_factors") or {}).items()) or "-"],
         ["Indo-HCM capacity", f"{result.get('indo_hcm_capacity_pcu_h', '-')} PCU/h"],
