@@ -7,4 +7,8 @@ services:
     envVars:
       - key: ROAD_MODEL_PATH
         value: /app/road_analyzer/models/best.pt
+      - key: ROAD_TILED            # zoomed second look for small potholes (0 = off, faster)
+        value: "1"
+      - key: ROAD_ENABLE_DEPTH     # MiDaS depth indicator (+~150 MB RAM; 1 = on)
+        value: "0"
     healthCheckPath: /api/health

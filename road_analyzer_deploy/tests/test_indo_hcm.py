@@ -314,6 +314,76 @@ def test_ch2_field_method_a_and_se_rejected():
         fv.five_minute_periods(vs, "single_lane", 60, "se")
 
 
+# ---------------- detector post-processing ----------------
+def test_cross_class_duplicate_keeps_more_confident():
+    dets = [{"cls_name": "barricade", "conf": 0.8, "xyxy": (0, 0, 100, 100)},
+            {"cls_name": "illegal_parking", "conf": 0.6, "xyxy": (5, 5, 100, 100)},
+            {"cls_name": "pothole", "conf": 0.7, "xyxy": (200, 200, 260, 240)},
+            {"cls_name": "vehicle", "conf": 0.9, "xyxy": (0, 0, 100, 100)}]
+    kept, dropped = core.suppress_cross_class(dets)
+    names = sorted(d["cls_name"] for d in kept)
+    assert dropped == 1 and names == ["barricade", "pothole", "vehicle"]
+
+
+def test_class_thresholds_file_overrides_defaults(tmp_path):
+    (tmp_path / "class_thresholds.json").write_text('{"pothole": 0.3, "cart": 5}')
+    t = core.load_class_thresholds(str(tmp_path / "best.pt"))
+    assert t["pothole"] == 0.3 and t["cart"] == core.CONF_THRESHOLDS["cart"]
+
+
+# ---------------- zoomed tiles for small potholes ----------------
+def test_tile_windows_cover_image_with_overlap():
+    wins = core.tile_windows(1600, 1200)
+    assert len(wins) == 4
+    assert min(w[0] for w in wins) == 0 and max(w[2] for w in wins) == 1600
+    assert min(w[1] for w in wins) == 0 and max(w[3] for w in wins) == 1200
+    assert wins[1][0] < wins[0][2]                      # neighbours overlap
+
+
+def test_merge_tiled_rules():
+    W, H = 1600, 1200
+    wins = core.tile_windows(W, H)
+    full = [{"cls_name": "pothole", "conf": 0.6, "xyxy": (100, 900, 400, 1000)},
+            {"cls_name": "barricade", "conf": 0.9, "xyxy": (800, 300, 1000, 700)}]
+    t0 = wins[0]                                        # top-left tile
+    tile_dets = [
+        {"cls_name": "pothole", "conf": 0.5, "xyxy": (200, 200, 240, 220)},        # new small pothole -> added
+        {"cls_name": "pothole", "conf": 0.5, "xyxy": (t0[2] - t0[0] - 40, 100, t0[2] - t0[0] - 1, 130)},  # cut edge
+        {"cls_name": "barricade", "conf": 0.9, "xyxy": (10, 10, 100, 200)},        # not a tile class
+    ]
+    t2 = wins[2]                                        # bottom-left tile
+    tile2 = [{"cls_name": "pothole", "conf": 0.7,                                   # same pothole as full box
+              "xyxy": (150 - t2[0], 920 - t2[1], 380 - t2[0], 990 - t2[1])}]
+    out, added = core.merge_tiled(full, [(t0, tile_dets), (t2, tile2)], (W, H))
+    pot = [d for d in out if d["cls_name"] == "pothole"]
+    assert len(pot) == 2                                # new small one + the big one once
+    assert (200.0, 200.0, 240.0, 220.0) in [d["xyxy"] for d in pot]
+    big = [d for d in pot if d["xyxy"][0] < 200][0]
+    assert big["conf"] == 0.7 and big.get("from_tile")  # the more confident view of it wins
+    assert [d["cls_name"] for d in out].count("barricade") == 1 and added == 2
+
+
+# ---------------- MiDaS depth indicator ----------------
+def _road(h=200, w=300, seed=0):
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:h, 0:w]
+    return 5.0 + 0.04 * yy + 0.005 * xx + rng.normal(0, 0.02, (h, w))   # inverse depth grows downwards
+
+
+def test_depth_indicator_flat_road_not_flagged_despite_gradient():
+    r = core.depth_indicator(_road(), (120, 80, 180, 120))
+    assert r["depth_class"] == "not_distinct"
+
+
+def test_depth_indicator_grades_depressions():
+    shallow, deep = _road(), _road()
+    shallow[85:115, 125:175] -= 0.07          # slightly further than the road plane
+    deep[85:115, 125:175] -= 0.40
+    assert core.depth_indicator(shallow, (120, 80, 180, 120))["depth_class"] == "shallow"
+    d = core.depth_indicator(deep, (120, 80, 180, 120))
+    assert d["depth_class"] == "deep" and d["depression_area_pct"] > 50
+
 # ------------------------------------------------------------------
 # No assumed site inputs: speed is never back-calculated, volume never assumed
 # ------------------------------------------------------------------
