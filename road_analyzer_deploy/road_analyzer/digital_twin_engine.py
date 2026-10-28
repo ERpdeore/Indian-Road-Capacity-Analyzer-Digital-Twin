@@ -117,7 +117,9 @@ def generate_twin_data(result: dict) -> Optional[dict]:
     vf_def = v0 * speed_ratio
 
     los = result.get("level_of_service") or {}
-    demand, demand_src = float(los["observed_volume_pcu_h"]), "observed volume entered by user"
+    demand = float(los["observed_volume_pcu_h"])
+    demand_src = ("WHAT-IF: traffic level set on the dashboard slider, not measured"
+                  if los.get("demand_kind") == "whatif" else "observed volume entered by user")
 
     warnings = []
     arrival = demand

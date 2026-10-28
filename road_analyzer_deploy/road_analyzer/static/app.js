@@ -469,12 +469,36 @@
         renderBatchResult(result);
 
       } else if (mode === "video") {
-        fd.append("file", selectedFiles[0]);
-        fd.append("sample_every_sec", sampleEverySec.value);
-        showStatus("Uploading video…");
-        const startRes = await postJSON("/api/analyze/video", fd);
+        const video = selectedFiles[0];
+        const every = parseFloat(sampleEverySec.value);
+        fd.append("sample_every_sec", String(every));
+        let startRes;
+        let frames = null;
+        try {
+          frames = await extractFrames(video, every, (i, n) =>
+            showStatus(`Reading the video on your device… frame ${i} of ${n}`));
+        } catch (e) {
+          console.warn("Browser could not decode the video, uploading the whole file:", e);
+        }
+        if (frames && frames.blobs.length) {
+          frames.blobs.forEach((b, i) => fd.append("files", b, `frame_${String(i).padStart(5, "0")}.jpg`));
+          fd.append("timestamps", JSON.stringify(frames.times));
+          fd.append("video_name", video.name);
+          fd.append("duration_sec", String(frames.duration));
+          const mb = frames.blobs.reduce((a, b) => a + b.size, 0) / 1e6;
+          startRes = await postWithProgress("/api/analyze/video-frames", fd, (pct) =>
+            showStatus(`Uploading ${frames.blobs.length} frames (${mb.toFixed(1)} MB instead of ${(video.size / 1e6).toFixed(0)} MB)… ${pct}%`));
+        } else {
+          if (video.size > MAX_VIDEO_MB * 1024 * 1024) {
+            throw new Error(`This browser cannot read this video format, and the file is ${(video.size / 1e6).toFixed(0)} MB ` +
+              `(limit ${MAX_VIDEO_MB} MB for a full upload). Export it as MP4 (H.264) at 720p, or trim it.`);
+          }
+          fd.append("file", video);
+          startRes = await postWithProgress("/api/analyze/video", fd, (pct) =>
+            showStatus(`Uploading the full video (${(video.size / 1e6).toFixed(0)} MB)… ${pct}%`));
+        }
         showStatus(
-          `Sampling every ${sampleEverySec.value}s and analysing frames… this takes time for longer clips.`
+          `Analysing ${startRes.num_frames || "the sampled"} frames on the server… a 1-minute clip at 1 s takes a few minutes on the free server.`
         );
         const result = await pollJob(startRes.job_id);
         hideStatus();
@@ -488,6 +512,67 @@
       runBtnLabel.textContent = idleLabel;
     }
   });
+
+  const MAX_VIDEO_MB = 150;   // matches MAX_VIDEO_MB on the server
+  const FRAME_MAX_EDGE = 1280; // the YOLO model runs at 640 px; more only costs upload time
+  const MAX_FRAMES = 600;      // matches MAX_VIDEO_FRAMES on the server
+
+  // Decode the video locally and grab one JPEG per sampling interval, so only
+  // those frames are uploaded. Rejects if the browser cannot play the format
+  // (e.g. some HEVC .mov or .avi files); the caller then uploads the file.
+  function extractFrames(file, everySec, onProgress) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = url;
+      const done = (fn, arg) => { URL.revokeObjectURL(url); v.removeAttribute("src"); fn(arg); };
+      const fail = (msg) => done(reject, new Error(msg));
+      const timer = setTimeout(() => fail("timed out reading video"), 20000);
+      v.onerror = () => { clearTimeout(timer); fail("format not supported by this browser"); };
+      v.onloadedmetadata = async () => {
+        clearTimeout(timer);
+        const dur = v.duration;
+        if (!isFinite(dur) || dur <= 0 || !v.videoWidth) return fail("no readable duration");
+        const times = [];
+        for (let t = 0; t < dur && times.length < MAX_FRAMES; t += everySec) times.push(+t.toFixed(2));
+        const sc = Math.min(1, FRAME_MAX_EDGE / Math.max(v.videoWidth, v.videoHeight));
+        const c = document.createElement("canvas");
+        c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
+        const ctx = c.getContext("2d");
+        const blobs = [];
+        try {
+          for (let i = 0; i < times.length; i++) {
+            onProgress(i + 1, times.length);
+            await new Promise((res, rej) => {
+              const to = setTimeout(() => rej(new Error("seek timed out")), 10000);
+              v.onseeked = () => { clearTimeout(to); res(); };
+              v.currentTime = Math.min(times[i], dur - 0.05);
+            });
+            ctx.drawImage(v, 0, 0, c.width, c.height);
+            blobs.push(await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85)));
+          }
+        } catch (e) { return fail(e.message); }
+        done(resolve, { blobs, times, duration: dur });
+      };
+    });
+  }
+
+  // fetch() cannot report upload progress; XMLHttpRequest can.
+  function postWithProgress(url, formData, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100)); };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (_) {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else reject(new Error(data.detail || `Request failed (${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new Error("Upload failed: check your connection. The server may be waking up; try again in a minute."));
+      xhr.send(formData);
+    });
+  }
 
   async function postJSON(url, formData) {
     const res  = await fetch(url, { method: "POST", body: formData });
@@ -602,7 +687,7 @@
 
     const warnings = (basis.warnings || []).concat((data.digital_twin || {}).warnings || []);
     const losHTML = los
-      ? `<div class="item"><div class="label">LOS at ${fmt(los.observed_volume_pcu_h, 0)} PCU/h (Table ${los.table})</div>
+      ? `<div class="item"><div class="label">LOS at ${fmt(los.observed_volume_pcu_h, 0)} PCU/h${los.demand_kind === "whatif" ? " (what-if traffic from the slider, not measured)" : " (observed)"} (Table ${los.table})</div>
            <div class="val">${los.los_base} → ${los.los_hcm} → <span class="red">${los.los_ext}</span></div>
            <div class="val-sub">V/C ${fmt(los.vc_base, 2)} base · ${fmt(los.vc_hcm, 2)} Indo-HCM · ${fmt(los.vc_ext, 2)} with extensions</div></div>`
       : `<div class="item"><div class="label">Level of service</div>
@@ -1057,7 +1142,10 @@
   // Every recalculation is done by the server (/api/whatif), using the
   // same Python formulas as the analysis.
   // ================================================================
-  const WI = { orig: null, mode: null, obstacles: [], excluded: new Set(), demand: null, origDemand: null, timer: null, seq: 0 };
+  // demandKind: "observed" = volume typed by the user; "whatif" = slider moved;
+  // null = no volume known (the twin shows its ASSUMED demand and no LOS is given).
+  const WI = { orig: null, mode: null, obstacles: [], excluded: new Set(), demand: null, origDemand: null,
+               demandKind: null, origDemandKind: null, timer: null, seq: 0 };
 
   function wiStart(result, mode) {
     WI.orig = result;
@@ -1068,6 +1156,8 @@
     // Only a volume the user entered is used; none is ever assumed.
     WI.origDemand = lv && lv.observed_volume_pcu_h ? lv.observed_volume_pcu_h : null;
     WI.demand = WI.origDemand;
+    WI.origDemandKind = lv && lv.observed_volume_pcu_h ? "observed" : null;
+    WI.demandKind = WI.origDemandKind;
   }
   const wiActive = () => WI.orig && (WI.excluded.size > 0 || Math.abs((WI.demand || 0) - (WI.origDemand || 0)) > 0.5);
 
@@ -1089,6 +1179,7 @@
     if (r) r.addEventListener("click", () => {
       WI.excluded = new Set();
       WI.demand = WI.origDemand;
+      WI.demandKind = WI.origDemandKind;
       if (WI.mode === "single") renderImageResult(WI.orig, { track: false });
       else renderMultiBar();
       dtShow(WI.orig.digital_twin);
@@ -1103,7 +1194,8 @@
         road_config: WI.orig.road_config,
         obstacles: WI.obstacles.filter((o) => !WI.excluded.has(o.defect_type))
           .map(({ defect_type, left_m, right_m }) => ({ defect_type, left_m, right_m })),
-        demand_pcu_h: WI.demand,
+        demand_pcu_h: WI.demandKind ? WI.demand : null,
+        demand_kind: WI.demandKind,
       };
       // Removing parked vehicles also removes the parking friction the user entered.
       if (WI.excluded.has("illegal_parking")) body.road_config = { ...body.road_config, on_street_parking: "none" };
@@ -1156,6 +1248,8 @@
   if (dtSlider) dtSlider.addEventListener("input", () => {
     if (!WI.orig) return;
     WI.demand = +dtSlider.value;
+    WI.demandKind = WI.origDemandKind === "observed" && Math.abs(WI.demand - WI.origDemand) <= 0.5
+      ? "observed" : "whatif";
     setText("dt-demand-out", fmt(WI.demand, 0));
     sendWhatIf(90);
   });
