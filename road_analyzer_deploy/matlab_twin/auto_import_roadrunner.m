@@ -140,7 +140,11 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
             % SAME demand on both roads. A capacity loss does not mean fewer
             % vehicles on the road: when demand exceeds the reduced capacity a
             % queue forms upstream and density goes UP, speed goes DOWN.
-            if isfield(cap, 'twin') && ~isempty(cap.twin)
+            if ~isfield(cap, 'twin') || isempty(cap.twin)
+                error('auto_import:noTwin', ['No digital twin in the capacity data: enter the observed ' ...
+                      'volume and the measured operating speed for this road, then re-run the analysis.']);
+            end
+            if true
                 if strcmp(mode, 'ideal')
                     st = cap.twin.ideal;
                     speedKmh = st.section_speed_kmh;
@@ -174,10 +178,11 @@ function auto_import_roadrunner(mode, xodr_path, project_folder)
                 numLanes = cap.num_lanes;
             end
         catch capErr
-            fprintf('      Could not read capacity data (%s), using defaults.\n', capErr.message);
+            rethrow(capErr);   % never fall back to default traffic
         end
     else
-        fprintf('      No capacity data found (%s) -- using default traffic.\n', capacityJsonPath);
+        error('auto_import:noData', ['No capacity data found (%s). Run an analysis with an entered ' ...
+              'observed volume and a measured operating speed first.'], capacityJsonPath);
     end
 
     opts = struct('projectFolder', project_folder, 'numLanes', numLanes, ...

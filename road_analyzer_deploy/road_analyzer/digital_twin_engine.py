@@ -12,9 +12,9 @@ Model
        ideal  : v_f = operating speed,                 q_max = C0 -> k_j = 4 C0 / v_f
        defect : v_f' = v_f x roughness speed ratio,  q_max = C  -> k_j' = 4 C / v_f'
    Indo-HCM itself uses Greenshields for its speed-flow capacities (Annex 5E.4).
-2. Demand q: the observed volume if the user entered one, otherwise the
-   LOS-C design service volume of the ideal road (0.70 C0). The source
-   used is always stated in the output.
+2. Demand q: the observed volume entered by the user. No volume is ever
+   assumed: without an entered volume AND a measured operating speed the
+   twin is not computed (generate_twin_data returns None).
 3. If q <= capacity: the section runs uncongested; speed and density come
    from the uncongested branch of its fundamental diagram.
    If q > capacity: the section is a bottleneck discharging at C.
@@ -92,24 +92,32 @@ def _state(name: str, arrival: float, cap: float, vf: float, upstream_cap: float
     return out
 
 
-def generate_twin_data(result: dict) -> dict:
+def twin_missing_inputs(result: dict) -> list:
+    """Site inputs the twin needs that the user has not entered yet."""
+    basis = result.get("capacity_basis") or {}
+    los = result.get("level_of_service") or {}
+    missing = []
+    if not los.get("observed_volume_pcu_h"):
+        missing.append("observed volume (PCU/h)")
+    if not (basis.get("operating_speed_kmh") or result.get("operating_speed_kmh")):
+        missing.append("measured operating speed (km/h)")
+    return missing
+
+
+def generate_twin_data(result: dict) -> Optional[dict]:
+    if twin_missing_inputs(result):
+        return None
     c0 = float(result["base_capacity_pcu_h"])
     c = max(0.0, float(result["reduced_capacity_pcu_h"]))
     basis = result.get("capacity_basis") or {}
-    v0 = float(basis.get("operating_speed_kmh") or result.get("operating_speed_kmh") or 50.0)
+    v0 = float(basis.get("operating_speed_kmh") or result.get("operating_speed_kmh"))
     lanes = int((result.get("road_config") or {}).get("num_lanes") or 2)
     rough = (result.get("capacity_calculation") or {}).get("roughness") or {}
     speed_ratio = float(rough.get("speed_ratio") or 1.0)   # < 1 only when IRI was measured
     vf_def = v0 * speed_ratio
 
     los = result.get("level_of_service") or {}
-    if los.get("observed_volume_pcu_h"):
-        demand, demand_src = float(los["observed_volume_pcu_h"]), "observed volume entered by user"
-    else:
-        ratio = float(basis.get("dsv_vc_ratio") or hcm.DSV_VC_RATIO)
-        demand = c0 * ratio
-        demand_src = (f"ASSUMED: service volume of the ideal road ({ratio:.2f} x C0, "
-                      f"{'Table 5.4' if ratio == hcm.DSV_VC_RATIO else 'LOS-C upper V/C, Indo-HCM Ch. 2'})")
+    demand, demand_src = float(los["observed_volume_pcu_h"]), "observed volume entered by user"
 
     warnings = []
     arrival = demand
@@ -181,7 +189,7 @@ def generate_twin_data(result: dict) -> dict:
     }
 
 
-def run_and_store(result: dict) -> dict:
+def run_and_store(result: dict) -> Optional[dict]:
     twin = generate_twin_data(result)
     _LATEST["twin_data"] = twin
     return twin
